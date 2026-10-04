@@ -24,6 +24,7 @@ import {
   X,
   Building,
   Check,
+  UserRound,
 } from "lucide-react";
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { api, fetcher } from "@/lib/api";
@@ -120,6 +121,7 @@ async function logout() {
 
 function ProfileMenu({ children, align = "end" }: { children: React.ReactNode; align?: "start" | "end" }) {
   const me = useMe();
+  const router = useRouter();
   const switchOrg = async (orgId: string) => {
     await api.post("/api/auth/switch-org", { orgId });
     window.location.href = "/dashboard";
@@ -145,7 +147,10 @@ function ProfileMenu({ children, align = "end" }: { children: React.ReactNode; a
           </>
         )}
         <MenuSeparator />
-        <MenuItem icon={<Settings />} onSelect={() => (window.location.href = "/configuracoes")}>
+        <MenuItem icon={<UserRound />} onSelect={() => router.push("/configuracoes?aba=perfil")}>
+          Meu perfil e foto
+        </MenuItem>
+        <MenuItem icon={<Settings />} onSelect={() => router.push("/configuracoes")}>
           Configurações
         </MenuItem>
         <MenuItem icon={<LogOut />} onSelect={logout} danger>
@@ -184,7 +189,7 @@ function Sidebar() {
         <div className="border-t border-line pt-4">
           <ProfileMenu align="start">
             <button className="flex w-full items-center gap-3 rounded-[16px] p-2 text-left hover:bg-page justify-center xl:justify-start" aria-label="Perfil e sair">
-              <Avatar name={me.user.name} size={48} tone="neutral" />
+              <Avatar name={me.user.name} src={me.user.avatarUrl} size={48} tone="neutral" />
               <span className="hidden xl:block flex-1 min-w-0">
                 <span className="block truncate text-[15px] font-semibold">{me.user.name}</span>
                 <span className="block text-[13px] text-muted">{ROLE_LABEL[me.user.role]}</span>
@@ -230,7 +235,7 @@ function MobileNav() {
             </div>
           </div>
           <div className="mt-auto border-t border-line pt-4 flex items-center gap-3">
-            <Avatar name={me.user.name} size={44} tone="neutral" />
+            <Avatar name={me.user.name} src={me.user.avatarUrl} size={44} tone="neutral" />
             <div className="flex-1 min-w-0">
               <p className="truncate font-semibold">{me.user.name}</p>
               <p className="text-[13px] text-muted">{ROLE_LABEL[me.user.role]}</p>
@@ -281,7 +286,7 @@ function GlobalSearch() {
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
-            placeholder="Buscar contato ou conversa..."
+            placeholder="Buscar contato..."
             aria-label="Buscar contato ou conversa"
             className="h-11 w-full rounded-[14px] border border-line bg-white pl-11 pr-4 text-[14.5px] placeholder:text-[#8a99a3] focus:border-brand focus:outline-none focus:ring-4 focus:ring-[#008a65]/10"
           />
@@ -394,7 +399,7 @@ function Topbar() {
       <Notifications />
       <ProfileMenu>
         <button className="hidden sm:flex items-center gap-1.5 rounded-[14px] p-1 hover:bg-page" aria-label="Perfil">
-          <Avatar name={me.user.name} size={40} tone="neutral" />
+          <Avatar name={me.user.name} src={me.user.avatarUrl} size={40} tone="neutral" />
           <ChevronDown className="size-4 text-muted" aria-hidden />
         </button>
       </ProfileMenu>

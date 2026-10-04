@@ -10,6 +10,7 @@ import { useOpenContact, useQueryParam } from "@/lib/nav";
 import type { Stage } from "@/lib/types";
 import { dayLabel, formatBRL, formatDate, formatDateTime, fromLocalInput, parseBRLToCents } from "@/lib/format";
 import { Avatar, Badge, Button, Card, cx, DemoBadge, Dialog, EmptyState, ErrorState, Field, IconButton, Input, LoadingState, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, PageHeader, Select, Tabs, Textarea } from "@/components/ui";
+import { TeamAvatar } from "@/components/ui/TeamAvatar";
 
 type Opp = {
   id: string;
@@ -328,7 +329,7 @@ function OppCard({ o, stages, onDecide }: { o: Opp; stages: Stage[]; onDecide: (
       <p className="mt-3 text-[17px] font-bold">{formatBRL(o.valueCents)}</p>
       <div className="mt-2 flex items-center justify-between text-[12.5px] text-muted">
         <span className="flex items-center gap-1.5">
-          <Avatar name={o.closerName ?? "?"} size={24} tone="neutral" /> {o.closerName ?? "Sem closer"}
+          <TeamAvatar userId={o.closerId} name={o.closerName ?? "?"} size={24} /> {o.closerName ?? "Sem closer"}
         </span>
         {o.expectedCloseDate && <span>Prev. {formatDate(`${o.expectedCloseDate}T12:00:00-03:00`)}</span>}
       </div>

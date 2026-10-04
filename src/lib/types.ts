@@ -1,7 +1,7 @@
 export type Role = "admin" | "manager" | "seller" | "closer";
 
 export type Me = {
-  user: { id: string; name: string; email: string; role: Role };
+  user: { id: string; name: string; email: string; role: Role; avatarUrl: string | null };
   org: { id: string; name: string; isDemo: boolean; sharedInbox: boolean; timezone: string; autoEntryStageId: string | null };
   orgs: { id: string; name: string; isDemo: boolean; role: Role }[];
   counts: { unreadConversations: number };
@@ -19,7 +19,7 @@ export type Me = {
   };
 };
 
-export type Member = { userId: string; name: string; email?: string; role: Role; status: "active" | "invited" | "disabled" | "pending"; lastLoginAt?: string | null; requestNote?: string | null; requestedAt?: string };
+export type Member = { userId: string; name: string; email?: string; role: Role; status: "active" | "invited" | "disabled" | "pending"; lastLoginAt?: string | null; requestNote?: string | null; requestedAt?: string; avatarUrl?: string | null };
 
 export type Stage = { id: string; key: string; name: string; color: string; position: number; archivedAt: string | null };
 

@@ -207,8 +207,10 @@ export function TasksView() {
             {data.rows.map((t) => {
               const tone = t.status === "open" ? dueTone(t.dueAt) : "none";
               return (
-                <li key={t.id} className="flex items-start gap-4 px-5 py-4">
-                  <input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} aria-label={t.status === "done" ? `Reabrir ${t.title}` : `Concluir ${t.title}`} className="mt-1 size-5 shrink-0 cursor-pointer accent-[#008a65]" />
+                <li key={t.id} className="flex items-start gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4">
+                  <label className="-m-1 flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-[10px] hover:bg-page">
+                    <input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} aria-label={t.status === "done" ? `Reabrir ${t.title}` : `Concluir ${t.title}`} className="size-5 cursor-pointer accent-[#008a65]" />
+                  </label>
                   <div className="min-w-0 flex-1">
                     <p className={cx("text-[15px] font-semibold", t.status === "done" && "line-through text-muted")}>{t.title}</p>
                     {t.notes && <p className="text-[13.5px] text-muted line-clamp-2">{t.notes}</p>}
@@ -222,9 +224,16 @@ export function TasksView() {
                       <span>{t.ownerName ?? "Sem responsável"}</span>
                       {t.status === "done" && t.completedAt && <span>Concluída {formatDateTime(t.completedAt)}</span>}
                     </p>
+                    {t.dueAt && (
+                      <span className={cx("mt-1.5 inline-flex sm:hidden items-center gap-1.5 text-[13px] font-medium", tone === "overdue" ? "text-danger" : tone === "today" ? "text-success" : "text-muted")}>
+                        <CalendarClock className="size-4" aria-hidden />
+                        {tone === "overdue" ? "Atrasada · " : ""}
+                        {dayLabel(t.dueAt)}
+                      </span>
+                    )}
                   </div>
                   {t.dueAt && (
-                    <span className={cx("inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] font-medium", tone === "overdue" ? "text-danger" : tone === "today" ? "text-success" : "text-muted")}>
+                    <span className={cx("hidden sm:inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] font-medium", tone === "overdue" ? "text-danger" : tone === "today" ? "text-success" : "text-muted")}>
                       <CalendarClock className="size-4" aria-hidden />
                       {tone === "overdue" ? "Atrasada · " : ""}
                       {dayLabel(t.dueAt)}

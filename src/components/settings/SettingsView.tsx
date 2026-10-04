@@ -11,6 +11,7 @@ import { useQueryParam } from "@/lib/nav";
 import { ROLE_LABEL, type Member, type Role, type Stage } from "@/lib/types";
 import { formatDateTime, relativeTime } from "@/lib/format";
 import { Avatar, Badge, Button, Card, Dialog, EmptyState, Field, Input, LoadingState, NoPermission, PageHeader, Select, Switch, Tabs, Textarea } from "@/components/ui";
+import { ProfilePhoto } from "./ProfilePhoto";
 import { StagesEditor } from "@/components/social/EditStagesDialog";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ACCOUNT_STATUS, type IntegrationAccount } from "@/components/social/AccountPill";
@@ -37,17 +38,18 @@ function ProfileTab() {
   return (
     <div className="flex flex-col gap-5">
     <Section title="Seu perfil">
-      <div className="flex items-center gap-4">
-        <Avatar name={me.user.name} size={64} tone="neutral" />
-        <div>
-          <p className="text-[17px] font-semibold">{me.user.name}</p>
-          <p className="text-[14px] text-muted">{me.user.email}</p>
-          <Badge tone="brand" className="mt-1">
+      <div className="flex flex-col items-center gap-5 text-center sm:flex-row sm:items-start sm:text-left">
+        <ProfilePhoto name={me.user.name} src={me.user.avatarUrl} />
+        <div className="min-w-0 sm:pt-3">
+          <p className="text-[19px] font-semibold break-words">{me.user.name}</p>
+          <p className="text-[14px] text-muted break-all">{me.user.email}</p>
+          <Badge tone="brand" className="mt-2">
             {ROLE_LABEL[me.user.role]} · {me.org.name}
           </Badge>
+          <p className="mt-3 text-[12.5px] text-muted">JPG, PNG ou WebP. A foto é cortada em quadrado e aparece para a sua equipe.</p>
         </div>
       </div>
-      <p className="mt-5 text-[13.5px] text-muted">Alterações de papel são feitas pelo administrador.</p>
+      <p className="mt-5 text-center sm:text-left text-[13.5px] text-muted">Alterações de papel são feitas pelo administrador.</p>
     </Section>
     <ChangePassword />
     </div>
@@ -78,7 +80,7 @@ function ChangePassword() {
   };
   return (
     <Section title="Alterar senha">
-      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-3 sm:items-end">
+      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-3 sm:items-start">
         <Field label="Senha atual" htmlFor="pw-cur" error={fields.current}>
           <Input id="pw-cur" type="password" autoComplete="current-password" value={form.current} onChange={(e) => setForm({ ...form, current: e.target.value })} />
         </Field>
@@ -217,7 +219,7 @@ function PendingRequests({ requests, onChanged }: { requests: Member[]; onChange
           {requests.map((m) => (
             <li key={m.userId} className="flex flex-col gap-3 py-3 lg:flex-row lg:items-center">
               <div className="flex flex-1 items-start gap-3 min-w-0">
-                <Avatar name={m.name} size={40} />
+                <Avatar name={m.name} src={m.avatarUrl} size={40} />
                 <div className="min-w-0">
                   <p className="truncate text-[14.5px] font-semibold">{m.name}</p>
                   <p className="truncate text-[12.5px] text-muted">
@@ -227,8 +229,8 @@ function PendingRequests({ requests, onChanged }: { requests: Member[]; onChange
                   {m.requestNote && <p className="mt-1 text-[13px] text-ink">“{m.requestNote}”</p>}
                 </div>
               </div>
-              <Badge tone="warning">Aguardando</Badge>
-              <div className="flex flex-wrap gap-2">
+              <Badge tone="warning" className="self-start lg:self-auto ml-[52px] lg:ml-0 -mt-1.5 lg:mt-0">Aguardando</Badge>
+              <div className="flex flex-wrap items-center gap-2 ml-[52px] lg:ml-0">
                 <Select aria-label={`Papel para ${m.name}`} value={roles[m.userId] ?? "seller"} onChange={(e) => setRoles((r) => ({ ...r, [m.userId]: e.target.value as Role }))} className="h-9 w-auto text-[13px]">
                   {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
                     <option key={r} value={r}>
@@ -343,7 +345,7 @@ function TeamTab() {
         {members.map((m) => (
           <li key={m.userId} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center">
             <div className="flex flex-1 items-center gap-3 min-w-0">
-              <Avatar name={m.name} size={40} />
+              <Avatar name={m.name} src={m.avatarUrl} size={40} />
               <div className="min-w-0">
                 <p className="truncate text-[14.5px] font-semibold">
                   {m.name} {m.userId === me.user.id && <span className="font-normal text-muted">(você)</span>}
@@ -354,9 +356,11 @@ function TeamTab() {
                 </p>
               </div>
             </div>
-            <Badge tone={m.status === "active" ? "success" : m.status === "invited" ? "info" : "neutral"}>{m.status === "active" ? "Ativo" : m.status === "invited" ? "Convite pendente" : "Desativado"}</Badge>
+            <Badge tone={m.status === "active" ? "success" : m.status === "invited" ? "info" : "neutral"} className="self-start sm:self-auto ml-[52px] sm:ml-0 -mt-1.5 sm:mt-0">
+              {m.status === "active" ? "Ativo" : m.status === "invited" ? "Convite pendente" : "Desativado"}
+            </Badge>
             {admin ? (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2 ml-[52px] sm:ml-0">
                 <Select aria-label={`Papel de ${m.name}`} value={m.role} onChange={(e) => update(m, { role: e.target.value as Role })} className="h-9 w-auto text-[13px]" disabled={m.userId === me.user.id}>
                   {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
                     <option key={r} value={r}>

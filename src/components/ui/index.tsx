@@ -3,7 +3,7 @@
 import { clsx } from "clsx";
 import * as RDialog from "@radix-ui/react-dialog";
 import * as RMenu from "@radix-ui/react-dropdown-menu";
-import { forwardRef, useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { forwardRef, useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { CircleAlert, LoaderCircle, Lock, RefreshCw, X } from "lucide-react";
 import { initials } from "@/lib/format";
 
@@ -116,7 +116,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
       ref={ref}
       className={cx(
         withWidth(fieldBase, className),
-        "h-11 appearance-none pr-10 bg-[url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23607080' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>\")] bg-no-repeat bg-[right_12px_center]",
+        "h-11 appearance-none pr-9 truncate bg-[url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23607080' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>\")] bg-no-repeat bg-[right_10px_center]",
         className,
       )}
       {...rest}
@@ -156,15 +156,19 @@ export function Switch({ checked, onChange, label, description, disabled }: { ch
         onClick={() => onChange(!checked)}
         className={cx("relative h-7 w-12 shrink-0 rounded-full transition-colors disabled:opacity-50", checked ? "bg-brand" : "bg-[#cfdad6]")}
       >
-        <span className={cx("absolute top-1 size-5 rounded-full bg-white shadow transition-transform", checked ? "translate-x-6" : "translate-x-1")} />
+        <span className={cx("absolute left-0 top-1 size-5 rounded-full bg-white shadow transition-transform", checked ? "translate-x-6" : "translate-x-1")} />
       </button>
     </div>
   );
 }
 
 // ---------- Visual ----------
-export function Card({ className, children, as: As = "section" }: { className?: string; children: ReactNode; as?: "section" | "div" | "article" }) {
-  return <As className={cx("bg-card rounded-[var(--radius-card)] border border-line/70 shadow-[var(--shadow-soft)]", className)}>{children}</As>;
+export function Card({ className, children, as: As = "section", style }: { className?: string; children: ReactNode; as?: "section" | "div" | "article"; style?: React.CSSProperties }) {
+  return (
+    <As className={cx("bg-card rounded-[var(--radius-card)] border border-line/70 shadow-[var(--shadow-soft)]", className)} style={style}>
+      {children}
+    </As>
+  );
 }
 
 const AVATAR_TONES = [
@@ -183,9 +187,23 @@ function hash(s: string) {
 
 export function Avatar({ name, src, size = 44, tone, className }: { name?: string | null; src?: string | null; size?: number; tone?: "neutral"; className?: string }) {
   const [bg, fg] = tone === "neutral" ? ["#eef2f1", "#46565f"] : AVATAR_TONES[hash(name ?? "?") % AVATAR_TONES.length];
-  if (src) {
+  const [failed, setFailed] = useState<string | null>(null);
+  if (src && failed !== src) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt="" width={size} height={size} className={cx("rounded-full object-cover shrink-0", className)} style={{ width: size, height: size }} referrerPolicy="no-referrer" />;
+    return (
+      <img
+        src={src}
+        alt=""
+        width={size}
+        height={size}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(src)}
+        className={cx("rounded-full object-cover shrink-0 bg-[#eef2f1]", className)}
+        style={{ width: size, height: size }}
+        referrerPolicy="no-referrer"
+      />
+    );
   }
   return (
     <span
@@ -406,9 +424,12 @@ export function Tabs<T extends string>({ value, onChange, items, className }: { 
             role="tab"
             type="button"
             aria-selected={active}
-            onClick={() => onChange(it.value)}
+            onClick={(e) => {
+              onChange(it.value);
+              e.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+            }}
             className={cx(
-              "inline-flex items-center gap-2 rounded-[14px] px-4 h-10 text-[14.5px] font-medium transition-colors whitespace-nowrap [&>svg]:size-[18px]",
+              "inline-flex items-center gap-1.5 sm:gap-2 rounded-[14px] px-3 sm:px-4 h-10 text-[14px] sm:text-[14.5px] font-medium transition-colors whitespace-nowrap shrink-0 [&>svg]:size-[18px]",
               active ? "bg-selected text-brand border border-[#c9ebdc]" : "text-ink hover:bg-page border border-transparent",
             )}
           >
@@ -427,12 +448,12 @@ export function PageHeader({ title, subtitle, badge, actions }: { title: string;
     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-[30px] sm:text-[34px] font-bold tracking-tight text-[#0f1f1a] leading-tight">{title}</h1>
+          <h1 className="anim-fade text-[28px] sm:text-[34px] font-bold tracking-tight text-[#0f1f1a] leading-tight">{title}</h1>
           {badge}
         </div>
         {subtitle && <p className="mt-1 text-[15px] sm:text-[16px] text-muted">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-3">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 max-sm:[&>*]:grow">{actions}</div>}
     </div>
   );
 }

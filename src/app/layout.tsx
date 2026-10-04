@@ -10,9 +10,12 @@ export const metadata: Metadata = {
   title: { default: "CRMLABS", template: "%s · CRMLABS" },
   description: "Relacionamentos que viram resultados.",
   robots: { index: false, follow: false },
+  applicationName: "CRMLABS",
+  appleWebApp: { capable: true, title: "CRMLABS", statusBarStyle: "default" },
+  formatDetection: { telephone: false },
 };
 
-export const viewport: Viewport = { themeColor: "#008A65", width: "device-width", initialScale: 1 };
+export const viewport: Viewport = { themeColor: "#008A65", width: "device-width", initialScale: 1, viewportFit: "cover" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

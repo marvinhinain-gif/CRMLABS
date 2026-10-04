@@ -18,6 +18,7 @@ import {
   uniqueIndex,
   index,
   primaryKey,
+  customType,
 } from "drizzle-orm/pg-core";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
@@ -96,6 +97,18 @@ export const users = pgTable(
   },
   (t) => [uniqueIndex("users_email_uq").on(sql`lower(${t.email})`)],
 );
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
+
+/** Foto de perfil (até 512×512, já reduzida e recodificada). Fica no banco porque o servidor não tem disco persistente. */
+export const userAvatars = pgTable("user_avatars", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  data: bytea("data").notNull(),
+  mime: text("mime").notNull(),
+  updatedAt: updatedAt(),
+});
 
 export const memberships = pgTable(
   "memberships",

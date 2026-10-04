@@ -1,7 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { memberships, users } from "../db/schema";
+import { memberships, userAvatars, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { assertCan } from "../permissions";
 import { AppError, invalid, notFound } from "../errors";
@@ -9,6 +9,7 @@ import { createInviteToken, revokeAllUserSessions } from "../auth/service";
 import { sendMail } from "../mail";
 import { appUrl } from "../env";
 import { audit } from "./common";
+import { avatarUrl } from "./avatars";
 
 export const roleSchema = z.enum(["admin", "manager", "seller", "closer"]);
 
@@ -24,15 +25,18 @@ export async function listMembers(ctx: Ctx) {
       requestNote: memberships.requestNote,
       requestedAt: memberships.createdAt,
       lastLoginAt: users.lastLoginAt,
+      avatarAt: userAvatars.updatedAt,
     })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
+    .leftJoin(userAvatars, eq(userAvatars.userId, users.id))
     .where(eq(memberships.orgId, ctx.orgId))
     .orderBy(asc(users.name));
   const isAdmin = ctx.role === "admin" || ctx.role === "manager";
   // Pedidos pendentes só aparecem para quem pode aprová-los.
   return rows
     .filter((r) => r.status !== "pending" || ctx.role === "admin")
+    .map(({ avatarAt, ...r }) => ({ ...r, avatarUrl: avatarUrl(r.userId, avatarAt) }))
     .map((r) => (isAdmin ? r : { ...r, email: undefined, lastLoginAt: undefined, requestNote: undefined }));
 }
 

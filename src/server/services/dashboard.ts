@@ -88,6 +88,7 @@ export async function getDashboard(ctx: Ctx, input: z.infer<typeof dashboardSche
         channel: conversations.channel,
         preview: conversations.lastMessagePreview,
         lastMessageAt: conversations.lastMessageAt,
+        ownerId: users.id,
         ownerName: users.name,
         stageName: sql<string | null>`(select ps.name from ${relationshipEntries} re join ${pipelineStages} ps on ps.id = re.stage_id where re.contact_id = ${contacts.id} and re.closed_at is null limit 1)`,
         stageColor: sql<string | null>`(select ps.color from ${relationshipEntries} re join ${pipelineStages} ps on ps.id = re.stage_id where re.contact_id = ${contacts.id} and re.closed_at is null limit 1)`,

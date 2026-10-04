@@ -23,3 +23,9 @@ export function useTeam() {
   // Pedidos de acesso pendentes não aparecem nos seletores de responsável.
   return (data ?? []).filter((m) => m.status !== "pending");
 }
+
+/** Foto de perfil de um membro da equipe (null quando não há foto). */
+export function useMemberAvatar(userId: string | null | undefined) {
+  const team = useTeam();
+  return userId ? (team.find((m) => m.userId === userId)?.avatarUrl ?? null) : null;
+}

@@ -369,7 +369,28 @@ export function ContactsView() {
           <EmptyState icon={<Users />} title="Nenhum contato encontrado" description={debounced || owner || source || stageId ? "Ajuste a busca ou os filtros." : "Cadastre o primeiro contato ou importe uma lista."} action={<Button icon={<Plus className="size-4" />} onClick={() => setNewOpen(true)}>Novo contato</Button>} />
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <ul className="divide-y divide-line md:hidden">
+              {data.rows.map((r, i) => (
+                <li key={r.id} className="anim-fade" style={{ "--i": Math.min(i, 10) } as React.CSSProperties}>
+                  <button className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-page" onClick={() => openContact(r.id)}>
+                    <Avatar name={r.name} src={r.avatarUrl} size={44} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 text-[15px] font-semibold">
+                        <span className="truncate">{r.name}</span>
+                        {r.hasOfficialIdentity && <BadgeCheck className="size-4 shrink-0 text-success" aria-label="Identidade oficial do Instagram" />}
+                      </span>
+                      <span className="block truncate text-[12.5px] text-muted">{[r.username && `@${r.username}`, r.ownerName].filter(Boolean).join(" · ") || r.email || "—"}</span>
+                      <span className="mt-1.5 flex flex-wrap items-center gap-2">
+                        {r.stageName ? <StageChip name={r.stageName} color={r.stageColor} /> : <span className="text-[12.5px] text-muted">Fora do quadro</span>}
+                        {r.lastInteractionAt && <span className="text-[12px] text-muted">{relativeTime(r.lastInteractionAt)}</span>}
+                      </span>
+                    </span>
+                    <ChevronRight className="size-5 shrink-0 text-muted" aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="overflow-x-auto hidden md:block">
               <table className="w-full min-w-[860px] text-left">
                 <thead>
                   <tr className="border-b border-line bg-page/60 text-[13px] text-muted">
@@ -406,7 +427,7 @@ export function ContactsView() {
                 </tbody>
               </table>
             </div>
-            <div className="flex items-center justify-between border-t border-line px-5 py-3 text-[13.5px] text-muted">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 sm:px-5 py-3 text-[13.5px] text-muted">
               <span>
                 {data.total} contato(s) · página {data.page} de {pages}
               </span>
