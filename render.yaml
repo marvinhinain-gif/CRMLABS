@@ -1,0 +1,47 @@
+# CRMLABS no Render (Blueprint). Cria o banco PostgreSQL e o serviço web.
+# Plano grátis: o serviço dorme após 15 min sem acesso e o banco grátis expira em 30 dias.
+# Para uso contínuo da equipe, mude os dois para um plano pago no painel do Render.
+databases:
+  - name: crmlabs-db
+    plan: free
+    databaseName: crmlabs
+    user: crmlabs
+
+services:
+  - type: web
+    name: crmlabs
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: crmlabs-db
+          property: connectionString
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      # Processamento em segundo plano dentro do serviço web (o plano grátis não tem worker).
+      - key: RUN_WORKER
+        value: "true"
+      # Sem e-mail: convites e links de nova senha aparecem para o administrador copiar.
+      # Para e-mail de verdade: MAIL_TRANSPORT=resend + RESEND_API_KEY + MAIL_FROM.
+      - key: MAIL_TRANSPORT
+        value: none
+      - key: BOOTSTRAP_ORG_NAME
+        value: AXION
+      - key: BOOTSTRAP_ADMIN_NAME
+        value: Marvin Hinain
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: INSTAGRAM_GRAPH_VERSION
+        value: v25.0
+      - key: INSTAGRAM_APP_ID
+        sync: false
+      - key: INSTAGRAM_APP_SECRET
+        sync: false
+      - key: INSTAGRAM_WEBHOOK_VERIFY_TOKEN
+        sync: false

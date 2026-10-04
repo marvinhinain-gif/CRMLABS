@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------
+   CRMLABS — design system
+   Paleta proposta na especificação; Poppins hospedada localmente.
+------------------------------------------------------------------- */
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+
+  --color-brand: #008a65;
+  --color-brand-hover: #007556;
+  --color-brand-accent: #00a878;
+  --color-brand-dark: #103c30;
+  --color-page: #f4f8f7;
+  --color-card: #ffffff;
+  --color-selected: #e5f6ef;
+  --color-ink: #172b35;
+  --color-muted: #607080;
+  --color-line: #dfe8e5;
+  --color-success: #147d55;
+  --color-warning: #9a6700;
+  --color-danger: #c93646;
+  --color-info: #2463b5;
+
+  --color-success-soft: #e3f4ec;
+  --color-warning-soft: #fdf3dc;
+  --color-danger-soft: #fbe9eb;
+  --color-info-soft: #e7effb;
+
+  --radius-card: 22px;
+  --radius-field: 14px;
+  --radius-menu: 16px;
+
+  --shadow-soft: 0 1px 2px rgb(16 60 48 / 0.04), 0 4px 16px rgb(16 60 48 / 0.04);
+  --shadow-pop: 0 10px 40px rgb(16 60 48 / 0.12);
+}
+
+/* Cores pastel das etapas — sempre acompanhadas de texto. */
+:root {
+  --stage-green-bg: #eaf7f1;
+  --stage-green-dot: #12a26b;
+  --stage-green-chip: #d3efe2;
+  --stage-blue-bg: #edf3fd;
+  --stage-blue-dot: #2f6fdb;
+  --stage-blue-chip: #d8e5fa;
+  --stage-yellow-bg: #fdf7e6;
+  --stage-yellow-dot: #e0a106;
+  --stage-yellow-chip: #f8eac2;
+  --stage-lilac-bg: #f3effc;
+  --stage-lilac-dot: #8b5cf6;
+  --stage-lilac-chip: #e4dafb;
+  --stage-pink-bg: #fdeff2;
+  --stage-pink-dot: #e8476a;
+  --stage-pink-chip: #f9d9e1;
+  --stage-orange-bg: #fdf1e7;
+  --stage-orange-dot: #e2702a;
+  --stage-orange-chip: #f8dcc6;
+  --stage-teal-bg: #e8f6f5;
+  --stage-teal-dot: #0e9488;
+  --stage-teal-chip: #cdece9;
+  --stage-gray-bg: #f2f5f6;
+  --stage-gray-dot: #6b7c86;
+  --stage-gray-chip: #e1e7ea;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background: #ffffff;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Foco sempre visível para navegação por teclado */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+::selection {
+  background: var(--color-selected);
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #cfdcd8 transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes crm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.skeleton {
+  background: #e9f0ee;
+  border-radius: 12px;
+  animation: crm-pulse 1.4s ease-in-out infinite;
+}
+
+/* Contêineres com rolagem precisam conter elementos absolutos (ex.: textos .sr-only),
+   senão eles escapam do recorte e criam rolagem horizontal na página. */
+.overflow-x-auto,
+.overflow-auto,
+.overflow-y-auto {
+  position: relative;
+}
