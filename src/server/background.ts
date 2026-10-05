@@ -15,6 +15,7 @@ export function startBackgroundLoop() {
   g.__crmlabsLoop = true;
   let lastHourly = 0;
   let lastDaily = 0;
+  let lastIgSync = 0;
   let running = false;
   const tick = async () => {
     if (running) return;
@@ -24,6 +25,12 @@ export function startBackgroundLoop() {
       // Bom dia / boa noite e lembretes de tarefas (antes do push, para já saírem nesta rodada).
       await scheduledNotificationsTick().catch((e) => logger.warn("Falha nas notificações programadas", e));
       await dispatchPendingPush(100);
+      // Direct e comentários pela API oficial a cada 5 min (garante dados mesmo se um webhook falhar).
+      if (Date.now() - lastIgSync > 5 * 60_000) {
+        lastIgSync = Date.now();
+        const { syncAllAccounts } = await import("./integrations/instagram/sync");
+        await syncAllAccounts().catch((e) => logger.warn("Falha na sincronização do Instagram", e));
+      }
       if (Date.now() - lastHourly > HOUR) {
         lastHourly = Date.now();
         await refreshExpiringTokens();

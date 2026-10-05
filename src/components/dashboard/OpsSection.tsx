@@ -97,7 +97,7 @@ export function OpsSection({ showConversations = true }: { showConversations?: b
         <Card className="p-5 sm:p-7 anim-rise" style={{ "--i": 9 } as React.CSSProperties}>
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <h2 className="text-[18px] sm:text-[20px] font-semibold">Conversas que precisam de atenção</h2>
-            <Link href="/conversas?filtro=awaiting" className="inline-flex items-center gap-1 text-[14px] font-medium text-brand hover:underline">
+            <Link href="/instagram?aba=directs&filtro=pending" className="inline-flex items-center gap-1 text-[14px] font-medium text-brand hover:underline">
               Abrir conversas <ArrowRight className="size-4" aria-hidden />
             </Link>
           </div>
@@ -116,7 +116,7 @@ export function OpsSection({ showConversations = true }: { showConversations?: b
                       <button onClick={() => openContact(c.contactId)} className="shrink-0" aria-label={`Abrir ${c.contactName}`}>
                         <Avatar name={c.contactName} src={c.avatarUrl} size={44} />
                       </button>
-                      <Link href={`/conversas?c=${c.conversationId}`} className="min-w-0 flex-1">
+                      <Link href={`/instagram?aba=directs&c=${c.conversationId}`} className="min-w-0 flex-1">
                         <span className="flex items-center gap-2">
                           <span className="truncate text-[15px] font-semibold">{c.contactName}</span>
                           <InstagramGlyph size={16} className="shrink-0" />
@@ -164,7 +164,7 @@ export function OpsSection({ showConversations = true }: { showConversations?: b
                           </button>
                         </td>
                         <td className="py-3.5">
-                          <Link href={`/conversas?c=${c.conversationId}`} className="block hover:underline">
+                          <Link href={`/instagram?aba=directs&c=${c.conversationId}`} className="block hover:underline">
                             <span className="block text-[14.5px] max-w-[300px] truncate">{c.preview}</span>
                             <span className="block text-[13px] text-muted">{relativeTime(c.lastMessageAt)}</span>
                           </Link>
@@ -190,7 +190,7 @@ export function OpsSection({ showConversations = true }: { showConversations?: b
                               </IconButton>
                             </MenuTrigger>
                             <MenuContent>
-                              <MenuItem onSelect={() => (window.location.href = `/conversas?c=${c.conversationId}`)}>Responder</MenuItem>
+                              <MenuItem onSelect={() => (window.location.href = `/instagram?aba=directs&c=${c.conversationId}`)}>Responder</MenuItem>
                               <MenuItem onSelect={() => openContact(c.contactId)}>Abrir contato</MenuItem>
                             </MenuContent>
                           </Menu>

@@ -13,7 +13,8 @@ import { capabilitiesOf, getAccountToken, recordProviderError, type Account } fr
 import { logger } from "../logger";
 
 export const listConversationsSchema = z.object({
-  filter: z.enum(["all", "mine", "unread", "awaiting"]).default("all"),
+  filter: z.enum(["all", "mine", "unread", "awaiting", "pending"]).default("all"),
+  owner: z.enum(["all", "mine", "none"]).optional(),
   channel: z.enum(["instagram"]).optional(),
   q: z.string().trim().max(100).optional(),
   cursor: z.string().datetime().optional(),
@@ -21,14 +22,24 @@ export const listConversationsSchema = z.object({
 });
 
 export async function listConversations(ctx: Ctx, f: z.infer<typeof listConversationsSchema>) {
+  if (f.channel === "instagram" || !f.channel) {
+    const { syncSoon } = await import("../integrations/instagram/sync");
+    const { getActiveAccount } = await import("../integrations/instagram/accounts");
+    syncSoon(await getActiveAccount(ctx.orgId), ["directs"]);
+  }
   const conds: SQL[] = [conversationScope(ctx)];
   if (f.filter === "mine") conds.push(eq(conversations.ownerId, ctx.userId));
   if (f.filter === "unread") conds.push(sql`${conversations.unreadCount} > 0`);
   if (f.filter === "awaiting") conds.push(and(eq(conversations.status, "open"), eq(conversations.lastMessageDirection, "in"))!);
+  // "Sem resposta": última mensagem do contato, depois da última resolução manual.
+  if (f.filter === "pending") conds.push(sql`(${conversations.lastMessageDirection} = 'in' and ${conversations.status} = 'open' and (${conversations.resolvedAt} is null or ${conversations.resolvedAt} < ${conversations.lastInboundAt}))`);
+  if (f.owner === "mine") conds.push(eq(conversations.ownerId, ctx.userId));
+  if (f.owner === "none") conds.push(sql`${conversations.ownerId} is null`);
   if (f.channel) conds.push(eq(conversations.channel, f.channel));
   if (f.q) {
     const term = `%${f.q.replace(/^@/, "").replace(/[%_]/g, "\\$&")}%`;
-    conds.push(or(ilike(contacts.name, term), ilike(contacts.username, term))!);
+    // Nome, @ ou conteúdo das mensagens.
+    conds.push(or(ilike(contacts.name, term), ilike(contacts.username, term), sql`exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.body ilike ${term})`)!);
   }
   if (f.cursor) conds.push(lt(conversations.lastMessageAt, new Date(f.cursor)));
   const rows = await db
@@ -47,6 +58,15 @@ export async function listConversations(ctx: Ctx, f: z.infer<typeof listConversa
       contactUsername: contacts.username,
       avatarUrl: contacts.avatarUrl,
       accountUsername: connectedAccounts.username,
+      resolvedAt: conversations.resolvedAt,
+      lastInboundAt: conversations.lastInboundAt,
+      // Mensagens recebidas desde a última resposta/resolução (badge da lista).
+      pendingCount: sql<number>`(select count(*)::int from messages m where m.conversation_id = ${conversations.id} and m.direction = 'in'
+        and m.sent_at > coalesce((select max(o.sent_at) from messages o where o.conversation_id = ${conversations.id} and o.direction = 'out'), '-infinity'::timestamptz)
+        and m.sent_at > coalesce(${conversations.resolvedAt}, '-infinity'::timestamptz))`,
+      matchedText: f.q
+        ? sql<string | null>`(select m.body from messages m where m.conversation_id = ${conversations.id} and m.body ilike ${`%${f.q.replace(/^@/, "").replace(/[%_]/g, "\$&")}%`} order by m.sent_at desc limit 1)`
+        : sql<string | null>`null`,
     })
     .from(conversations)
     .innerJoin(contacts, eq(contacts.id, conversations.contactId))
@@ -173,6 +193,19 @@ export async function updateConversation(ctx: Ctx, id: string, input: z.infer<ty
   return u;
 }
 
+/** Resolver / reabrir o atendimento. Uma nova mensagem do contato reabre automaticamente. */
+export async function resolveConversation(ctx: Ctx, id: string, resolved: boolean) {
+  const { conv, contact } = await getVisibleConversation(ctx, id);
+  const [u] = await db
+    .update(conversations)
+    .set(resolved ? { resolvedAt: new Date(), resolvedBy: ctx.userId, unreadCount: 0 } : { resolvedAt: null, resolvedBy: null })
+    .where(eq(conversations.id, conv.id))
+    .returning();
+  await audit(db, ctx, resolved ? "instagram.dm_resolved" : "instagram.dm_reopened", "conversation", conv.id, { to: contact.username ?? contact.name });
+  await publish({ orgId: ctx.orgId, topic: "conversations", entityId: conv.id, ownerIds: [conv.ownerId, contact.ownerId], sharedInbox: !conv.ownerId });
+  return u;
+}
+
 // ---------- Envio ----------
 export const sendSchema = z.object({
   text: z.string().trim().min(1, "Escreva a mensagem.").max(1000, "O Instagram aceita até 1.000 caracteres por mensagem."),
@@ -244,6 +277,7 @@ export async function sendMessage(ctx: Ctx, conversationId: string, input: z.inf
     [final] = await db.update(messages).set({ status, error }).where(eq(messages.id, pending.id)).returning();
     logger.warn(`Envio ${pending.id} terminou como ${status}`, { kind: pe.kind, code: pe.code });
   }
+  await audit(db, ctx, "instagram.dm_sent", "conversation", conv.id, { to: contact.username ?? contact.name, preview: pending.body?.slice(0, 120), status: final.status, error: final.error });
   await publish({ orgId: ctx.orgId, topic: "conversations", entityId: conv.id, ownerIds: [conv.ownerId, contact.ownerId] });
   return final;
 }

@@ -4,7 +4,7 @@ export type Me = {
   user: { id: string; name: string; email: string; role: Role; avatarUrl: string | null };
   org: { id: string; name: string; isDemo: boolean; sharedInbox: boolean; timezone: string; autoEntryStageId: string | null };
   orgs: { id: string; name: string; isDemo: boolean; role: Role }[];
-  counts: { unreadConversations: number; newLeads: number };
+  counts: { unreadConversations: number; newLeads: number; pendingDirects: number; pendingComments: number };
   permissions: {
     dataAll: boolean;
     teamManage: boolean;

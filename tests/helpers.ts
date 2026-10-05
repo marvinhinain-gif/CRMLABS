@@ -123,4 +123,31 @@ export class FakeInstagramApi implements InstagramApi {
   async listComments() {
     return [];
   }
+  conversations: import("@/server/integrations/instagram/client").ConversationItem[] = [];
+  media: import("@/server/integrations/instagram/client").MediaDetails[] = [];
+  async listConversations() {
+    this.record("listConversations");
+    return this.conversations;
+  }
+  async listMediaWithComments() {
+    this.record("listMediaWithComments");
+    return this.media;
+  }
+  async getMedia(_t: string, id: string) {
+    this.record("getMedia", id);
+    return this.media.find((m) => m.id === id) ?? { id };
+  }
+  async commentOnMedia(t: string, mediaId: string, text: string) {
+    this.record("commentOnMedia", t, mediaId, text);
+    this.outcome();
+    return { id: `own.${++this.n}` };
+  }
+  async hideComment(t: string, id: string, hide: boolean) {
+    this.record("hideComment", t, id, hide);
+    this.outcome();
+  }
+  async deleteComment(t: string, id: string) {
+    this.record("deleteComment", t, id);
+    this.outcome();
+  }
 }

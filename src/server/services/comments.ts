@@ -121,15 +121,28 @@ export async function replyToComment(ctx: Ctx, commentId: string, input: z.infer
   }
   const pending = inserted[0];
   let final: typeof commentReplies.$inferSelect;
+  // O Instagram só aceita respostas no comentário principal: respondendo a uma resposta, vai para o principal com @menção.
+  const rootExternalId = comment.parentExternalId ?? comment.externalId;
+  let publicText = pending.body;
+  if (input.kind === "public" && comment.parentExternalId && comment.authorUsername && !publicText.toLowerCase().startsWith(`@${comment.authorUsername.toLowerCase()}`)) {
+    publicText = `@${comment.authorUsername} ${publicText}`;
+  }
   try {
     const token = await getAccountToken(account.id);
     const api = getInstagramApi();
-    const externalId = input.kind === "public" ? (await api.replyToComment(token, comment.externalId, pending.body)).id : (await api.sendPrivateReply(token, comment.externalId, pending.body)).messageId;
+    const externalId = input.kind === "public" ? (await api.replyToComment(token, rootExternalId, publicText)).id : (await api.sendPrivateReply(token, comment.externalId, pending.body)).messageId;
     [final] = await db.update(commentReplies).set({ status: "accepted", externalId }).where(eq(commentReplies.id, pending.id)).returning();
     await db
       .update(socialComments)
-      .set({ status: "replied", ...(input.kind === "private" ? { privateReplySentAt: new Date() } : {}) })
+      .set({ status: "replied", resolvedAt: new Date(), resolvedBy: ctx.userId, ...(input.kind === "private" ? { privateReplySentAt: new Date() } : {}) })
       .where(eq(socialComments.id, comment.id));
+    // A resposta pública entra na conversa do post na hora (a sincronização não duplica: mesmo id do Instagram).
+    if (input.kind === "public") {
+      await db
+        .insert(socialComments)
+        .values({ orgId: ctx.orgId, accountId: account.id, postId: comment.postId, externalId, parentExternalId: rootExternalId, authorExternalId: account.externalAccountId, authorUsername: account.username, text: publicText, commentedAt: new Date(), isOwn: true, status: "done" })
+        .onConflictDoNothing();
+    }
   } catch (e) {
     const pe = e instanceof ProviderError ? e : new ProviderError("server", "Falha inesperada.");
     await recordProviderError(account, pe);
@@ -137,6 +150,15 @@ export async function replyToComment(ctx: Ctx, commentId: string, input: z.infer
     const error = pe.ambiguous ? "O Instagram não confirmou a resposta a tempo. Confira na publicação antes de tentar de novo." : `O Instagram recusou: ${pe.message}`.slice(0, 300);
     [final] = await db.update(commentReplies).set({ status, error }).where(eq(commentReplies.id, pending.id)).returning();
   }
+  const [post] = comment.postId ? await db.select({ caption: socialPosts.caption }).from(socialPosts).where(eq(socialPosts.id, comment.postId)) : [];
+  await audit(db, ctx, "instagram.comment_replied", "social_comment", comment.id, {
+    author: comment.authorUsername,
+    kind: input.kind,
+    preview: pending.body.slice(0, 120),
+    status: final.status,
+    postId: comment.postId,
+    postCaption: post?.caption?.slice(0, 80) ?? null,
+  });
   await publish({ orgId: ctx.orgId, topic: "comments", entityId: comment.id, sharedInbox: !comment.contactId });
   return final;
 }

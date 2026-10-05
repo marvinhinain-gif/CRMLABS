@@ -71,6 +71,13 @@
       "when": 1791224832708,
       "tag": "0009_commercial",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791227802032,
+      "tag": "0010_instagram_inbox",
+      "breakpoints": true
     }
   ]
 }

@@ -466,6 +466,9 @@ export const conversations = pgTable(
     lastMessagePreview: text("last_message_preview"),
     lastInboundAt: ts("last_inbound_at"),
     unreadCount: integer("unread_count").notNull().default(0),
+    /** Atendimento resolvido manualmente (uma nova mensagem recebida depois disso volta a ficar pendente). */
+    resolvedAt: ts("resolved_at"),
+    resolvedBy: uuid("resolved_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -484,7 +487,7 @@ export const messages = pgTable(
     /** mid do provedor; único por conversa/organização para deduplicação. */
     externalId: text("external_id"),
     body: text("body"),
-    attachments: jsonb("attachments").$type<{ type: string; url?: string }[]>(),
+    attachments: jsonb("attachments").$type<{ type: string; url?: string; previewUrl?: string; title?: string }[]>(),
     status: messageStatusEnum("status").notNull(),
     error: text("error"),
     /** Idempotência por clique: o cliente gera um id por tentativa de envio. */
@@ -519,6 +522,11 @@ export const socialPosts = pgTable(
     mediaType: text("media_type"),
     permalink: text("permalink"),
     thumbnailUrl: text("thumbnail_url"),
+    /** URL da mídia (expira; renovada ao abrir a publicação). */
+    mediaUrl: text("media_url"),
+    likeCount: integer("like_count"),
+    commentsCount: integer("comments_count"),
+    refreshedAt: ts("refreshed_at"),
     postedAt: ts("posted_at"),
     createdAt: createdAt(),
   },
@@ -542,6 +550,13 @@ export const socialComments = pgTable(
     status: commentStatusEnum("status").notNull().default("new"),
     privateReplySentAt: ts("private_reply_sent_at"),
     isOwn: boolean("is_own").notNull().default(false),
+    likeCount: integer("like_count").notNull().default(0),
+    /** Oculto no Instagram (só a conta e o autor veem). */
+    hiddenAt: ts("hidden_at"),
+    /** Excluído no Instagram (o registro fica para o histórico). */
+    deletedAt: ts("deleted_at"),
+    resolvedAt: ts("resolved_at"),
+    resolvedBy: uuid("resolved_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [

@@ -7,6 +7,9 @@
  *  - Mensagens: POST /me/messages  { recipient: { id } | { comment_id }, message: { text } }
  *  - Resposta pública a comentário: POST /{comment-id}/replies?message=
  *  - Webhooks: POST /me/subscribed_apps?subscribed_fields=messages,comments
+ *  - Conversas: GET /me/conversations?platform=instagram&fields=participants,updated_time,messages{…} (20 mensagens mais recentes por conversa)
+ *  - Mídias e comentários: GET /me/media?fields=…,comments{…,replies{…}} · GET /{media-id}?fields=…
+ *  - Comentar: POST /{media-id}/comments · Ocultar: POST /{comment-id}?hide=true · Excluir: DELETE /{comment-id}
  * Nada aqui faz scraping, iframe ou automação de sessão.
  */
 import { instagramConfig } from "../../env";
@@ -41,7 +44,11 @@ export type MeResult = { id: string; userId: string; username: string; accountTy
 export type SendResult = { messageId: string; recipientId?: string };
 export type ProviderMessage = { id: string; text?: string; createdTime: string; fromId?: string };
 export type MediaItem = { id: string; caption?: string; mediaType?: string; permalink?: string; thumbnailUrl?: string; mediaUrl?: string; timestamp?: string };
-export type CommentItem = { id: string; text?: string; timestamp: string; username?: string; fromId?: string; parentId?: string };
+export type CommentItem = { id: string; text?: string; timestamp: string; username?: string; fromId?: string; parentId?: string; likeCount?: number; hidden?: boolean };
+export type Attachment = { type: string; url?: string; previewUrl?: string; title?: string };
+export type ConversationMessage = { id: string; createdTime: string; fromId?: string; fromUsername?: string; text?: string; attachments: Attachment[]; unsupported?: boolean };
+export type ConversationItem = { id: string; updatedTime?: string; participants: { id: string; username?: string }[]; messages: ConversationMessage[] };
+export type MediaDetails = MediaItem & { likeCount?: number; commentsCount?: number; comments?: CommentItem[] };
 
 export interface InstagramApi {
   exchangeCode(code: string): Promise<TokenResult>;
@@ -57,6 +64,43 @@ export interface InstagramApi {
   findConversationMessages(token: string, igsid: string): Promise<ProviderMessage[]>;
   listMedia(token: string, limit: number): Promise<MediaItem[]>;
   listComments(token: string, mediaId: string, limit: number): Promise<CommentItem[]>;
+  listConversations(token: string, limit: number): Promise<ConversationItem[]>;
+  listMediaWithComments(token: string, limit: number): Promise<MediaDetails[]>;
+  getMedia(token: string, mediaId: string): Promise<MediaDetails>;
+  commentOnMedia(token: string, mediaId: string, text: string): Promise<{ id: string }>;
+  hideComment(token: string, commentId: string, hide: boolean): Promise<void>;
+  deleteComment(token: string, commentId: string): Promise<void>;
+}
+
+type RawComment = { id: string; text?: string; timestamp: string; username?: string; from?: { id: string; username?: string }; parent_id?: string; like_count?: number; hidden?: boolean; replies?: { data?: RawComment[] } };
+const COMMENT_FIELDS = "id,text,timestamp,username,from,parent_id,like_count,hidden";
+function flattenComments(list: RawComment[] | undefined): CommentItem[] {
+  const out: CommentItem[] = [];
+  for (const c of list ?? []) {
+    out.push({ id: c.id, text: c.text, timestamp: c.timestamp, username: c.username ?? c.from?.username, fromId: c.from?.id, parentId: c.parent_id, likeCount: c.like_count, hidden: c.hidden });
+    for (const r of c.replies?.data ?? []) out.push({ id: r.id, text: r.text, timestamp: r.timestamp, username: r.username ?? r.from?.username, fromId: r.from?.id, parentId: r.parent_id ?? c.id, likeCount: r.like_count, hidden: r.hidden });
+  }
+  return out;
+}
+
+/** Converte anexos da API de mensagens (imagem, vídeo, áudio, arquivo, compartilhamento, story). */
+export function parseMessageAttachments(m: Record<string, unknown>): Attachment[] {
+  const out: Attachment[] = [];
+  const atts = (m.attachments as { data?: Record<string, unknown>[] } | undefined)?.data ?? [];
+  for (const a of atts) {
+    const img = a.image_data as { url?: string; preview_url?: string } | undefined;
+    const vid = a.video_data as { url?: string; preview_url?: string } | undefined;
+    const mime = String(a.mime_type ?? "");
+    if (img) out.push({ type: "image", url: img.url, previewUrl: img.preview_url });
+    else if (vid) out.push({ type: "video", url: vid.url, previewUrl: vid.preview_url });
+    else if (mime.startsWith("audio")) out.push({ type: "audio", url: a.file_url as string | undefined });
+    else if (a.file_url) out.push({ type: "file", url: a.file_url as string, title: a.name as string | undefined });
+  }
+  for (const sh of (m.shares as { data?: { link?: string; name?: string; template?: unknown }[] } | undefined)?.data ?? []) out.push({ type: "share", url: sh.link, title: sh.name });
+  const story = m.story as { mention?: { link?: string }; reply_to?: { link?: string } } | undefined;
+  if (story?.reply_to) out.push({ type: "story_reply", url: story.reply_to.link });
+  if (story?.mention) out.push({ type: "story_mention", url: story.mention.link });
+  return out;
 }
 
 const TIMEOUT_MS = 15_000;
@@ -225,6 +269,63 @@ export class GraphInstagramApi implements InstagramApi {
       { token },
     );
     return (r.data ?? []).map((c) => ({ id: c.id, text: c.text, timestamp: c.timestamp, username: c.username ?? c.from?.username, fromId: c.from?.id, parentId: c.parent_id }));
+  }
+
+  async listConversations(token: string, limit: number): Promise<ConversationItem[]> {
+    const fields = "participants,updated_time,messages.limit(20){id,created_time,from,to,message,attachments,shares,story,is_unsupported}";
+    const r = await this.request<{ data?: { id: string; updated_time?: string; participants?: { data?: { id: string; username?: string }[] }; messages?: { data?: Record<string, unknown>[] } }[] }>(
+      `${this.graph}/me/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=${limit}`,
+      { token },
+    );
+    return (r.data ?? []).map((c) => ({
+      id: c.id,
+      updatedTime: c.updated_time,
+      participants: c.participants?.data ?? [],
+      messages: (c.messages?.data ?? []).map((m) => {
+        const from = m.from as { id?: string; username?: string } | undefined;
+        return { id: String(m.id), createdTime: String(m.created_time), fromId: from?.id, fromUsername: from?.username, text: (m.message as string) || undefined, attachments: parseMessageAttachments(m), unsupported: !!m.is_unsupported };
+      }),
+    }));
+  }
+
+  async listMediaWithComments(token: string, limit: number): Promise<MediaDetails[]> {
+    const fields = `id,caption,media_type,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count,comments.limit(50){${COMMENT_FIELDS},replies{${COMMENT_FIELDS}}}`;
+    const r = await this.request<{ data?: (Record<string, unknown> & { comments?: { data?: RawComment[] } })[] }>(`${this.graph}/me/media?fields=${encodeURIComponent(fields)}&limit=${limit}`, { token });
+    return (r.data ?? []).map((m) => this.toMedia(m));
+  }
+
+  async getMedia(token: string, mediaId: string): Promise<MediaDetails> {
+    const fields = `id,caption,media_type,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count,comments.limit(100){${COMMENT_FIELDS},replies{${COMMENT_FIELDS}}}`;
+    const m = await this.request<Record<string, unknown> & { comments?: { data?: RawComment[] } }>(`${this.graph}/${encodeURIComponent(mediaId)}?fields=${encodeURIComponent(fields)}`, { token });
+    return this.toMedia(m);
+  }
+
+  private toMedia(m: Record<string, unknown> & { comments?: { data?: RawComment[] } }): MediaDetails {
+    return {
+      id: String(m.id),
+      caption: m.caption as string | undefined,
+      mediaType: m.media_type as string | undefined,
+      permalink: m.permalink as string | undefined,
+      thumbnailUrl: m.thumbnail_url as string | undefined,
+      mediaUrl: m.media_url as string | undefined,
+      timestamp: m.timestamp as string | undefined,
+      likeCount: typeof m.like_count === "number" ? m.like_count : undefined,
+      commentsCount: typeof m.comments_count === "number" ? m.comments_count : undefined,
+      comments: flattenComments(m.comments?.data),
+    };
+  }
+
+  async commentOnMedia(token: string, mediaId: string, text: string) {
+    const form = new URLSearchParams({ message: text });
+    return this.request<{ id: string }>(`${this.graph}/${encodeURIComponent(mediaId)}/comments`, { method: "POST", token, body: form, headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+  }
+
+  async hideComment(token: string, commentId: string, hide: boolean) {
+    await this.request(`${this.graph}/${encodeURIComponent(commentId)}?hide=${hide ? "true" : "false"}`, { method: "POST", token });
+  }
+
+  async deleteComment(token: string, commentId: string) {
+    await this.request(`${this.graph}/${encodeURIComponent(commentId)}`, { method: "DELETE", token });
   }
 }
 

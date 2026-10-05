@@ -150,3 +150,17 @@ export function longDayTime(v: string | Date | null | undefined) {
   const day = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "short", day: "2-digit", month: "short" }).format(d);
   return `${day} · ${formatTime(d)}`;
 }
+
+/** Tempo curto das listas da caixa de entrada: "agora", "5 min", "2 h", "3 d", "2 sem". */
+export function shortAgo(v: string | Date | null | undefined) {
+  const d = toDate(v);
+  if (!d) return "";
+  const min = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+  if (min < 1) return "agora";
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h`;
+  const days = Math.floor(h / 24);
+  if (days < 7) return `${days} d`;
+  return `${Math.floor(days / 7)} sem`;
+}

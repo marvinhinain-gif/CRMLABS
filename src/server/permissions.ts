@@ -105,14 +105,17 @@ export function appointmentScope(ctx: Ctx): SQL {
   )!;
 }
 
-/** Comentários: visíveis se o contato vinculado é visível, ou sem contato na caixa compartilhada. */
+/**
+ * Comentários são públicos no Instagram: social sellers veem os sem contato (a caixa de comentários é deles)
+ * e os de contatos seus; com a caixa compartilhada, todos. Closers veem os de contatos visíveis.
+ */
 export function commentScope(ctx: Ctx): SQL {
   const base = eq(socialComments.orgId, ctx.orgId);
   if (can(ctx, "data.all")) return base;
   const visibleContact = exists(
     sql`(select 1 from ${contacts} where ${contacts.id} = ${socialComments.contactId} and ${contactScope(ctx)})`,
   );
-  if (ctx.org.sharedInbox) return and(base, or(visibleContact, isNull(socialComments.contactId)))!;
+  if (ctx.role === "seller") return ctx.org.sharedInbox ? base : and(base, or(visibleContact, isNull(socialComments.contactId)))!;
   return and(base, visibleContact)!;
 }
 

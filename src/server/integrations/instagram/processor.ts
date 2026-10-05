@@ -65,7 +65,7 @@ async function autoEntryStage(orgId: string, tx: Tx) {
  * Encontra ou cria o contato pelo identificador oficial (nunca pelo nome).
  * Seguro contra concorrência: a identidade é única por organização/conta/id externo.
  */
-async function resolveContact(
+export async function resolveContact(
   tx: Tx,
   account: Account,
   externalId: string,
@@ -114,7 +114,7 @@ async function resolveContact(
 }
 
 /** Busca nome/@ oficiais do remetente (melhor esforço, fora da transação). */
-async function enrichProfile(account: Account, contactId: string, igsid: string) {
+export async function enrichProfile(account: Account, contactId: string, igsid: string) {
   try {
     const p = await getInstagramApi().getUserProfile(await getAccountToken(account.id), igsid);
     const username = p.username?.toLowerCase() ?? null;
@@ -137,8 +137,39 @@ type MessagingEvent = {
   sender?: { id: string };
   recipient?: { id: string };
   timestamp?: number;
-  message?: { mid: string; text?: string; is_echo?: boolean; attachments?: { type: string; payload?: { url?: string } }[] };
+  message?: {
+    mid: string;
+    text?: string;
+    is_echo?: boolean;
+    is_unsupported?: boolean;
+    attachments?: { type: string; payload?: { url?: string; title?: string } }[];
+    reply_to?: { story?: { url?: string; id?: string }; mid?: string };
+  };
 };
+
+type Att = { type: string; url?: string; previewUrl?: string; title?: string };
+
+/** Texto curto da lista de conversas, no estilo da caixa de entrada do Instagram. */
+export function messagePreview(text: string | null | undefined, attachments: Att[], unsupported = false, outbound = false) {
+  const t = text?.trim();
+  if (attachments.some((a) => a.type === "story_reply")) return t ? `Respondeu ao seu story: ${t}`.slice(0, 140) : "Respondeu ao seu story";
+  if (t) return t.slice(0, 140);
+  const a = attachments[0];
+  const verb = outbound ? "Você" : "";
+  const label: Record<string, string> = {
+    image: "Enviou uma foto",
+    video: "Enviou um vídeo",
+    audio: "Enviou um áudio",
+    file: "Enviou um anexo",
+    share: "Compartilhou uma publicação",
+    ig_post: "Compartilhou uma publicação",
+    ig_reel: "Compartilhou um reel",
+    reel: "Compartilhou um reel",
+    story_mention: "Mencionou você no story",
+  };
+  if (a) return `${verb ? `${verb} · ` : ""}${label[a.type] ?? "Enviou um anexo"}`;
+  return unsupported ? "Mensagem não suportada pela API (veja no Instagram)" : "Mensagem sem texto";
+}
 
 async function handleMessage(account: Account, ev: MessagingEvent) {
   const msg = ev.message;
@@ -147,8 +178,9 @@ async function handleMessage(account: Account, ev: MessagingEvent) {
   const userIgsid = isEcho ? ev.recipient.id : ev.sender.id;
   const at = ev.timestamp ? new Date(ev.timestamp) : new Date();
   const [org] = await db.select().from(organizations).where(eq(organizations.id, account.orgId));
-  const attachments = (msg.attachments ?? []).map((a) => ({ type: a.type, url: a.payload?.url }));
-  const preview = msg.text?.slice(0, 140) ?? (attachments.length ? `[${attachments[0].type}]` : "[mensagem]");
+  const attachments: Att[] = (msg.attachments ?? []).map((a) => ({ type: a.type === "ig_reel" || a.type === "reel" ? "share" : a.type, url: a.payload?.url, title: a.payload?.title }));
+  if (msg.reply_to?.story) attachments.unshift({ type: "story_reply", url: msg.reply_to.story.url });
+  const preview = messagePreview(msg.text, attachments, !!msg.is_unsupported, isEcho);
 
   const result = await db.transaction(async (tx) => {
     const { contact, created } = await resolveContact(tx, account, userIgsid, { source: "instagram_dm", allowCreate: !isEcho ? org.autoCreateFromMessages : false });
@@ -218,7 +250,7 @@ async function handleMessage(account: Account, ev: MessagingEvent) {
   if (!result || result.duplicate) return;
   if (result.created) await enrichProfile(account, result.contact.id, userIgsid);
   if (!isEcho && result.conv.ownerId) {
-    await notifyUser({ orgId: account.orgId, userId: result.conv.ownerId, type: "message.received", title: `Nova mensagem de ${result.contact.name}`, body: preview, link: `/conversas?c=${result.conv.id}` });
+    await notifyUser({ orgId: account.orgId, userId: result.conv.ownerId, type: "message.received", title: `Nova mensagem de ${result.contact.name}`, body: preview, link: `/instagram?aba=directs&c=${result.conv.id}` });
   }
   const ownerIds = [result.conv.ownerId, result.contact.ownerId];
   await publish({ orgId: account.orgId, topic: "conversations", entityId: result.conv.id, ownerIds, sharedInbox: !result.conv.ownerId });
@@ -308,6 +340,23 @@ async function handleComment(account: Account, v: CommentValue) {
     return { inserted: inserted.length > 0, contactId, ownerId, created };
   });
   if (!res.inserted) return;
-  await publish({ orgId: account.orgId, topic: "comments", ownerIds: [res.ownerId], sharedInbox: !res.contactId, managersOnly: !res.contactId && !org.sharedInbox });
+  // A conta respondeu pelo próprio Instagram: o comentário respondido (e o que veio antes na mesma conversa) sai de "Sem resposta".
+  if (isOwn && v.parent_id) await autoResolveThreads(account.id);
+  await publish({ orgId: account.orgId, topic: "comments", ownerIds: [res.ownerId], sharedInbox: !res.contactId });
   if (res.created) await publish({ orgId: account.orgId, topic: "board" });
+}
+
+/**
+ * Resposta da própria conta numa conversa de comentários resolve o que estava pendente antes dela:
+ * o comentário principal respondido e as respostas anteriores na mesma conversa.
+ */
+export async function autoResolveThreads(accountId: string) {
+  await db.execute(sql`
+    update social_comments c set status = 'replied', resolved_at = o.commented_at
+    from social_comments o
+    where c.account_id = ${accountId} and o.account_id = c.account_id
+      and o.is_own and o.deleted_at is null and not c.is_own
+      and c.status in ('new', 'in_progress')
+      and o.commented_at > c.commented_at
+      and (o.parent_external_id = c.external_id or (c.parent_external_id is not null and o.parent_external_id = c.parent_external_id))`);
 }

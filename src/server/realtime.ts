@@ -71,6 +71,8 @@ export function canReceive(ctx: Ctx, e: RealtimeEvent) {
   if (e.managersOnly) return false;
   if (e.ownerIds?.includes(ctx.userId)) return true;
   if (e.sharedInbox && ctx.org.sharedInbox && ctx.role === "seller") return true;
+  // Comentários são públicos e a caixa de comentários é do social seller (o evento não leva dados, só "atualize").
+  if (e.topic === "comments" && ctx.role === "seller") return true;
   return false;
 }
 

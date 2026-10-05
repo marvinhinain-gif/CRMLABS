@@ -39,13 +39,14 @@ import { relativeTime } from "@/lib/format";
 import { Avatar, cx, IconButton, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui";
 import { ContactPanel } from "@/components/contacts/ContactPanel";
 import { PushPrompt } from "./PushPrompt";
+import { InstagramNavIcon } from "@/components/ui/ChannelIcon";
 
-const NAV: { href: string; label: string; icon: typeof House; badge?: "conversations" | "leads"; adminOnly?: boolean }[] = [
+const NAV: { href: string; label: string; icon: typeof House | typeof InstagramNavIcon; badge?: "instagram" | "leads"; adminOnly?: boolean }[] = [
   { href: "/dashboard", label: "Visão geral", icon: House },
   { href: "/social-seller", label: "Social Seller", icon: Users },
   { href: "/leads", label: "Leads", icon: Megaphone, badge: "leads" },
   { href: "/agendamentos", label: "Agendamentos", icon: CalendarDays },
-  { href: "/conversas", label: "Conversas", icon: MessageCircle, badge: "conversations" },
+  { href: "/instagram", label: "Instagram", icon: InstagramNavIcon, badge: "instagram" },
   { href: "/contatos", label: "Contatos", icon: SquareUser },
   { href: "/comercial", label: "Comercial", icon: ChartNoAxesColumn },
   { href: "/tarefas", label: "Tarefas", icon: SquareCheck },
@@ -58,7 +59,8 @@ const TITLES: Record<string, string> = {
   "/leads": "Leads",
   "/agendamentos": "Agendamentos",
   "/integracoes": "Integrações",
-  "/conversas": "Conversas",
+  "/conversas": "Instagram",
+  "/instagram": "Instagram",
   "/contatos": "Contatos",
   "/comercial": "Comercial",
   "/tarefas": "Tarefas",
@@ -73,7 +75,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?:
       {NAV.filter((item) => !item.adminOnly || me.user.role === "admin").map((item) => {
         const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
         const Icon = item.icon;
-        const count = item.badge === "conversations" ? me.counts.unreadConversations : item.badge === "leads" ? (me.counts.newLeads ?? 0) : 0;
+        const count = item.badge === "instagram" ? (me.counts.pendingDirects ?? 0) + (me.counts.pendingComments ?? 0) : item.badge === "leads" ? (me.counts.newLeads ?? 0) : 0;
         return (
           <Link
             key={item.href}
@@ -87,12 +89,12 @@ function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?:
               active ? "bg-selected text-brand font-semibold" : "text-ink hover:bg-page",
             )}
           >
-            <Icon className="size-[22px] shrink-0" strokeWidth={active ? 2.2 : 1.8} aria-hidden />
+            <Icon className="size-[22px] shrink-0" {...(Icon === InstagramNavIcon ? {} : { strokeWidth: active ? 2.2 : 1.8 })} aria-hidden />
             {!collapsed && <span className="flex-1">{item.label}</span>}
             {count > 0 && (
               <span
                 className={cx("flex items-center justify-center rounded-full bg-brand text-white text-[12px] font-semibold", collapsed ? "absolute right-1.5 top-1.5 size-5" : "min-w-7 h-7 px-1.5")}
-                aria-label={item.badge === "leads" ? `${count} leads novos` : `${count} conversas não lidas`}
+                aria-label={item.badge === "leads" ? `${count} leads novos` : `${count} interações esperando resposta`}
               >
                 {count > 99 ? "99+" : count}
               </span>
@@ -330,7 +332,7 @@ function GlobalSearch() {
             <div>
               <p className="px-3 pt-3 pb-1 text-[12px] font-medium text-muted">Conversas</p>
               {data.conversations.map((c) => (
-                <Link key={c.id} href={`/conversas?c=${c.id}`} onClick={() => setOpen(false)} className="flex flex-col rounded-[12px] px-3 py-2 hover:bg-page">
+                <Link key={c.id} href={`/instagram?aba=directs&c=${c.id}`} onClick={() => setOpen(false)} className="flex flex-col rounded-[12px] px-3 py-2 hover:bg-page">
                   <span className="text-[14px] font-medium">{c.contactName}</span>
                   <span className="truncate text-[12.5px] text-muted">{c.lastMessagePreview ?? "Sem mensagens"}</span>
                 </Link>

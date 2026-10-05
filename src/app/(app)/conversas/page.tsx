@@ -1,17 +1,8 @@
-import type { Metadata } from "next";
-import { Suspense } from "react";
-import { ConversationsView } from "@/components/conversations/ConversationsView";
-import { PageHeaderServer } from "@/components/shell/PageHeaderServer";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "Conversas" };
-
-export default function ConversationsPage() {
-  return (
-    <div className="mx-auto flex max-w-[1600px] flex-col gap-5">
-      <PageHeaderServer title="Conversas" subtitle="Caixa central de atendimento." />
-      <Suspense>
-        <ConversationsView />
-      </Suspense>
-    </div>
-  );
+/** A caixa de conversas agora vive em Instagram → Directs (links antigos continuam funcionando). */
+export default async function ConversationsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const sp = await searchParams;
+  const c = typeof sp.c === "string" ? `&c=${encodeURIComponent(sp.c)}` : "";
+  redirect(`/instagram?aba=directs${c}`);
 }

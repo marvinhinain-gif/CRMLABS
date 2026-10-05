@@ -6,8 +6,8 @@ import { useSWRConfig } from "swr";
 const TOPIC_KEYS: Record<string, string[]> = {
   board: ["/api/board", "/api/dashboard", "/api/contacts", "/api/me"],
   contacts: ["/api/contacts", "/api/board", "/api/dashboard", "/api/search"],
-  conversations: ["/api/conversations", "/api/me", "/api/dashboard", "/api/board", "/api/contacts/"],
-  comments: ["/api/comments"],
+  conversations: ["/api/conversations", "/api/me", "/api/dashboard", "/api/board", "/api/contacts/", "/api/instagram"],
+  comments: ["/api/comments", "/api/instagram", "/api/me"],
   tasks: ["/api/tasks", "/api/dashboard", "/api/contacts/", "/api/commercial"],
   opportunities: ["/api/opportunities", "/api/commercial", "/api/appointments", "/api/agenda", "/api/dashboard", "/api/contacts/", "/api/leads", "/api/tasks"],
   leads: ["/api/leads", "/api/me", "/api/contacts", "/api/board", "/api/appointments", "/api/agenda", "/api/dashboard"],

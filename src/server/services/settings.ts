@@ -81,5 +81,7 @@ export async function navCounts(ctx: Ctx) {
     .innerJoin(contacts, eq(contacts.id, conversations.contactId))
     .where(and(conversationScope(ctx), sql`${conversations.unreadCount} > 0`));
   const { newLeadCount } = await import("./leads");
-  return { unreadConversations: row?.n ?? 0, newLeads: await newLeadCount(ctx) };
+  const { inboxSummary } = await import("./instagram");
+  const inbox = await inboxSummary(ctx);
+  return { unreadConversations: row?.n ?? 0, newLeads: await newLeadCount(ctx), pendingDirects: inbox.pendingDirects, pendingComments: inbox.pendingComments };
 }

@@ -105,6 +105,22 @@ Rota escolhida: **Instagram API com Login do Instagram** (`graph.instagram.com`,
 - **Envio idempotente:** cada clique gera um `clientRequestId`; se o provedor demora (timeout), a mensagem fica “Não confirmada” e só pode ser reenviada depois de “Verificar envio” (consulta à API) ou quando o eco do webhook a confirma automaticamente.
 - **Tokens:** longos (60 dias), guardados criptografados (AES-256-GCM) em tabela separada, renovados pelo worker 10 dias antes de expirar.
 
+### Caixa de entrada comercial (Instagram → Directs, Comentários, Histórico)
+Cada item abaixo foi mapeado para um recurso oficial da *Instagram API com Instagram Login* (permissões `instagram_business_basic`, `instagram_business_manage_messages`, `instagram_business_manage_comments`):
+
+| Funcionalidade | Como funciona | Recurso oficial |
+|---|---|---|
+| Lista de Directs, pesquisa por nome/@/conteúdo, "Sem resposta" | Webhook `messages` + sincronização a cada 5 min e ao abrir a tela | `GET /me/conversations?platform=instagram&fields=participants,messages{…}` (20 mensagens mais recentes por conversa) |
+| Tipos de mensagem | Texto, foto, vídeo, áudio, arquivo, compartilhamento, resposta e menção de story | Campos `attachments`, `shares`, `story` e eventos de webhook |
+| Responder Direct | Dentro da janela de 24 h (7 dias com Human Agent) | `POST /me/messages` |
+| Comentários por publicação, curtidas, oculto | Webhook `comments` + sincronização das 12 publicações mais recentes | `GET /me/media?fields=…,like_count,comments_count,comments{…,replies{…}}` |
+| Responder / Ocultar / Excluir / Comentar no post | Respostas a uma resposta vão para o comentário principal com @menção (o Instagram só tem um nível) | `POST /{comment-id}/replies` · `POST /{comment-id}?hide=` · `DELETE /{comment-id}` · `POST /{media-id}/comments` |
+| Responder no Direct (privada) | Uma por comentário, até 7 dias | `POST /me/messages` com `recipient.comment_id` |
+| Pendente / Resolvido | Regra do CRMLABS: responder (pelo CRM ou pelo próprio app do Instagram) resolve; nova mensagem/comentário volta a pendente; "Marcar como resolvido" manual | — |
+| Histórico (só administrador) | Toda ação registrada com pessoa, horário, destinatário, ação e status | — |
+
+**Não disponível pela API oficial (não simulado):** as pastas *Principal / Geral / Pedidos / Parcerias* do Direct (a API não informa em qual pasta a conversa está), curtir comentários pela conta, histórico completo de conversas anteriores à conexão (só as 20 mensagens mais recentes de cada conversa) e confirmação de entrega. As URLs de mídia expiram e são renovadas ao abrir a publicação.
+
 ### Fora do escopo (não implementado de propósito)
 Assistir ou interagir com stories de terceiros, importar todos os seguidores, histórico integral de conversas anteriores à conexão e prospecção irrestrita por DM. Não há iframe, scraping, sessão automatizada nem botão de fachada para isso. Anexos no Direct exigem armazenamento de arquivos com URL pública e ficaram fora do MVP (o adaptador já conhece o formato da API).
 

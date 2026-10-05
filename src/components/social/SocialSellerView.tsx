@@ -11,10 +11,9 @@ import type { Stage } from "@/lib/types";
 import { Button, cx, DemoBadge, Field, PageHeader, Select, Tabs } from "@/components/ui";
 import { KanbanBoard } from "./KanbanBoard";
 import { EditStagesDialog } from "./EditStagesDialog";
-import { CommentsView } from "./CommentsView";
 import { AccountPill, useActiveAccount } from "./AccountPill";
 import { NewContactDialog } from "@/components/contacts/NewContactDialog";
-import { ConversationsView } from "@/components/conversations/ConversationsView";
+import { useRouter } from "next/navigation";
 
 type Tab = "kanban" | "direct" | "comentarios";
 
@@ -24,6 +23,12 @@ export function SocialSellerView() {
   const openContact = useOpenContact();
   const { account } = useActiveAccount();
   const [tab, setTab] = useQueryParam("aba", "kanban");
+  const router = useRouter();
+  // Direct e Comentários agora ficam em Instagram (links antigos continuam funcionando).
+  useEffect(() => {
+    if (tab === "direct") router.replace("/instagram?aba=directs");
+    if (tab === "comentarios") router.replace("/instagram?aba=comentarios");
+  }, [tab, router]);
   const [owner, setOwner] = useQueryParam("responsavel", "");
   const [stageId, setStageId] = useQueryParam("etapa", "");
   const [tagId, setTagId] = useQueryParam("tag", "");
@@ -59,7 +64,7 @@ export function SocialSellerView() {
       />
       <Tabs
         value={tab as Tab}
-        onChange={(v) => setTab(v)}
+        onChange={(v) => (v === "kanban" ? setTab(v) : router.push(v === "direct" ? "/instagram?aba=directs" : "/instagram?aba=comentarios"))}
         items={[
           { value: "kanban", label: "Kanban", icon: <LayoutDashboard /> },
           { value: "direct", label: "Direct", icon: <Send /> },
@@ -154,8 +159,7 @@ export function SocialSellerView() {
           <KanbanBoard filters={{ q: debounced || undefined, ownerId: owner || undefined, stageId: stageId || undefined, tagId: tagId || undefined, nextAction: nextAction || undefined }} onAdd={(id) => setNewStage(id)} onEditStages={() => setEditStages(true)} />
         </>
       )}
-      {tab === "direct" && <ConversationsView channel="instagram" embedded />}
-      {tab === "comentarios" && <CommentsView connected={!!account?.capabilities.readComments} />}
+
 
       <NewContactDialog open={newStage !== undefined} onOpenChange={(v) => !v && setNewStage(undefined)} defaultStageId={newStage ?? undefined} onCreated={openContact} />
       <EditStagesDialog open={editStages} onOpenChange={setEditStages} />

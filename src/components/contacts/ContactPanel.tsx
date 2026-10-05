@@ -175,7 +175,7 @@ function PanelBody({ id, onClose }: { id: string; onClose: () => void }) {
           </MenuTrigger>
           <MenuContent>
             {data.conversation && (
-              <MenuItem icon={<MessageCircle />} onSelect={() => (window.location.href = `/conversas?c=${data.conversation!.id}`)}>
+              <MenuItem icon={<MessageCircle />} onSelect={() => (window.location.href = `/instagram?aba=directs&c=${data.conversation!.id}`)}>
                 Abrir conversa
               </MenuItem>
             )}
@@ -323,7 +323,7 @@ function DataTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {
         <div className="flex items-center justify-between">
           <p className="text-[14px] font-semibold">Conversa vinculada</p>
           {data.conversation && (
-            <Link href={`/conversas?c=${data.conversation.id}`} className="text-[13px] font-medium text-brand hover:underline">
+            <Link href={`/instagram?aba=directs&c=${data.conversation.id}`} className="text-[13px] font-medium text-brand hover:underline">
               Abrir conversa
             </Link>
           )}
