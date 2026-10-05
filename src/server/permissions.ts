@@ -1,5 +1,5 @@
 import { and, eq, exists, isNull, or, sql, type SQL } from "drizzle-orm";
-import { contacts, conversations, opportunities, tasks, appointments, socialComments } from "./db/schema";
+import { contacts, conversations, opportunities, tasks, appointments, socialComments, leads } from "./db/schema";
 import type { Role } from "./db/schema";
 import type { Ctx } from "./context";
 import { forbidden } from "./errors";
@@ -14,7 +14,8 @@ export type Action =
   | "contacts.import"
   | "contacts.merge"
   | "savedReplies.manage"
-  | "opportunity.decide";
+  | "opportunity.decide"
+  | "leads.manage";
 
 const MATRIX: Record<Action, Role[]> = {
   "data.all": ["admin", "manager"],
@@ -27,6 +28,7 @@ const MATRIX: Record<Action, Role[]> = {
   "contacts.merge": ["admin", "manager"],
   "savedReplies.manage": ["admin", "manager"],
   "opportunity.decide": ["admin", "manager", "closer"],
+  "leads.manage": ["admin", "manager"],
 };
 
 export function can(ctx: Pick<Ctx, "role">, action: Action) {
@@ -111,4 +113,14 @@ export function commentScope(ctx: Ctx): SQL {
   );
   if (ctx.org.sharedInbox) return and(base, or(visibleContact, isNull(socialComments.contactId)))!;
   return and(base, visibleContact)!;
+}
+
+/** Leads: gestores veem todos; social sellers veem os distribuídos a eles (ou de contatos seus). */
+export function leadScope(ctx: Ctx): SQL {
+  const base = eq(leads.orgId, ctx.orgId);
+  if (can(ctx, "data.all")) return base;
+  return and(
+    base,
+    or(eq(leads.assignedTo, ctx.userId), exists(sql`(select 1 from ${contacts} c where c.id = ${leads.contactId} and c.owner_id = ${ctx.userId})`)),
+  )!;
 }

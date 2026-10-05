@@ -54,3 +54,14 @@ import { sql } from "drizzle-orm";
 export function tsz(d: Date | null | undefined) {
   return d ? sql`${d.toISOString()}::timestamptz` : sql`null::timestamptz`;
 }
+
+/** "2026-10-10T14:30" (horário local do fuso) → instante UTC. Retorna null se inválido. */
+export function parseLocalDateTime(value: string, tz: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(value.trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
+  const local = new TZDate(y, mo - 1, d, h, mi, 0, tz);
+  const out = new Date(local.getTime());
+  return Number.isNaN(out.getTime()) ? null : out;
+}

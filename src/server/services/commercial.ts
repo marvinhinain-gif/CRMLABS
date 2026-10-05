@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, gte, isNull, lt, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { appointments, contacts, opportunities, pipelineStages, stageHistory, users } from "../db/schema";
+import { appointments, contactTags, contacts, leadForms, leads, opportunities, pipelineStages, stageHistory, tags, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { appointmentScope, assertCan, can, contactScope, opportunityScope } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
@@ -325,8 +325,11 @@ export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointm
   const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, input.contactId), contactScope(ctx)));
   if (!contact) throw invalid("Contato inválido.");
   const ownerId = input.ownerId ?? ctx.userId;
-  if (ownerId !== ctx.userId && !can(ctx, "contacts.assign")) throw forbidden("Somente gestores agendam para outras pessoas.");
-  await assertMember(ctx.orgId, ownerId, { activeOnly: true });
+  const ownerMember = await assertMember(ctx.orgId, ownerId, { activeOnly: true });
+  // Social sellers podem marcar para si ou direto com um closer; gestores, para qualquer pessoa.
+  if (ownerId !== ctx.userId && !can(ctx, "contacts.assign") && ownerMember.role !== "closer") {
+    throw forbidden("Você pode agendar para você ou para um closer.");
+  }
   if (input.opportunityId) await getVisibleOpportunity(ctx, input.opportunityId);
   const [a] = await db
     .insert(appointments)
@@ -346,6 +349,16 @@ export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointm
   await audit(db, ctx, "appointment.created", "appointment", a.id);
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: a.id, ownerIds: [ownerId, contact.ownerId] });
   await alertMeeting(ctx, { contactId: contact.id, title: a.title, startsAt: a.startsAt, ownerId }).catch((e) => logger.warn("Falha no alerta de reunião", e));
+  if (ownerId !== ctx.userId) {
+    await notifyUser({
+      orgId: ctx.orgId,
+      userId: ownerId,
+      type: "meeting.assigned",
+      title: `Reunião marcada para você: ${contact.name}`,
+      body: `${new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Bahia", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(a.startsAt)} · por ${ctx.userName}`,
+      link: `/agendamentos?reuniao=${a.id}`,
+    }).catch((e) => logger.warn("Falha ao avisar o responsável da reunião", e));
+  }
   return a;
 }
 
@@ -375,6 +388,108 @@ export async function updateAppointment(ctx: Ctx, id: string, input: z.infer<typ
     .where(eq(appointments.id, a.id))
     .returning();
   if (input.status && input.status !== a.status) await audit(db, ctx, "appointment.status", "appointment", a.id, { from: a.status, to: input.status });
+  // Reunião de lead cancelada: o lead volta para "em contato" para ser remarcado.
+  if (a.leadId && input.status === "canceled" && a.status !== "canceled") {
+    await db.update(leads).set({ status: "contacted", updatedAt: new Date() }).where(and(eq(leads.id, a.leadId), eq(leads.appointmentId, a.id)));
+    await publish({ orgId: ctx.orgId, topic: "leads", entityId: a.leadId });
+  }
+  if (a.leadId && input.status === "scheduled" && a.status === "canceled") {
+    await db.update(leads).set({ status: "scheduled", appointmentId: a.id, updatedAt: new Date() }).where(eq(leads.id, a.leadId));
+    await publish({ orgId: ctx.orgId, topic: "leads", entityId: a.leadId });
+  }
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: a.id, ownerIds: [a.ownerId] });
   return u;
+}
+
+// ---------- Agendamentos (calendário com dados do cliente) ----------
+export const agendaSchema = z.object({
+  from: z.coerce.date(),
+  to: z.coerce.date(),
+  ownerId: z.string().uuid().optional(),
+  status: z.enum(["scheduled", "done", "canceled", "no_show", "all"]).default("all"),
+});
+
+export async function listAgenda(ctx: Ctx, f: z.infer<typeof agendaSchema>) {
+  if (f.to.getTime() - f.from.getTime() > 62 * 86400000) throw invalid("Período grande demais.");
+  const conds: SQL[] = [appointmentScope(ctx), gte(appointments.startsAt, f.from), lt(appointments.startsAt, f.to)];
+  if (f.status !== "all") conds.push(eq(appointments.status, f.status));
+  if (f.ownerId && can(ctx, "data.all")) conds.push(eq(appointments.ownerId, f.ownerId));
+  return db
+    .select({
+      id: appointments.id,
+      title: appointments.title,
+      startsAt: appointments.startsAt,
+      endsAt: appointments.endsAt,
+      status: appointments.status,
+      location: appointments.location,
+      ownerId: appointments.ownerId,
+      ownerName: users.name,
+      contactId: contacts.id,
+      contactName: contacts.name,
+      contactPhone: contacts.phone,
+      contactUsername: contacts.username,
+      contactAvatar: contacts.avatarUrl,
+      leadId: appointments.leadId,
+      fromLead: sql<boolean>`${appointments.leadId} is not null`,
+      leadStatus: leads.status,
+    })
+    .from(appointments)
+    .innerJoin(contacts, eq(contacts.id, appointments.contactId))
+    .leftJoin(users, eq(users.id, appointments.ownerId))
+    .leftJoin(leads, eq(leads.id, appointments.leadId))
+    .where(and(...conds))
+    .orderBy(asc(appointments.startsAt))
+    .limit(500);
+}
+
+/** Reunião com tudo sobre o cliente: contato, respostas do formulário do anúncio e oportunidade. */
+export async function getAgendaItem(ctx: Ctx, id: string) {
+  const [a] = await db.select().from(appointments).where(and(eq(appointments.id, id), appointmentScope(ctx)));
+  if (!a) throw notFound("Reunião não encontrada.");
+  const [contact] = await db
+    .select({ id: contacts.id, name: contacts.name, phone: contacts.phone, email: contacts.email, username: contacts.username, avatarUrl: contacts.avatarUrl, summary: contacts.summary, source: contacts.source, ownerId: contacts.ownerId, createdAt: contacts.createdAt })
+    .from(contacts)
+    .where(eq(contacts.id, a.contactId));
+  const people = [a.ownerId, contact?.ownerId].filter((x): x is string => !!x);
+  const names = people.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, people)) : [];
+  const nameOf = (uid: string | null | undefined) => names.find((n) => n.id === uid)?.name ?? null;
+  let lead = null;
+  if (a.leadId) {
+    const [l] = await db
+      .select({ id: leads.id, answers: leads.answers, utm: leads.utm, preferredAt: leads.preferredAt, preferredText: leads.preferredText, createdAt: leads.createdAt, formName: leadForms.name, channel: leads.channel })
+      .from(leads)
+      .leftJoin(leadForms, eq(leadForms.id, leads.formId))
+      .where(eq(leads.id, a.leadId));
+    lead = l ?? null;
+  } else {
+    // Sem vínculo direto: mostra o lead mais recente do mesmo contato, se houver.
+    const [l] = await db
+      .select({ id: leads.id, answers: leads.answers, utm: leads.utm, preferredAt: leads.preferredAt, preferredText: leads.preferredText, createdAt: leads.createdAt, formName: leadForms.name, channel: leads.channel })
+      .from(leads)
+      .leftJoin(leadForms, eq(leadForms.id, leads.formId))
+      .where(and(eq(leads.contactId, a.contactId), eq(leads.orgId, ctx.orgId)))
+      .orderBy(desc(leads.createdAt))
+      .limit(1);
+    lead = l ?? null;
+  }
+  let opportunity = null;
+  if (a.opportunityId) {
+    const [o] = await db.select({ id: opportunities.id, title: opportunities.title, valueCents: opportunities.valueCents, status: opportunities.status }).from(opportunities).where(eq(opportunities.id, a.opportunityId));
+    opportunity = o ?? null;
+  }
+  const tagRows = await db.select({ name: tags.name }).from(contactTags).innerJoin(tags, eq(tags.id, contactTags.tagId)).where(eq(contactTags.contactId, a.contactId));
+  const history = await db
+    .select({ id: appointments.id, startsAt: appointments.startsAt, status: appointments.status, title: appointments.title })
+    .from(appointments)
+    .where(and(eq(appointments.contactId, a.contactId), appointmentScope(ctx), sql`${appointments.id} <> ${a.id}`))
+    .orderBy(desc(appointments.startsAt))
+    .limit(5);
+  return {
+    ...a,
+    ownerName: nameOf(a.ownerId),
+    contact: contact ? { ...contact, ownerName: nameOf(contact.ownerId), tags: tagRows.map((t) => t.name) } : null,
+    lead,
+    opportunity,
+    history,
+  };
 }

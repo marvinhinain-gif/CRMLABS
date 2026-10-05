@@ -4,7 +4,7 @@ import type { Ctx } from "./context";
 import { can } from "./permissions";
 import { logger } from "./logger";
 
-export type Topic = "board" | "contacts" | "conversations" | "comments" | "tasks" | "opportunities" | "notifications" | "settings";
+export type Topic = "board" | "contacts" | "conversations" | "comments" | "tasks" | "opportunities" | "notifications" | "settings" | "leads";
 
 /**
  * Evento de invalidação. Não carrega dados de negócio: o cliente recarrega pela API,

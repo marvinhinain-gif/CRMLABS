@@ -43,7 +43,9 @@ export const contactSourceEnum = pgEnum("contact_source", [
   "instagram_dm",
   "instagram_comment",
   "import",
+  "lead_form",
 ]);
+export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "scheduled", "no_answer", "disqualified"]);
 export const pipelineKindEnum = pgEnum("pipeline_kind", ["relationship", "sales"]);
 export const opportunityStatusEnum = pgEnum("opportunity_status", ["open", "won", "lost"]);
 export const appointmentStatusEnum = pgEnum("appointment_status", ["scheduled", "done", "canceled", "no_show"]);
@@ -409,6 +411,8 @@ export const appointments = pgTable(
     location: text("location"),
     status: appointmentStatusEnum("status").notNull().default("scheduled"),
     notes: text("notes"),
+    /** Lead (formulário de anúncio) que originou a reunião. */
+    leadId: uuid("lead_id"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -668,3 +672,72 @@ export const integrationJobs = pgTable(
 );
 
 export type Role = (typeof roleEnum.enumValues)[number];
+
+// ---------- Leads de anúncios ----------
+export type LeadQuestion = {
+  id: string;
+  label: string;
+  type: "text" | "textarea" | "choice" | "number";
+  required: boolean;
+  options?: string[];
+};
+
+/** Formulário de captação (página pública para o anúncio e/ou recebimento por webhook). */
+export const leadForms = pgTable(
+  "lead_forms",
+  {
+    id: id(),
+    orgId: orgRef(),
+    name: text("name").notNull(),
+    /** Endereço público: /f/{slug} */
+    slug: text("slug").notNull(),
+    headline: text("headline").notNull(),
+    description: text("description"),
+    questions: jsonb("questions").$type<LeadQuestion[]>().notNull().default([]),
+    askEmail: boolean("ask_email").notNull().default(true),
+    askInstagram: boolean("ask_instagram").notNull().default(true),
+    /** Pergunta o melhor dia e horário para a reunião. */
+    askPreferredTime: boolean("ask_preferred_time").notNull().default(true),
+    thankYou: text("thank_you"),
+    /** Social sellers que recebem os leads em rodízio (vazio = todos os sellers ativos). */
+    assigneeIds: jsonb("assignee_ids").$type<string[]>().notNull().default([]),
+    rotation: integer("rotation").notNull().default(0),
+    /** Etapa do Social Seller onde o contato entra (null = não cria cartão). */
+    stageId: uuid("stage_id"),
+    active: boolean("active").notNull().default(true),
+    /** Token do webhook: hash para busca e cópia criptografada para o administrador ver de novo. */
+    tokenHash: text("token_hash").notNull(),
+    tokenEnc: text("token_enc").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("lead_forms_slug_uq").on(t.slug), uniqueIndex("lead_forms_token_uq").on(t.tokenHash), index("lead_forms_org_idx").on(t.orgId)],
+);
+
+export const leads = pgTable(
+  "leads",
+  {
+    id: id(),
+    orgId: orgRef(),
+    formId: uuid("form_id").references(() => leadForms.id, { onDelete: "set null" }),
+    contactId: uuid("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    assignedTo: uuid("assigned_to").references(() => users.id, { onDelete: "set null" }),
+    status: leadStatusEnum("status").notNull().default("new"),
+    name: text("name").notNull(),
+    phone: text("phone"),
+    email: text("email"),
+    instagram: text("instagram"),
+    /** Respostas exatamente como enviadas (cópia, para não depender de mudanças no formulário). */
+    answers: jsonb("answers").$type<{ label: string; value: string }[]>().notNull().default([]),
+    preferredAt: ts("preferred_at"),
+    preferredText: text("preferred_text"),
+    /** Origem do anúncio: utm_source, utm_campaign, utm_content, fbclid… */
+    utm: jsonb("utm").$type<Record<string, string>>().notNull().default({}),
+    channel: text("channel").notNull().default("form"),
+    appointmentId: uuid("appointment_id"),
+    contactedAt: ts("contacted_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("leads_org_idx").on(t.orgId, t.createdAt), index("leads_assigned_idx").on(t.orgId, t.assignedTo, t.status)],
+);

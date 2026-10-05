@@ -68,7 +68,7 @@ export async function alertMeeting(ctx: Ctx, input: { contactId: string; title: 
     type: "meeting.scheduled",
     title: `Reunião agendada com ${c?.name ?? "contato"}`,
     body: `${formatDateTime(input.startsAt)} · ${input.title} · com ${owner?.name ?? ctx.userName}`,
-    link: "/comercial?aba=reunioes",
+    link: "/agendamentos",
   });
 }
 

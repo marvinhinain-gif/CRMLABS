@@ -78,5 +78,6 @@ export async function navCounts(ctx: Ctx) {
     .from(conversations)
     .innerJoin(contacts, eq(contacts.id, conversations.contactId))
     .where(and(conversationScope(ctx), sql`${conversations.unreadCount} > 0`));
-  return { unreadConversations: row?.n ?? 0 };
+  const { newLeadCount } = await import("./leads");
+  return { unreadConversations: row?.n ?? 0, newLeads: await newLeadCount(ctx) };
 }

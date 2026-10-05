@@ -106,3 +106,47 @@ export function initials(name?: string | null) {
 export function plural(n: number, one: string, many: string) {
   return `${n} ${n === 1 ? one : many}`;
 }
+
+/** Chave do dia no fuso da operação: "2026-10-10". */
+export function dayKey(v: string | Date) {
+  return parts(toDate(v)!).key;
+}
+
+/** Hora "HH:mm" e data "YYYY-MM-DD" no fuso da operação (para campos de formulário). */
+export function localInputs(v: string | Date) {
+  const p = parts(toDate(v)!);
+  return { date: p.key, time: `${p.h}:${p.min}` };
+}
+
+/** Data + hora digitadas (fuso da operação, UTC−3) → ISO. */
+export function fromLocalInputs(date: string, time: string) {
+  return new Date(`${date}T${time || "00:00"}:00-03:00`).toISOString();
+}
+
+/** "+5571999991111" → "(71) 99999-1111" */
+export function formatPhone(v: string | null | undefined) {
+  if (!v) return "";
+  const d = v.replace(/\D/g, "");
+  const br = d.startsWith("55") && (d.length === 12 || d.length === 13) ? d.slice(2) : null;
+  if (!br) return v;
+  const ddd = br.slice(0, 2);
+  const rest = br.slice(2);
+  return rest.length === 9 ? `(${ddd}) ${rest.slice(0, 5)}-${rest.slice(5)}` : `(${ddd}) ${rest.slice(0, 4)}-${rest.slice(4)}`;
+}
+
+/** Link do WhatsApp com mensagem pronta. */
+export function whatsappLink(phone: string | null | undefined, text?: string) {
+  if (!phone) return null;
+  let d = phone.replace(/\D/g, "");
+  if (d.length === 10 || d.length === 11) d = `55${d}`;
+  if (d.length < 10) return null;
+  return `https://wa.me/${d}${text ? `?text=${encodeURIComponent(text)}` : ""}`;
+}
+
+/** "sex., 10 de out. · 14:00" */
+export function longDayTime(v: string | Date | null | undefined) {
+  const d = toDate(v);
+  if (!d) return "";
+  const day = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "short", day: "2-digit", month: "short" }).format(d);
+  return `${day} · ${formatTime(d)}`;
+}

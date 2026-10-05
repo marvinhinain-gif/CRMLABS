@@ -138,7 +138,7 @@ export function DashboardView() {
           <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4 [&>*]:min-w-0">
             <Metric i={0} icon={<UserPlus />} label="Novos interessados" value={<CountUp value={data.metrics.novosInteressados} />} href={`/contatos?novos=${period}${ownerQs}`} />
             <Metric i={1} icon={<MessageCircle />} label="Conversas ativas" value={<CountUp value={data.metrics.conversasAtivas} delay={70} />} href="/conversas" />
-            <Metric i={2} icon={<Calendar />} label="Reuniões agendadas" value={<CountUp value={data.metrics.reunioesAgendadas} delay={140} />} href="/comercial?aba=reunioes" />
+            <Metric i={2} icon={<Calendar />} label="Reuniões agendadas" value={<CountUp value={data.metrics.reunioesAgendadas} delay={140} />} href="/agendamentos" />
             <Metric
               i={3}
               icon={<ChartNoAxesColumn />}

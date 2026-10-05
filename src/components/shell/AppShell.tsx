@@ -25,6 +25,8 @@ import {
   Building,
   Check,
   UserRound,
+  Megaphone,
+  CalendarDays,
 } from "lucide-react";
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { api, fetcher } from "@/lib/api";
@@ -36,10 +38,12 @@ import { Avatar, cx, IconButton, Menu, MenuContent, MenuItem, MenuLabel, MenuSep
 import { ContactPanel } from "@/components/contacts/ContactPanel";
 import { PushPrompt } from "./PushPrompt";
 
-const NAV = [
+const NAV: { href: string; label: string; icon: typeof House; badge?: "conversations" | "leads" }[] = [
   { href: "/dashboard", label: "Visão geral", icon: House },
   { href: "/social-seller", label: "Social Seller", icon: Users },
-  { href: "/conversas", label: "Conversas", icon: MessageCircle, badge: true },
+  { href: "/leads", label: "Leads", icon: Megaphone, badge: "leads" },
+  { href: "/agendamentos", label: "Agendamentos", icon: CalendarDays },
+  { href: "/conversas", label: "Conversas", icon: MessageCircle, badge: "conversations" },
   { href: "/contatos", label: "Contatos", icon: SquareUser },
   { href: "/comercial", label: "Comercial", icon: ChartNoAxesColumn },
   { href: "/tarefas", label: "Tarefas", icon: SquareCheck },
@@ -48,6 +52,8 @@ const NAV = [
 const TITLES: Record<string, string> = {
   "/dashboard": "Visão geral",
   "/social-seller": "Social Seller",
+  "/leads": "Leads",
+  "/agendamentos": "Agendamentos",
   "/conversas": "Conversas",
   "/contatos": "Contatos",
   "/comercial": "Comercial",
@@ -63,7 +69,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?:
       {NAV.map((item) => {
         const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
         const Icon = item.icon;
-        const count = item.badge ? me.counts.unreadConversations : 0;
+        const count = item.badge === "conversations" ? me.counts.unreadConversations : item.badge === "leads" ? (me.counts.newLeads ?? 0) : 0;
         return (
           <Link
             key={item.href}
@@ -72,7 +78,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?:
             aria-current={active ? "page" : undefined}
             title={collapsed ? item.label : undefined}
             className={cx(
-              "group relative flex items-center gap-3.5 rounded-[16px] h-[52px] text-[16px] transition-colors",
+              "group relative flex items-center gap-3.5 rounded-[16px] h-12 text-[16px] transition-colors",
               collapsed ? "justify-center px-0" : "px-4",
               active ? "bg-selected text-brand font-semibold" : "text-ink hover:bg-page",
             )}
@@ -82,7 +88,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?:
             {count > 0 && (
               <span
                 className={cx("flex items-center justify-center rounded-full bg-brand text-white text-[12px] font-semibold", collapsed ? "absolute right-1.5 top-1.5 size-5" : "min-w-7 h-7 px-1.5")}
-                aria-label={`${count} conversas não lidas`}
+                aria-label={item.badge === "leads" ? `${count} leads novos` : `${count} conversas não lidas`}
               >
                 {count > 99 ? "99+" : count}
               </span>

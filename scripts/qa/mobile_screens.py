@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 base, email, pw = sys.argv[1:4]
 out = sys.argv[4] if len(sys.argv) > 4 else "qa-screenshots/mobile"
 os.makedirs(out, exist_ok=True)
-PAGES = ["/dashboard", "/social-seller", "/social-seller?aba=direct", "/social-seller?aba=comentarios", "/conversas", "/contatos", "/comercial", "/tarefas", "/configuracoes?aba=perfil", "/configuracoes?aba=equipe", "/configuracoes?aba=organizacao"]
+PAGES = ["/leads", "/agendamentos", "/agendamentos?ver=lista", "/dashboard", "/social-seller", "/social-seller?aba=direct", "/social-seller?aba=comentarios", "/conversas", "/contatos", "/comercial", "/tarefas", "/configuracoes?aba=perfil", "/configuracoes?aba=equipe", "/configuracoes?aba=organizacao"]
 
 with sync_playwright() as p:
     b = p.chromium.launch()
