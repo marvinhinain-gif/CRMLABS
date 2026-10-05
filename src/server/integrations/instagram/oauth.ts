@@ -66,9 +66,21 @@ export async function handleCallback(params: { code?: string | null; state?: str
   if (!params.code) throw new AppError("invalid", "Retorno do Instagram sem código de autorização.");
 
   const api = getInstagramApi();
-  const short = await api.exchangeCode(params.code.replace(/#_$/, ""));
-  const long = await api.longLivedToken(short.accessToken);
-  const me = await api.getMe(long.accessToken);
+  // Cada etapa com o Instagram informa onde falhou (sem expor tokens).
+  const step = async <T>(label: string, fn: () => Promise<T>) => {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof ProviderError) {
+        logger.warn(`Conexão do Instagram falhou em "${label}": ${e.message} (código ${e.code ?? "?"}/${e.subcode ?? "?"})`);
+        throw new AppError("provider_error", `O Instagram recusou a etapa “${label}”: ${e.message}`);
+      }
+      throw e;
+    }
+  };
+  const short = await step("troca do código pelo token", () => api.exchangeCode(params.code!.replace(/#_$/, "")));
+  const long = await step("token de longa duração", () => api.longLivedToken(short.accessToken));
+  const me = await step("leitura do perfil (/me)", () => api.getMe(long.accessToken));
   const granted = short.permissions;
   const missing = SCOPES.filter((s) => !granted.includes(s));
 

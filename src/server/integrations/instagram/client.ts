@@ -85,11 +85,15 @@ export class GraphInstagramApi implements InstagramApi {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     const headers = new Headers(init.headers);
-    // Token no cabeçalho, nunca na URL (evita vazamento em logs).
-    if (init.token) headers.set("Authorization", `Bearer ${init.token}`);
+    // A API do Instagram exige o token no parâmetro access_token (endpoints /access_token e
+    // /refresh_access_token não aceitam o cabeçalho Authorization). A URL só existe nesta chamada
+    // servidor → Meta por HTTPS e nunca é registrada em log.
+    const target = new URL(url);
+    if (init.token) target.searchParams.set("access_token", init.token);
+    const { token: _token, ...fetchInit } = init;
     let res: Response;
     try {
-      res = await fetch(url, { ...init, headers, signal: controller.signal, cache: "no-store" });
+      res = await fetch(target, { ...fetchInit, headers, signal: controller.signal, cache: "no-store" });
     } catch (e) {
       if ((e as Error).name === "AbortError") throw new ProviderError("timeout", "Tempo de resposta do Instagram esgotado.");
       throw new ProviderError("network", "Falha de rede ao contatar o Instagram.");
