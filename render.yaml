@@ -27,6 +27,9 @@ services:
       # Processamento em segundo plano dentro do serviço web (o plano grátis não tem worker).
       - key: RUN_WORKER
         value: "true"
+      # Mantém o serviço acordado para as notificações das 9h e 21h e os lembretes de tarefas.
+      - key: KEEP_AWAKE
+        value: "true"
       # Sem e-mail: convites e links de nova senha aparecem para o administrador copiar.
       # Para e-mail de verdade: MAIL_TRANSPORT=resend + RESEND_API_KEY + MAIL_FROM.
       - key: MAIL_TRANSPORT

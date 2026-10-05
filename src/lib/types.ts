@@ -21,7 +21,7 @@ export type Me = {
 
 export type Member = { userId: string; name: string; email?: string; role: Role; status: "active" | "invited" | "disabled" | "pending"; lastLoginAt?: string | null; requestNote?: string | null; requestedAt?: string; avatarUrl?: string | null };
 
-export type Stage = { id: string; key: string; name: string; color: string; position: number; archivedAt: string | null };
+export type Stage = { id: string; key: string; name: string; color: string; position: number; archivedAt: string | null; stageType?: string };
 
 export type BoardCard = {
   entryId: string;

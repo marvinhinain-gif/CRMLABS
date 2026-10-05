@@ -224,6 +224,8 @@ export async function sendMessage(ctx: Ctx, conversationId: string, input: z.inf
       .set({ lastMessageAt: at, lastMessageDirection: "out", lastMessagePreview: pending.body!.slice(0, 140), unreadCount: 0 })
       .where(eq(conversations.id, conv.id));
     await db.update(contacts).set({ lastInteractionAt: at }).where(eq(contacts.id, contact.id));
+    const { recordContactMade } = await import("./salesEvents");
+    await recordContactMade(ctx, contact.id, db, at);
   } catch (e) {
     const pe = e instanceof ProviderError ? e : new ProviderError("server", "Falha inesperada no envio.");
     await recordProviderError(elig.account, pe);

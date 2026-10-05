@@ -98,7 +98,10 @@ describe("permissões e isolamento", () => {
     await createTask(ctx.manager, { title: "Do seller 2", ownerId: users.seller2.id, dueAt: new Date() });
     await createTask(ctx.seller, { title: "Minha", dueAt: new Date() });
     expect((await listTasks(ctx.seller, { view: "today", limit: 50 })).map((t) => t.title)).toEqual(["Minha"]);
-    await expect(createTask(ctx.seller, { title: "Para outro", ownerId: users.seller2.id })).rejects.toMatchObject({ code: "forbidden" });
+    // Qualquer pessoa da equipe atribui tarefas (ex.: social seller → closer) e acompanha o que atribuiu.
+    await createTask(ctx.seller, { title: "Para outro", ownerId: users.seller2.id });
+    expect((await listTasks(ctx.seller2, { view: "upcoming", limit: 50 })).map((t) => t.title)).toEqual(["Para outro"]);
+    expect((await listTasks(ctx.seller, { view: "upcoming", limit: 50 })).map((t) => t.title)).toEqual(["Para outro"]);
     await expect(getDashboard(ctx.seller, { period: "month", ownerId: users.seller2.id })).rejects.toMatchObject({ code: "forbidden" });
   });
 });

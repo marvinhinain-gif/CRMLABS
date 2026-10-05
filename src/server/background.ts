@@ -4,6 +4,7 @@ import { applyRetention } from "./integrations/instagram/retention";
 import { logger } from "./logger";
 import { onServerEvent } from "./realtime";
 import { dispatchPendingPush } from "./services/push";
+import { scheduledNotificationsTick } from "./services/nudges";
 
 const HOUR = 3600_000;
 const g = globalThis as unknown as { __crmlabsLoop?: boolean };
@@ -20,6 +21,8 @@ export function startBackgroundLoop() {
     running = true;
     try {
       await processPendingEvents(100);
+      // Bom dia / boa noite e lembretes de tarefas (antes do push, para já saírem nesta rodada).
+      await scheduledNotificationsTick().catch((e) => logger.warn("Falha nas notificações programadas", e));
       await dispatchPendingPush(100);
       if (Date.now() - lastHourly > HOUR) {
         lastHourly = Date.now();
@@ -51,5 +54,18 @@ export function startBackgroundLoop() {
   void onServerEvent((e) => {
     if (e.topic === "notifications") pushSoon();
   }).catch((e) => logger.warn("Sem escuta de eventos para notificações no celular", e));
+  keepAwake();
   logger.info("Processamento em segundo plano ativo no servidor web");
+}
+
+/**
+ * Plano grátis do Render: o serviço dorme após 15 min sem acesso e as notificações das 9h/21h não sairiam.
+ * Com KEEP_AWAKE=true, o próprio servidor se visita a cada 10 min pelo endereço público.
+ */
+function keepAwake() {
+  const base = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
+  if (process.env.KEEP_AWAKE !== "true" || !base) return;
+  const ping = () => fetch(`${base.replace(/\/$/, "")}/api/health`, { cache: "no-store" }).catch(() => {});
+  setInterval(ping, 10 * 60_000).unref();
+  logger.info("Mantendo o serviço acordado para as notificações programadas");
 }

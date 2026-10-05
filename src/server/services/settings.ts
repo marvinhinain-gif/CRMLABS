@@ -21,6 +21,7 @@ export async function getOrgSettings(ctx: Ctx) {
     autoCreateFromComments: o.autoCreateFromComments,
     retentionDaysAfterDisconnect: o.retentionDaysAfterDisconnect,
     allowSignup: o.allowSignup,
+    dailyNudges: o.dailyNudges,
   };
 }
 
@@ -32,6 +33,7 @@ export const orgSettingsSchema = z.object({
   autoCreateFromComments: z.boolean().optional(),
   retentionDaysAfterDisconnect: z.number().int().min(30).max(3650).nullable().optional(),
   allowSignup: z.boolean().optional(),
+  dailyNudges: z.boolean().optional(),
 });
 
 export async function updateOrgSettings(ctx: Ctx, input: z.infer<typeof orgSettingsSchema>) {
@@ -49,13 +51,13 @@ export async function updateOrgSettings(ctx: Ctx, input: z.infer<typeof orgSetti
   return getOrgSettings(ctx);
 }
 
-export async function listNotifications(ctx: Ctx) {
+export async function listNotifications(ctx: Ctx, f: { unread?: boolean; limit?: number } = {}) {
   const rows = await db
-    .select()
+    .select({ id: notifications.id, type: notifications.type, title: notifications.title, body: notifications.body, link: notifications.link, readAt: notifications.readAt, createdAt: notifications.createdAt })
     .from(notifications)
-    .where(and(eq(notifications.userId, ctx.userId), eq(notifications.orgId, ctx.orgId)))
+    .where(and(eq(notifications.userId, ctx.userId), eq(notifications.orgId, ctx.orgId), f.unread ? isNull(notifications.readAt) : undefined))
     .orderBy(desc(notifications.createdAt))
-    .limit(30);
+    .limit(f.limit ?? 40);
   const [{ unread }] = await db
     .select({ unread: sql<number>`count(*)::int` })
     .from(notifications)

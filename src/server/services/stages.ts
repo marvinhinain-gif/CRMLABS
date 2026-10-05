@@ -1,19 +1,37 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { opportunities, pipelineStages, relationshipEntries, stageHistory } from "../db/schema";
+import { opportunities, pipelines, pipelineStages, relationshipEntries, stageHistory, STAGE_TYPES } from "../db/schema";
 import type { Ctx } from "../context";
-import { assertCan } from "../permissions";
-import { AppError, invalid, notFound } from "../errors";
+import { assertCan, can } from "../permissions";
+import { AppError, forbidden, invalid, notFound } from "../errors";
 import { publish } from "../realtime";
-import { audit, getPipeline, STAGE_COLORS } from "./common";
+import { audit, getPipeline, salesPipelineFor, STAGE_COLORS } from "./common";
+import { assertMember } from "./team";
 import { randomBytes } from "node:crypto";
 
 export const pipelineKindSchema = z.enum(["relationship", "sales"]);
 const colorSchema = z.enum(STAGE_COLORS);
+export const stageTypeSchema = z.enum(STAGE_TYPES);
 
-export async function listStages(ctx: Ctx, kind: "relationship" | "sales", opts: { includeArchived?: boolean } = {}) {
-  const p = await getPipeline(ctx.orgId, kind);
+/** Tipos que o funil comercial precisa ter para o fluxo automático (entrada, venda ganha, venda perdida). */
+const REQUIRED_TYPES = ["entry", "won", "lost"] as const;
+
+/** Funil comercial a usar: closers sempre o próprio; gestores escolhem o de qualquer pessoa (null = padrão). */
+export async function resolveSalesPipeline(ctx: Ctx, ownerId?: string | null) {
+  if (ctx.role === "closer") return salesPipelineFor(ctx.orgId, ownerId && ownerId !== ctx.userId ? forbiddenOwner() : ctx.userId);
+  if (ownerId) {
+    if (ownerId !== ctx.userId && !can(ctx, "data.all")) throw forbidden();
+    await assertMember(ctx.orgId, ownerId);
+  }
+  return salesPipelineFor(ctx.orgId, ownerId ?? null);
+}
+function forbiddenOwner(): never {
+  throw forbidden("Você só acessa o seu próprio funil comercial.");
+}
+
+export async function listStages(ctx: Ctx, kind: "relationship" | "sales", opts: { includeArchived?: boolean; ownerId?: string | null; pipelineId?: string } = {}) {
+  const pipelineId = opts.pipelineId ?? (kind === "sales" ? (await resolveSalesPipeline(ctx, opts.ownerId)).id : (await getPipeline(ctx.orgId, kind)).id);
   return db
     .select({
       id: pipelineStages.id,
@@ -21,24 +39,29 @@ export async function listStages(ctx: Ctx, kind: "relationship" | "sales", opts:
       name: pipelineStages.name,
       color: pipelineStages.color,
       position: pipelineStages.position,
+      stageType: pipelineStages.stageType,
       archivedAt: pipelineStages.archivedAt,
     })
     .from(pipelineStages)
-    .where(
-      and(
-        eq(pipelineStages.pipelineId, p.id),
-        opts.includeArchived ? undefined : isNull(pipelineStages.archivedAt),
-      ),
-    )
+    .where(and(eq(pipelineStages.pipelineId, pipelineId), opts.includeArchived ? undefined : isNull(pipelineStages.archivedAt)))
     .orderBy(asc(pipelineStages.position));
+}
+
+/** Quem edita as etapas: gestores (qualquer funil) e o closer dono do funil pessoal. */
+async function assertCanEditPipeline(ctx: Ctx, pipelineId: string) {
+  const [p] = await db.select().from(pipelines).where(and(eq(pipelines.id, pipelineId), eq(pipelines.orgId, ctx.orgId)));
+  if (!p) throw notFound("Funil não encontrado.");
+  if (p.ownerId && p.ownerId === ctx.userId) return p;
+  assertCan(ctx, "pipeline.edit", p.ownerId ? "Somente o closer dono do funil e gestores alteram estas etapas." : undefined);
+  return p;
 }
 
 export async function getStageInOrg(orgId: string, stageId: string, kind?: "relationship" | "sales") {
   const [s] = await db.select().from(pipelineStages).where(and(eq(pipelineStages.id, stageId), eq(pipelineStages.orgId, orgId)));
   if (!s) throw notFound("Etapa não encontrada.");
   if (kind) {
-    const p = await getPipeline(orgId, kind);
-    if (s.pipelineId !== p.id) throw invalid("Etapa não pertence a este funil.");
+    const [p] = await db.select({ kind: pipelines.kind }).from(pipelines).where(eq(pipelines.id, s.pipelineId));
+    if (p?.kind !== kind) throw invalid("Etapa não pertence a este funil.");
   }
   return s;
 }
@@ -58,41 +81,63 @@ export const createStageSchema = z.object({
   kind: pipelineKindSchema,
   name: z.string().trim().min(1, "Informe o nome da etapa.").max(60),
   color: colorSchema.default("green"),
+  stageType: stageTypeSchema.optional(),
+  /** Funil comercial pessoal (closer). */
+  ownerId: z.string().uuid().nullish(),
 });
 
 export async function createStage(ctx: Ctx, input: z.infer<typeof createStageSchema>) {
-  assertCan(ctx, "pipeline.edit");
-  const p = await getPipeline(ctx.orgId, input.kind);
+  const p = input.kind === "sales" ? await resolveSalesPipeline(ctx, input.ownerId) : await getPipeline(ctx.orgId, input.kind);
+  await assertCanEditPipeline(ctx, p.id);
   const [max] = await db
     .select({ m: sql<number>`coalesce(max(${pipelineStages.position}), -1)::int` })
     .from(pipelineStages)
     .where(eq(pipelineStages.pipelineId, p.id));
   const [stage] = await db
     .insert(pipelineStages)
-    .values({ orgId: ctx.orgId, pipelineId: p.id, key: slugify(input.name), name: input.name, color: input.color, position: (max?.m ?? -1) + 1 })
+    .values({ orgId: ctx.orgId, pipelineId: p.id, key: slugify(input.name), name: input.name, color: input.color, position: (max?.m ?? -1) + 1, stageType: input.kind === "sales" ? (input.stageType ?? "custom") : "custom" })
     .returning();
   await audit(db, ctx, "stage.created", "pipeline_stage", stage.id, { name: stage.name });
-  await publish({ orgId: ctx.orgId, topic: "board" });
+  await publish({ orgId: ctx.orgId, topic: input.kind === "sales" ? "opportunities" : "board" });
   return stage;
 }
 
 export const updateStageSchema = z.object({
   name: z.string().trim().min(1, "Informe o nome da etapa.").max(60).optional(),
   color: colorSchema.optional(),
+  stageType: stageTypeSchema.optional(),
 });
 
+async function assertKeepsRequiredTypes(pipelineId: string, changingId: string, nextType: string | null) {
+  const [p] = await db.select({ kind: pipelines.kind }).from(pipelines).where(eq(pipelines.id, pipelineId));
+  if (p?.kind !== "sales") return;
+  const rows = await db
+    .select({ id: pipelineStages.id, stageType: pipelineStages.stageType })
+    .from(pipelineStages)
+    .where(and(eq(pipelineStages.pipelineId, pipelineId), isNull(pipelineStages.archivedAt)));
+  const label = { entry: "Novo lead (entrada)", won: "Venda ganha", lost: "Venda perdida" } as const;
+  for (const t of REQUIRED_TYPES) {
+    const remaining = rows.filter((r) => (r.id === changingId ? nextType : r.stageType) === t).length;
+    const had = rows.some((r) => r.stageType === t);
+    if (had && remaining === 0) throw invalid(`O funil precisa de uma etapa do tipo “${label[t]}”. Troque o tipo de outra etapa antes.`);
+  }
+}
+
 export async function updateStage(ctx: Ctx, stageId: string, input: z.infer<typeof updateStageSchema>) {
-  assertCan(ctx, "pipeline.edit");
   const s = await getStageInOrg(ctx.orgId, stageId);
+  const p = await assertCanEditPipeline(ctx, s.pipelineId);
+  if (input.stageType && p.kind !== "sales") delete input.stageType;
+  if (input.stageType && input.stageType !== s.stageType) await assertKeepsRequiredTypes(s.pipelineId, s.id, input.stageType);
   const [updated] = await db.update(pipelineStages).set(input).where(eq(pipelineStages.id, s.id)).returning();
-  await audit(db, ctx, "stage.updated", "pipeline_stage", s.id, { before: { name: s.name, color: s.color }, after: input });
-  await publish({ orgId: ctx.orgId, topic: "board" });
+  await audit(db, ctx, "stage.updated", "pipeline_stage", s.id, { before: { name: s.name, color: s.color, stageType: s.stageType }, after: input });
+  await publish({ orgId: ctx.orgId, topic: p.kind === "sales" ? "opportunities" : "board" });
   return updated;
 }
 
-export async function reorderStages(ctx: Ctx, kind: "relationship" | "sales", orderedIds: string[]) {
-  assertCan(ctx, "pipeline.edit");
-  const current = await listStages(ctx, kind);
+export async function reorderStages(ctx: Ctx, kind: "relationship" | "sales", orderedIds: string[], ownerId?: string | null) {
+  const p = kind === "sales" ? await resolveSalesPipeline(ctx, ownerId) : await getPipeline(ctx.orgId, kind);
+  await assertCanEditPipeline(ctx, p.id);
+  const current = await listStages(ctx, kind, { pipelineId: p.id });
   const ids = new Set(current.map((s) => s.id));
   if (orderedIds.length !== current.length || orderedIds.some((id) => !ids.has(id))) {
     throw new AppError("conflict", "As etapas mudaram enquanto você editava. Recarregue e tente novamente.");
@@ -102,15 +147,16 @@ export async function reorderStages(ctx: Ctx, kind: "relationship" | "sales", or
       await tx.update(pipelineStages).set({ position: i }).where(eq(pipelineStages.id, id));
     }
   });
-  await audit(db, ctx, "stage.reordered", "pipeline", null, { kind, orderedIds });
-  await publish({ orgId: ctx.orgId, topic: "board" });
+  await audit(db, ctx, "stage.reordered", "pipeline", p.id, { kind, orderedIds });
+  await publish({ orgId: ctx.orgId, topic: kind === "sales" ? "opportunities" : "board" });
 }
 
 /** Etapa ocupada exige destino: os cartões são movidos (com histórico) e nunca apagados. */
 export async function archiveStage(ctx: Ctx, stageId: string, destinationStageId?: string | null) {
-  assertCan(ctx, "pipeline.edit");
   const s = await getStageInOrg(ctx.orgId, stageId);
+  await assertCanEditPipeline(ctx, s.pipelineId);
   if (s.archivedAt) throw invalid("Esta etapa já está arquivada.");
+  await assertKeepsRequiredTypes(s.pipelineId, s.id, null);
   const siblings = await db
     .select()
     .from(pipelineStages)

@@ -106,7 +106,7 @@ function ChangePassword() {
   );
 }
 
-type OrgSettings = { name: string; timezone: string; isDemo: boolean; sharedInbox: boolean; autoEntryStageId: string | null; autoCreateFromMessages: boolean; autoCreateFromComments: boolean; retentionDaysAfterDisconnect: number | null; allowSignup: boolean };
+type OrgSettings = { name: string; timezone: string; isDemo: boolean; sharedInbox: boolean; autoEntryStageId: string | null; autoCreateFromMessages: boolean; autoCreateFromComments: boolean; retentionDaysAfterDisconnect: number | null; allowSignup: boolean; dailyNudges: boolean };
 
 function OrgTab() {
   const me = useMe();
@@ -151,6 +151,15 @@ function OrgTab() {
           />
         </Section>
       )}
+      <Section title="Rotina da equipe">
+        <Switch
+          checked={data.dailyNudges}
+          onChange={(v) => save({ dailyNudges: v })}
+          disabled={!admin}
+          label="Mensagens de bom dia (9h) e boa noite (21h)"
+          description="Para social sellers e closers, no fuso da organização. Mensagens curtas e diferentes a cada dia; cada pessoa pode desligar no próprio perfil."
+        />
+      </Section>
       <Section title="Atendimento e entrada de contatos">
         <div className="divide-y divide-line">
           <Switch checked={data.sharedInbox} onChange={(v) => save({ sharedInbox: v })} disabled={!me.permissions.pipelineEdit} label="Caixa compartilhada" description="Sellers também veem conversas e comentários sem responsável. Por padrão, cada seller vê apenas os próprios registros." />
@@ -471,7 +480,7 @@ function FunnelsTab() {
       <Section title="Funil de relacionamento (Social Seller)" description="Etapas do Kanban. Mudar a etapa de um cartão é diferente de editar a estrutura do funil.">
         <StagesEditor kind="relationship" />
       </Section>
-      <Section title="Funil comercial" description="Etapas das oportunidades acompanhadas pelos closers.">
+      <Section title="Funil comercial padrão" description="Usado por oportunidades ainda sem closer. Cada closer organiza o próprio Kanban em Comercial → Etapas (gestores também podem editar por lá).">
         <StagesEditor kind="sales" />
       </Section>
     </div>

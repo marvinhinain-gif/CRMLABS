@@ -89,7 +89,8 @@ export function opportunityScope(ctx: Ctx): SQL {
 export function taskScope(ctx: Ctx): SQL {
   const base = eq(tasks.orgId, ctx.orgId);
   if (can(ctx, "data.all")) return base;
-  return and(base, eq(tasks.ownerId, ctx.userId))!;
+  // Responsável ou quem atribuiu (para acompanhar a tarefa que passou a outra pessoa).
+  return and(base, or(eq(tasks.ownerId, ctx.userId), eq(tasks.createdBy, ctx.userId)))!;
 }
 
 export function appointmentScope(ctx: Ctx): SQL {

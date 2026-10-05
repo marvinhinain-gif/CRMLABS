@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { ForwardDialog } from "@/components/commercial/ForwardDialog";
+import { LeadTasks } from "@/components/tasks/TaskParts";
 import { useEffect, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
@@ -208,7 +210,7 @@ function PanelBody({ id, onClose }: { id: string; onClose: () => void }) {
           items={[
             { value: "dados", label: "Dados", icon: <UserRound /> },
             { value: "origem", label: "Origem", icon: <Footprints /> },
-            { value: "tarefas", label: "Tarefas", icon: <SquareCheck />, count: data.tasks.filter((t) => t.status === "open").length },
+            { value: "tarefas", label: "Tarefas", icon: <SquareCheck />, count: data.tasks.filter((t) => t.status !== "done").length },
             { value: "notas", label: "Notas", icon: <NotebookPen /> },
             { value: "historico", label: "Histórico", icon: <History /> },
           ]}
@@ -381,7 +383,7 @@ function DataTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {
         <div className="flex items-center justify-between">
           <p className="text-[15px] font-semibold">Oportunidades</p>
           <Button size="sm" variant="soft" icon={<Send className="size-4" />} onClick={() => setForwardOpen(true)}>
-            Encaminhar ao closer
+            Encaminhar para Closer
           </Button>
         </div>
         {data.opportunities.length === 0 ? (
@@ -389,12 +391,12 @@ function DataTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {
         ) : (
           data.opportunities.map((o) => (
             <div key={o.id} className="flex items-center justify-between rounded-[16px] border border-line px-4 py-3">
-              <div>
-                <p className="text-[14px] font-medium">{o.title}</p>
+              <Link href={`/comercial?op=${o.id}`} className="min-w-0 hover:underline">
+                <p className="truncate text-[14px] font-medium">{o.title}</p>
                 <p className="text-[12.5px] text-muted">
-                  {o.stageName} · {o.closerName ?? "Sem closer"}
+                  {o.stageName} · {o.closerName ? `Closer: ${o.closerName}` : "Sem closer"}
                 </p>
-              </div>
+              </Link>
               <div className="text-right">
                 <p className="text-[14px] font-semibold">{formatBRL(o.valueCents)}</p>
                 <Badge tone={o.status === "won" ? "success" : o.status === "lost" ? "danger" : "info"}>{o.status === "won" ? "Ganha" : o.status === "lost" ? "Perdida" : "Aberta"}</Badge>
@@ -427,149 +429,9 @@ function DataTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {
   );
 }
 
-function ForwardDialog({ open, onOpenChange, contactId, contactName, onDone }: { open: boolean; onOpenChange: (v: boolean) => void; contactId: string; contactName: string; onDone: () => void }) {
-  const team = useTeam();
-  const closers = team.filter((m) => m.status === "active" && ["closer", "manager", "admin"].includes(m.role));
-  const [closerId, setCloserId] = useState("");
-  const [title, setTitle] = useState("");
-  const [value, setValue] = useState("");
-  const [nextStep, setNextStep] = useState("");
-  const [dueAt, setDueAt] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [fields, setFields] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (open) {
-      setTitle(`Oportunidade — ${contactName}`);
-      setCloserId(closers.find((m) => m.role === "closer")?.userId ?? "");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  const submit = async () => {
-    const cents = parseBRLToCents(value);
-    if (cents === null) return setFields({ valueCents: "Valor inválido." });
-    setLoading(true);
-    try {
-      await api.post(`/api/contacts/${contactId}/forward`, { closerId, title, valueCents: cents, nextStep, dueAt: fromLocalInput(dueAt) });
-      toast.success("Oportunidade encaminhada ao closer.");
-      onOpenChange(false);
-      onDone();
-    } catch (e) {
-      setFields((e as ApiError).fields);
-      toast.error((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Encaminhar ao closer"
-      description="Cria a oportunidade comercial no mesmo contato, mantendo vínculo e histórico."
-      footer={
-        <>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
-            Cancelar
-          </Button>
-          <Button onClick={submit} loading={loading} disabled={!closerId || !nextStep.trim()}>
-            Encaminhar
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-4">
-        <Field label="Closer responsável" htmlFor="fw-closer" error={fields.closerId}>
-          <Select id="fw-closer" value={closerId} onChange={(e) => setCloserId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {closers.map((m) => (
-              <option key={m.userId} value={m.userId}>
-                {m.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Título da oportunidade" htmlFor="fw-title" error={fields.title}>
-          <Input id="fw-title" value={title} onChange={(e) => setTitle(e.target.value)} />
-        </Field>
-        <Field label="Valor estimado (R$)" htmlFor="fw-value" error={fields.valueCents} hint="Opcional. Valor negociado, não pagamento.">
-          <Input id="fw-value" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder="0,00" />
-        </Field>
-        <Field label="Próximo passo" htmlFor="fw-next" error={fields.nextStep}>
-          <Input id="fw-next" value={nextStep} onChange={(e) => setNextStep(e.target.value)} placeholder="Ex.: Agendar reunião de diagnóstico" />
-        </Field>
-        <Field label="Prazo do próximo passo" htmlFor="fw-due">
-          <Input id="fw-due" type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
-        </Field>
-      </div>
-    </Dialog>
-  );
-}
-
-function TasksTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {
-  const [title, setTitle] = useState("");
-  const [due, setDue] = useState("");
-  const [loading, setLoading] = useState(false);
-  const add = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-    setLoading(true);
-    try {
-      await api.post("/api/tasks", { title, dueAt: fromLocalInput(due), contactId: data.contact.id });
-      setTitle("");
-      setDue("");
-      onChanged();
-    } catch (err) {
-      toast.error((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  };
-  const toggle = async (id: string, status: string) => {
-    try {
-      await api.patch(`/api/tasks/${id}`, { status: status === "done" ? "open" : "done" });
-      onChanged();
-    } catch (err) {
-      toast.error((err as Error).message);
-    }
-  };
-  return (
-    <div className="flex flex-col gap-4">
-      <form onSubmit={add} className="flex flex-col gap-3 rounded-[18px] border border-line p-4">
-        <Field label="Nova tarefa" htmlFor="tk-title">
-          <Input id="tk-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex.: Enviar materiais" />
-        </Field>
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-          <Field label="Vencimento" htmlFor="tk-due" className="flex-1">
-            <Input id="tk-due" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
-          </Field>
-          <Button type="submit" icon={<Plus className="size-4" />} loading={loading}>
-            Adicionar
-          </Button>
-        </div>
-      </form>
-      {data.tasks.length === 0 ? (
-        <p className="text-center text-[13.5px] text-muted py-6">Nenhuma tarefa para este contato.</p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {data.tasks.map((t) => (
-            <li key={t.id} className="flex items-center gap-3 rounded-[16px] border border-line px-4 py-3">
-              <input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t.id, t.status)} aria-label={t.status === "done" ? `Reabrir ${t.title}` : `Concluir ${t.title}`} className="size-5 accent-[#008a65]" />
-              <div className="flex-1 min-w-0">
-                <p className={cx("text-[14px] font-medium", t.status === "done" && "line-through text-muted")}>{t.title}</p>
-                <p className="text-[12.5px] text-muted">{t.ownerName ?? "—"}</p>
-              </div>
-              {t.dueAt && (
-                <span className={cx("inline-flex items-center gap-1 text-[12.5px] font-medium", t.status !== "done" && dueTone(t.dueAt) === "overdue" ? "text-danger" : "text-muted")}>
-                  <CalendarClock className="size-3.5" aria-hidden />
-                  {dayLabel(t.dueAt)}
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+function TasksTab({ data }: { data: Detail; onChanged: () => void }) {
+  const open = data.opportunities.find((o) => o.status === "open");
+  return <LeadTasks contact={{ id: data.contact.id, name: data.contact.name }} opportunityId={open?.id ?? null} />;
 }
 
 function NotesTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {

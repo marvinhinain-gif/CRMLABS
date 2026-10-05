@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Ban, CalendarCheck, CalendarClock, Check, ExternalLink, Mail, MessageCircle, Phone, PhoneOff, SquareUser, X } from "lucide-react";
+import { Ban, CalendarCheck, CalendarClock, Check, ExternalLink, Mail, MessageCircle, Phone, PhoneOff, Send, SquareUser, X } from "lucide-react";
+import { ForwardDialog } from "@/components/commercial/ForwardDialog";
+import { LeadTasks } from "@/components/tasks/TaskParts";
 import { api, fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { formatDateTime, formatPhone, longDayTime, relativeTime, whatsappLink } from "@/lib/format";
@@ -81,6 +83,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
   const { data: l, error, mutate } = useSWR<LeadDetail>(`/api/leads/${id}`, fetcher);
   const [busy, setBusy] = useState<string | null>(null);
   const [scheduling, setScheduling] = useState(false);
+  const [forwarding, setForwarding] = useState(false);
   if (error) return <ErrorState error={error} onRetry={() => mutate()} className="p-6" />;
   if (!l) return <LoadingState rows={6} className="p-6" />;
 
@@ -248,6 +251,9 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
         <div className="mt-6">
           <JourneySection contactId={l.contactId} initial={l.journey} />
         </div>
+        <div className="mt-6">
+          <LeadTasks contact={{ id: l.contactId, name: l.name }} />
+        </div>
         <Link href={`?contato=${l.contactId}`} className="mt-4 inline-flex items-center gap-1.5 text-[14px] font-semibold text-brand hover:underline">
           <SquareUser className="size-4" aria-hidden /> Abrir ficha completa do contato
         </Link>
@@ -276,12 +282,18 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
             Reabrir lead
           </Button>
         ) : (
-          <Link href={l.appointment ? `/agendamentos?reuniao=${l.appointment.id}` : "/agendamentos"} className="flex h-12 items-center justify-center gap-2 rounded-[14px] border border-[#c9ebdc] bg-selected text-[15px] font-semibold text-brand">
-            <CalendarCheck className="size-5" aria-hidden /> Ver em Agendamentos
-          </Link>
+          <div className="flex flex-col gap-2">
+            <Button size="lg" className="w-full" icon={<Send className="size-5" />} onClick={() => setForwarding(true)}>
+              Encaminhar para Closer
+            </Button>
+            <Link href={l.appointment ? `/agendamentos?reuniao=${l.appointment.id}` : "/agendamentos"} className="flex h-11 items-center justify-center gap-2 rounded-[14px] border border-[#c9ebdc] bg-selected text-[14px] font-semibold text-brand">
+              <CalendarCheck className="size-4" aria-hidden /> Ver em Agendamentos
+            </Link>
+          </div>
         )}
       </footer>
 
+      <ForwardDialog open={forwarding} onOpenChange={setForwarding} contactId={l.contactId} contactName={l.name} onDone={() => refresh()} />
       <ScheduleDialog
         open={scheduling}
         onOpenChange={setScheduling}

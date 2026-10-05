@@ -28,9 +28,10 @@ import {
   Megaphone,
   CalendarDays,
   Plug,
+  CheckCheck,
 } from "lucide-react";
 import { AnimatedLogo } from "@/components/brand/AnimatedLogo";
-import { api, fetcher } from "@/lib/api";
+import { api, fetcher, qs } from "@/lib/api";
 import { MeProvider, useMe } from "@/lib/me";
 import { RealtimeBridge } from "@/lib/realtime";
 import { ROLE_LABEL, type Me } from "@/lib/types";
@@ -342,43 +343,104 @@ function GlobalSearch() {
   );
 }
 
-type Notifs = { rows: { id: string; title: string; body: string | null; link: string | null; readAt: string | null; createdAt: string }[]; unread: number };
+type Notifs = { unread: number };
 
+type Notif = { id: string; type: string; title: string; body: string | null; link: string | null; readAt: string | null; createdAt: string };
+
+function notifIcon(type: string) {
+  if (type.startsWith("daily.")) return type === "daily.morning" ? "☀️" : "🌙";
+  if (type.startsWith("task.")) return "✅";
+  if (type.startsWith("sale")) return "🏆";
+  if (type.startsWith("opportunity") || type.startsWith("lead")) return "🔥";
+  if (type.startsWith("meeting")) return "📅";
+  if (type.startsWith("message")) return "💬";
+  return "🔔";
+}
+
+const whenFmt = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Bahia", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+/** Central de notificações: não lidas / todas, data e hora, marcar como lida (uma ou todas). */
 function Notifications() {
-  const { data, mutate } = useSWR<Notifs>("/api/notifications", fetcher, { refreshInterval: 120_000 });
+  const [tab, setTab] = useState<"unread" | "all">("unread");
+  const [open, setOpen] = useState(false);
+  const router = useRouter();
+  const { data, mutate } = useSWR<Notifs & { rows: Notif[] }>(`/api/notifications${qs({ unread: tab === "unread" ? "1" : "", limit: 50 })}`, fetcher, { refreshInterval: 120_000, keepPreviousData: true });
   const unread = data?.unread ?? 0;
   const markAll = async () => {
+    mutate(data && { ...data, unread: 0, rows: tab === "unread" ? [] : data.rows.map((n) => ({ ...n, readAt: n.readAt ?? new Date().toISOString() })) }, { revalidate: false });
     await api.post("/api/notifications", {});
     mutate();
   };
+  const markOne = async (n: Notif) => {
+    if (n.readAt) return;
+    mutate(data && { ...data, unread: Math.max(0, data.unread - 1), rows: tab === "unread" ? data.rows.filter((r) => r.id !== n.id) : data.rows.map((r) => (r.id === n.id ? { ...r, readAt: new Date().toISOString() } : r)) }, { revalidate: false });
+    await api.post("/api/notifications", { ids: [n.id] });
+    mutate();
+  };
+  const go = (n: Notif) => {
+    void markOne(n);
+    setOpen(false);
+    if (n.link) router.push(n.link);
+  };
   return (
-    <Popover.Root>
+    <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
         <button className="relative inline-flex size-11 items-center justify-center rounded-[12px] text-ink hover:bg-page" aria-label={unread ? `Notificações: ${unread} não lidas` : "Notificações"}>
-          <Bell className="size-[22px]" strokeWidth={1.8} aria-hidden />
-          {unread > 0 && <span className="absolute right-2.5 top-2 size-2.5 rounded-full bg-danger ring-2 ring-white" aria-hidden />}
+          <Bell className={cx("size-[22px]", unread > 0 && "anim-ring")} strokeWidth={1.8} aria-hidden />
+          {unread > 0 && (
+            <span className="absolute right-1 top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10.5px] font-bold text-white ring-2 ring-white" aria-hidden>
+              {unread > 9 ? "9+" : unread}
+            </span>
+          )}
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" sideOffset={8} className="z-50 w-[360px] max-w-[92vw] rounded-[18px] border border-line bg-white shadow-[var(--shadow-pop)]">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-line">
-            <p className="font-semibold">Notificações</p>
+        <Popover.Content align="end" sideOffset={8} collisionPadding={8} className="z-50 flex max-h-[min(560px,80dvh)] w-[380px] max-w-[94vw] flex-col rounded-[20px] border border-line bg-white shadow-[var(--shadow-pop)]">
+          <div className="flex items-center justify-between gap-2 px-4 pt-3.5">
+            <p className="text-[16px] font-semibold">🔔 Notificações</p>
             {unread > 0 && (
-              <button onClick={markAll} className="text-[13px] font-medium text-brand hover:underline">
-                Marcar todas como lidas
+              <button onClick={markAll} className="inline-flex items-center gap-1 text-[13px] font-medium text-brand hover:underline">
+                <CheckCheck className="size-4" aria-hidden /> Marcar todas como lidas
               </button>
             )}
           </div>
-          <div className="max-h-[420px] overflow-y-auto scroll-thin p-2">
-            {!data?.rows.length ? (
-              <p className="p-4 text-center text-[13.5px] text-muted">Nenhuma notificação por enquanto.</p>
+          <div className="mx-4 mt-2.5 inline-flex rounded-[12px] bg-page p-1 text-[13px]" role="tablist">
+            {(
+              [
+                ["unread", `Não lidas${unread ? ` (${unread})` : ""}`],
+                ["all", "Todas"],
+              ] as const
+            ).map(([v, l]) => (
+              <button key={v} role="tab" aria-selected={tab === v} onClick={() => setTab(v)} className={cx("flex-1 rounded-[9px] px-3 py-1.5 font-medium", tab === v ? "bg-white text-ink shadow-sm" : "text-muted")}>
+                {l}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 min-h-0 flex-1 overflow-y-auto scroll-thin px-2 pb-2">
+            {!data ? (
+              <div className="skeleton m-2 h-20" />
+            ) : !data.rows.length ? (
+              <p className="px-4 py-8 text-center text-[13.5px] text-muted">{tab === "unread" ? "Tudo lido por aqui. ✨" : "Nenhuma notificação por enquanto."}</p>
             ) : (
               data.rows.map((n) => (
-                <Link key={n.id} href={n.link ?? "#"} className={cx("block rounded-[12px] px-3 py-2.5 hover:bg-page", !n.readAt && "bg-[#f3faf7]")}>
-                  <p className="text-[14px] font-medium">{n.title}</p>
-                  {n.body && <p className="text-[13px] text-muted line-clamp-2">{n.body}</p>}
-                  <p className="mt-0.5 text-[12px] text-muted">{relativeTime(n.createdAt)}</p>
-                </Link>
+                <div key={n.id} className={cx("group relative flex gap-3 rounded-[14px] px-3 py-2.5 hover:bg-page", !n.readAt && "bg-[#f3faf7]")}>
+                  <span className="mt-0.5 text-[18px] leading-none" aria-hidden>
+                    {notifIcon(n.type)}
+                  </span>
+                  <button onClick={() => go(n)} className="min-w-0 flex-1 text-left">
+                    <p className={cx("text-[14px] leading-snug", n.readAt ? "font-medium text-ink/80" : "font-semibold")}>{n.title}</p>
+                    {n.body && <p className="mt-0.5 line-clamp-3 text-[13px] text-muted">{n.body}</p>}
+                    <p className="mt-1 text-[11.5px] text-muted">{whenFmt.format(new Date(n.createdAt)).replace(",", " ·")}</p>
+                  </button>
+                  {!n.readAt ? (
+                    <span className="flex flex-col items-center gap-1">
+                      <span className="mt-1.5 size-2.5 rounded-full bg-brand" aria-label="Nova" />
+                      <button onClick={() => markOne(n)} className="rounded-[8px] p-1 text-muted opacity-100 hover:bg-white hover:text-brand sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100" aria-label="Marcar como lida" title="Marcar como lida">
+                        <Check className="size-4" />
+                      </button>
+                    </span>
+                  ) : null}
+                </div>
               ))
             )}
           </div>

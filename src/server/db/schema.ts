@@ -62,7 +62,7 @@ export const messageStatusEnum = pgEnum("message_status", [
 ]);
 export const commentStatusEnum = pgEnum("comment_status", ["new", "in_progress", "replied", "done", "ignored"]);
 export const replyKindEnum = pgEnum("reply_kind", ["public", "private"]);
-export const taskStatusEnum = pgEnum("task_status", ["open", "done"]);
+export const taskStatusEnum = pgEnum("task_status", ["open", "done", "in_progress"]);
 export const jobStatusEnum = pgEnum("job_status", ["queued", "running", "done", "failed"]);
 export const webhookStatusEnum = pgEnum("webhook_status", ["received", "processed", "failed", "ignored"]);
 
@@ -82,6 +82,8 @@ export const organizations = pgTable("organizations", {
   autoCreateFromComments: boolean("auto_create_from_comments").notNull().default(false),
   /** Permite que pessoas peçam acesso pela tela "Criar conta" (aprovação do administrador). */
   allowSignup: boolean("allow_signup").notNull().default(true),
+  /** Mensagens de bom dia (9h) e boa noite (21h) para social sellers e closers. */
+  dailyNudges: boolean("daily_nudges").notNull().default(true),
   /** Dias para reter mensagens após desconectar uma conta (null = manter). */
   retentionDaysAfterDisconnect: integer("retention_days_after_disconnect"),
   createdAt: createdAt(),
@@ -309,13 +311,23 @@ export const notes = pgTable("notes", {
 });
 
 // ---------- Funis ----------
-export const pipelines = pgTable("pipelines", {
-  id: id(),
-  orgId: orgRef(),
-  kind: pipelineKindEnum("kind").notNull(),
-  name: text("name").notNull(),
-  createdAt: createdAt(),
-});
+export const pipelines = pgTable(
+  "pipelines",
+  {
+    id: id(),
+    orgId: orgRef(),
+    kind: pipelineKindEnum("kind").notNull(),
+    name: text("name").notNull(),
+    /** Funil comercial pessoal de um closer (null = funil padrão da organização). */
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("pipelines_owner_uq").on(t.orgId, t.kind, t.ownerId).where(sql`${t.ownerId} is not null`)],
+);
+
+/** Significado de uma etapa comercial para as métricas (o nome é livre). */
+export const STAGE_TYPES = ["entry", "contacted", "scheduled", "meeting_done", "follow_up", "negotiation", "won", "lost", "custom"] as const;
+export type StageType = (typeof STAGE_TYPES)[number];
 
 export const pipelineStages = pgTable(
   "pipeline_stages",
@@ -328,6 +340,8 @@ export const pipelineStages = pgTable(
     name: text("name").notNull(),
     color: text("color").notNull().default("green"),
     position: integer("position").notNull(),
+    /** Tipo da etapa (Novo lead, Reunião agendada, Venda ganha…): mantém as métricas certas com qualquer nome. */
+    stageType: text("stage_type").$type<StageType>().notNull().default("custom"),
     archivedAt: ts("archived_at"),
     createdAt: createdAt(),
   },
@@ -390,6 +404,10 @@ export const opportunities = pgTable(
     valueCents: bigint("value_cents", { mode: "number" }).notNull().default(0),
     currency: text("currency").notNull().default("BRL"),
     closerId: uuid("closer_id").references(() => users.id, { onDelete: "set null" }),
+    /** Social seller que qualificou e encaminhou (crédito nas métricas e no ranking). */
+    sellerId: uuid("seller_id").references(() => users.id, { onDelete: "set null" }),
+    productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
+    forwardedAt: ts("forwarded_at"),
     stageId: uuid("stage_id").notNull().references(() => pipelineStages.id),
     status: opportunityStatusEnum("status").notNull().default("open"),
     expectedCloseDate: date("expected_close_date"),
@@ -420,6 +438,8 @@ export const appointments = pgTable(
     notes: text("notes"),
     /** Lead (formulário de anúncio) que originou a reunião. */
     leadId: uuid("lead_id"),
+    /** Quem agendou (ranking de agendamentos). */
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     /** Evento correspondente na agenda Google do responsável. */
     googleEventId: text("google_event_id"),
     calendarSyncedAt: ts("calendar_synced_at"),
@@ -566,13 +586,48 @@ export const tasks = pgTable(
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
     dueAt: ts("due_at"),
     status: taskStatusEnum("status").notNull().default("open"),
+    /** low | medium | high */
+    priority: text("priority").$type<"low" | "medium" | "high">().notNull().default("medium"),
+    /** Descrição da tarefa. */
     notes: text("notes"),
     completedAt: ts("completed_at"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("tasks_org_owner_idx").on(t.orgId, t.ownerId, t.status, t.dueAt)],
+  (t) => [index("tasks_org_owner_idx").on(t.orgId, t.ownerId, t.status, t.dueAt), index("tasks_contact_idx").on(t.contactId)],
+);
+
+export const taskChecklistItems = pgTable(
+  "task_checklist_items",
+  {
+    id: id(),
+    orgId: orgRef(),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    done: boolean("done").notNull().default(false),
+    position: integer("position").notNull().default(0),
+    doneAt: ts("done_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("task_checklist_task_idx").on(t.taskId, t.position)],
+);
+
+/** Materiais da tarefa: proposta, gravação, documentos (links). */
+export const taskLinks = pgTable(
+  "task_links",
+  {
+    id: id(),
+    orgId: orgRef(),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    description: text("description"),
+    position: integer("position").notNull().default(0),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("task_links_task_idx").on(t.taskId, t.position)],
 );
 
 // ---------- Operação ----------
@@ -604,9 +659,12 @@ export const notifications = pgTable(
     readAt: ts("read_at"),
     /** Quando o envio para o celular foi processado (null = pendente). */
     pushedAt: ts("pushed_at"),
+    /** Evita duplicidade (ex.: "daily:morning:2026-10-05", "task:<id>:overdue"). */
+    dedupeKey: text("dedupe_key"),
     createdAt: createdAt(),
   },
   (t) => [
+    uniqueIndex("notifications_dedupe_uq").on(t.userId, t.dedupeKey).where(sql`${t.dedupeKey} is not null`),
     index("notifications_user_idx").on(t.userId, t.readAt, t.createdAt),
     index("notifications_push_pending_idx").on(t.createdAt).where(sql`${t.pushedAt} is null`),
   ],
@@ -896,4 +954,58 @@ export const calendarConnections = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("calendar_connections_feed_uq").on(t.feedTokenHash)],
+);
+
+// ---------- Métricas comerciais ----------
+export const SALES_EVENT_TYPES = ["contact_made", "meeting_scheduled", "meeting_done", "meeting_no_show", "meeting_canceled", "lead_forwarded", "sale_won", "sale_lost", "stage_moved"] as const;
+export type SalesEventType = (typeof SALES_EVENT_TYPES)[number];
+
+/**
+ * Eventos comerciais (somente inclusão). As métricas do Dashboard vêm daqui, não do estado atual do lead.
+ * Desfazer (reabrir venda, reunião que deixou de ser "realizada") marca o evento como anulado, sem apagar.
+ * As dimensões (origem, campanha, produto, social seller, closer) são gravadas no momento do evento.
+ */
+export const salesEvents = pgTable(
+  "sales_events",
+  {
+    id: id(),
+    orgId: orgRef(),
+    type: text("type").$type<SalesEventType>().notNull(),
+    occurredAt: ts("occurred_at").notNull().defaultNow(),
+    actorId: uuid("actor_id"),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "cascade" }),
+    opportunityId: uuid("opportunity_id"),
+    appointmentId: uuid("appointment_id"),
+    sellerId: uuid("seller_id"),
+    closerId: uuid("closer_id"),
+    sourceId: uuid("source_id"),
+    campaign: text("campaign"),
+    productId: uuid("product_id"),
+    valueCents: bigint("value_cents", { mode: "number" }).notNull().default(0),
+    fromStageType: text("from_stage_type"),
+    toStageType: text("to_stage_type"),
+    /** Chave de idempotência (ex.: contato por dia, reunião, venda por versão). */
+    dedupeKey: text("dedupe_key"),
+    voidedAt: ts("voided_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("sales_events_dedupe_uq").on(t.orgId, t.dedupeKey).where(sql`${t.dedupeKey} is not null`),
+    index("sales_events_org_type_idx").on(t.orgId, t.type, t.occurredAt),
+    index("sales_events_contact_idx").on(t.contactId, t.occurredAt),
+  ],
+);
+
+/** Meta de faturamento por mês ("2026-10"). */
+export const salesGoals = pgTable(
+  "sales_goals",
+  {
+    id: id(),
+    orgId: orgRef(),
+    month: text("month").notNull(),
+    targetCents: bigint("target_cents", { mode: "number" }).notNull(),
+    updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("sales_goals_org_month_uq").on(t.orgId, t.month)],
 );

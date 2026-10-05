@@ -7,6 +7,7 @@ import { Archive, ArrowDown, ArrowUp, Plus } from "lucide-react";
 import { api, ApiError, fetcher } from "@/lib/api";
 import type { Stage } from "@/lib/types";
 import { Button, cx, Dialog, Field, IconButton, Input, Select } from "@/components/ui";
+import { STAGE_TYPE_OPTIONS } from "@/lib/stageTypes";
 
 export const STAGE_COLORS: { value: string; label: string }[] = [
   { value: "green", label: "Verde" },
@@ -40,8 +41,10 @@ function ColorPicker({ value, onChange, label }: { value: string; onChange: (v: 
 }
 
 /** Editor da estrutura do funil (apenas administrador e gestor). */
-export function StagesEditor({ kind }: { kind: "relationship" | "sales" }) {
-  const key = `/api/stages?kind=${kind}`;
+export function StagesEditor({ kind, ownerId }: { kind: "relationship" | "sales"; ownerId?: string | null }) {
+  const key = `/api/stages?kind=${kind}${ownerId ? `&ownerId=${ownerId}` : ""}`;
+  const typed = kind === "sales";
+  const [newType, setNewType] = useState("custom");
   const { data: stages, mutate } = useSWR<Stage[]>(key, fetcher);
   const { mutate: gm } = useSWRConfig();
   const [drafts, setDrafts] = useState<Record<string, { name: string; color: string }>>({});
@@ -56,7 +59,7 @@ export function StagesEditor({ kind }: { kind: "relationship" | "sales" }) {
 
   const refresh = () => {
     mutate();
-    gm((k) => typeof k === "string" && (k.startsWith("/api/board") || k.startsWith("/api/dashboard") || k.startsWith("/api/opportunities")));
+    gm((k) => typeof k === "string" && (k.startsWith("/api/board") || k.startsWith("/api/dashboard") || k.startsWith("/api/opportunities") || k.startsWith("/api/commercial")));
   };
 
   const saveRow = async (s: Stage) => {
@@ -83,7 +86,7 @@ export function StagesEditor({ kind }: { kind: "relationship" | "sales" }) {
       { revalidate: false },
     );
     try {
-      await api.post("/api/stages/reorder", { kind, orderedIds: ids });
+      await api.post("/api/stages/reorder", { kind, orderedIds: ids, ownerId: ownerId ?? null });
       refresh();
     } catch (e) {
       toast.error((e as Error).message);
@@ -96,7 +99,7 @@ export function StagesEditor({ kind }: { kind: "relationship" | "sales" }) {
     if (!newName.trim()) return;
     setBusy(true);
     try {
-      await api.post("/api/stages", { kind, name: newName.trim(), color: newColor });
+      await api.post("/api/stages", { kind, name: newName.trim(), color: newColor, ...(typed ? { stageType: newType, ownerId: ownerId ?? null } : {}) });
       setNewName("");
       toast.success("Etapa criada.");
       refresh();
@@ -149,6 +152,31 @@ export function StagesEditor({ kind }: { kind: "relationship" | "sales" }) {
               maxLength={60}
               className="sm:min-w-[200px]"
             />
+            {typed && (
+              <Select
+                aria-label={`Tipo da etapa ${s.name}`}
+                title="O tipo diz ao CRM o que a etapa significa (para as métricas)"
+                value={s.stageType ?? "custom"}
+                onChange={(e) => {
+                  const stageType = e.target.value;
+                  mutate(stages.map((x) => (x.id === s.id ? { ...x, stageType } : x)), { revalidate: false });
+                  api
+                    .patch(`/api/stages/${s.id}`, { stageType })
+                    .then(refresh)
+                    .catch((err) => {
+                      toast.error((err as Error).message);
+                      mutate();
+                    });
+                }}
+                className="sm:w-[210px] shrink-0"
+              >
+                {STAGE_TYPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            )}
             <ColorPicker
               label={`Cor da etapa ${s.name}`}
               value={drafts[s.id]?.color ?? s.color}
@@ -194,20 +222,35 @@ export function StagesEditor({ kind }: { kind: "relationship" | "sales" }) {
         <Field label="Nova etapa" htmlFor={`new-stage-${kind}`} className="flex-1">
           <Input id={`new-stage-${kind}`} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Nome da etapa" maxLength={60} />
         </Field>
+        {typed && (
+          <Field label="Tipo" htmlFor="new-stage-type" className="sm:w-[210px]">
+            <Select id="new-stage-type" value={newType} onChange={(e) => setNewType(e.target.value)}>
+              {STAGE_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <ColorPicker label="Cor da nova etapa" value={newColor} onChange={setNewColor} />
         <Button type="submit" icon={<Plus className="size-4" />} loading={busy} disabled={!newName.trim()}>
           Adicionar
         </Button>
       </form>
-      <p className="text-[12.5px] text-muted">Renomear não altera o histórico nem os indicadores: cada etapa tem um identificador estável.</p>
+      <p className="text-[12.5px] text-muted">
+        {typed
+          ? "Dê às colunas o nome que quiser. O tipo diz ao CRM o que cada uma significa (ex.: “Call marcada” do tipo Reunião agendada), para o Dashboard continuar certo."
+          : "Renomear não altera o histórico nem os indicadores: cada etapa tem um identificador estável."}
+      </p>
     </div>
   );
 }
 
-export function EditStagesDialog({ open, onOpenChange, kind = "relationship" }: { open: boolean; onOpenChange: (v: boolean) => void; kind?: "relationship" | "sales" }) {
+export function EditStagesDialog({ open, onOpenChange, kind = "relationship", ownerId }: { open: boolean; onOpenChange: (v: boolean) => void; kind?: "relationship" | "sales"; ownerId?: string | null }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Editar etapas" description="Crie, renomeie, colora e reordene. Arquivar uma etapa ocupada exige escolher o destino dos cartões." size="lg" footer={<Button onClick={() => onOpenChange(false)}>Concluir</Button>}>
-      <StagesEditor kind={kind} />
+    <Dialog open={open} onOpenChange={onOpenChange} title={kind === "sales" ? "Etapas do Comercial" : "Editar etapas"} description="Crie, renomeie, colora e reordene. Excluir uma etapa ocupada exige escolher o destino dos cartões." size="lg" footer={<Button onClick={() => onOpenChange(false)}>Concluir</Button>}>
+      <StagesEditor kind={kind} ownerId={ownerId} />
     </Dialog>
   );
 }

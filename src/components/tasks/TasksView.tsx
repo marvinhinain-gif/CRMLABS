@@ -1,272 +1,135 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { CalendarClock, Ellipsis, Plus, SquareCheck, Trash2 } from "lucide-react";
-import { api, ApiError, fetcher, qs } from "@/lib/api";
+import { CalendarClock, CalendarDays, CircleAlert, CircleCheck, ListTodo, Plus, Search, SquareCheck } from "lucide-react";
+import { api, fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
-import { useOpenContact, useQueryParam } from "@/lib/nav";
-import { dayLabel, dueTone, formatDateTime, fromLocalInput, toLocalInput } from "@/lib/format";
-import { Avatar, Button, Card, cx, DemoBadge, Dialog, EmptyState, ErrorState, Field, IconButton, Input, LoadingState, Menu, MenuContent, MenuItem, MenuTrigger, PageHeader, Select, Tabs, Textarea } from "@/components/ui";
+import { useQueryParam } from "@/lib/nav";
+import { Button, Card, cx, DemoBadge, EmptyState, ErrorState, Input, LoadingState, PageHeader, Select, Tabs } from "@/components/ui";
+import { NewTaskDialog, PRIORITY, refreshTasks, TaskLine, TaskSheet, type Priority, type TaskRow } from "./TaskParts";
 
-type Task = {
-  id: string;
-  title: string;
-  notes: string | null;
-  dueAt: string | null;
-  status: "open" | "done";
-  completedAt: string | null;
-  ownerId: string | null;
-  ownerName: string | null;
-  contactId: string | null;
-  contactName: string | null;
-  opportunityTitle: string | null;
-};
-type TaskList = { rows: Task[]; counts: { today: number; overdue: number } };
+type TaskList = { rows: TaskRow[]; counts: { today: number; overdue: number; upcoming: number; inProgress: number } };
 
-function TaskDialog({ task, open, onOpenChange, onSaved }: { task: Task | null; open: boolean; onOpenChange: (v: boolean) => void; onSaved: () => void }) {
-  const me = useMe();
-  const team = useTeam();
-  const [form, setForm] = useState({ title: "", notes: "", dueAt: "", ownerId: "" });
-  const [contact, setContact] = useState<{ id: string; name: string } | null>(null);
-  const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [fields, setFields] = useState<Record<string, string>>({});
-  const { data: found } = useSWR<{ rows: { id: string; name: string }[] }>(open && q.length >= 2 && !contact ? `/api/contacts${qs({ q, pageSize: 5 })}` : null, fetcher);
-  const [init, setInit] = useState<string | null>(null);
-  const key = `${open}-${task?.id ?? "new"}`;
-  if (open && init !== key) {
-    setInit(key);
-    setForm({ title: task?.title ?? "", notes: task?.notes ?? "", dueAt: toLocalInput(task?.dueAt), ownerId: task?.ownerId ?? me.user.id });
-    setContact(task?.contactId ? { id: task.contactId, name: task.contactName ?? "Contato" } : null);
-    setQ("");
-    setFields({});
-  }
-  if (!open && init) setInit(null);
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const submit = async () => {
-    setLoading(true);
-    const body = { title: form.title, notes: form.notes || null, dueAt: fromLocalInput(form.dueAt), ownerId: form.ownerId || null, contactId: contact?.id ?? null };
-    try {
-      if (task) await api.patch(`/api/tasks/${task.id}`, body);
-      else await api.post("/api/tasks", body);
-      toast.success(task ? "Tarefa atualizada." : "Tarefa criada.");
-      onOpenChange(false);
-      onSaved();
-    } catch (e) {
-      setFields((e as ApiError).fields);
-      toast.error((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={task ? "Editar tarefa" : "Nova tarefa"}
-      description="Tarefas geram apenas alertas internos — nenhum e-mail ou mensagem externa é enviado."
-      footer={
-        <>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
-            Cancelar
-          </Button>
-          <Button onClick={submit} loading={loading} disabled={!form.title.trim()}>
-            Salvar
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-4">
-        <Field label="Título" htmlFor="tk-t" error={fields.title}>
-          <Input id="tk-t" value={form.title} onChange={set("title")} autoFocus />
-        </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Vencimento" htmlFor="tk-d">
-            <Input id="tk-d" type="datetime-local" value={form.dueAt} onChange={set("dueAt")} />
-          </Field>
-          <Field label="Responsável" htmlFor="tk-o" error={fields.ownerId}>
-            <Select id="tk-o" value={form.ownerId} onChange={set("ownerId")} disabled={!me.permissions.assign}>
-              {team
-                .filter((m) => m.status === "active")
-                .map((m) => (
-                  <option key={m.userId} value={m.userId}>
-                    {m.name}
-                  </option>
-                ))}
-            </Select>
-          </Field>
-        </div>
-        <Field label="Contato (opcional)" htmlFor="tk-c">
-          {contact ? (
-            <div className="flex items-center gap-3 rounded-[14px] border border-line px-3 py-2">
-              <Avatar name={contact.name} size={28} />
-              <span className="flex-1 text-[14px]">{contact.name}</span>
-              <Button size="sm" variant="ghost" onClick={() => setContact(null)}>
-                Remover
-              </Button>
-            </div>
-          ) : (
-            <>
-              <Input id="tk-c" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar contato" />
-              {found?.rows.map((r) => (
-                <button key={r.id} onClick={() => setContact(r)} className="mt-1 flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[14px] hover:bg-page">
-                  <Avatar name={r.name} size={26} /> {r.name}
-                </button>
-              ))}
-            </>
-          )}
-        </Field>
-        <Field label="Observação" htmlFor="tk-n">
-          <Textarea id="tk-n" value={form.notes} onChange={set("notes")} />
-        </Field>
-      </div>
-    </Dialog>
-  );
-}
+const VIEWS = [
+  { value: "today", label: "Hoje", icon: <CalendarDays /> },
+  { value: "overdue", label: "Atrasadas", icon: <CircleAlert /> },
+  { value: "upcoming", label: "Próximas", icon: <CalendarClock /> },
+  { value: "done", label: "Concluídas", icon: <CircleCheck /> },
+] as const;
 
 export function TasksView() {
   const me = useMe();
   const team = useTeam();
-  const openContact = useOpenContact();
-  const [view, setView] = useQueryParam("visao", "today");
+  const { mutate: gm } = useSWRConfig();
+  const [view, setView] = useQueryParam("aba", "today");
   const [owner, setOwner] = useQueryParam("responsavel", "");
-  const [editing, setEditing] = useState<Task | null>(null);
-  const [dialog, setDialog] = useState(false);
-  const { data, error, isLoading, mutate } = useSWR<TaskList>(`/api/tasks${qs({ view, ownerId: owner, limit: 100 })}`, fetcher, { keepPreviousData: true });
+  const [priority, setPriority] = useQueryParam("prioridade", "");
+  const [status, setStatus] = useQueryParam("status", "");
+  const [taskId, setTaskId] = useQueryParam("tarefa", "");
+  const [q, setQ] = useState("");
+  const [create, setCreate] = useState(false);
+  const key = `/api/tasks${qs({ view, ownerId: owner, priority, status: view === "done" ? "" : status, q: q.trim().length >= 2 ? q.trim() : "", limit: 200 })}`;
+  const { data, error, isLoading, mutate } = useSWR<TaskList>(key, fetcher, { keepPreviousData: true });
 
-  const toggle = async (t: Task) => {
+  const toggle = async (t: TaskRow) => {
+    const next = t.status === "done" ? "open" : "done";
+    mutate(data && { ...data, rows: data.rows.filter((r) => r.id !== t.id) }, { revalidate: false });
     try {
-      await api.patch(`/api/tasks/${t.id}`, { status: t.status === "done" ? "open" : "done" });
-      toast.success(t.status === "done" ? "Tarefa reaberta." : "Tarefa concluída.");
-      mutate();
+      await api.patch(`/api/tasks/${t.id}`, { status: next });
+      if (next === "done") toast.success("Tarefa concluída.", { action: { label: "Desfazer", onClick: () => api.patch(`/api/tasks/${t.id}`, { status: "open" }).then(() => refreshTasks(gm)) } });
     } catch (e) {
       toast.error((e as Error).message);
     }
-  };
-  const remove = async (t: Task) => {
-    if (!confirm(`Excluir a tarefa "${t.title}"?`)) return;
-    try {
-      await api.del(`/api/tasks/${t.id}`);
-      mutate();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+    refreshTasks(gm);
   };
 
+  const counts = data?.counts;
   return (
     <div className="mx-auto flex max-w-[1100px] flex-col gap-5">
       <PageHeader
         title="Tarefas"
         badge={me.org.isDemo ? <DemoBadge /> : undefined}
-        subtitle="O que precisa ser feito, por quem e quando."
+        subtitle="Follow-ups, propostas e combinados — com checklist, materiais e prazo."
         actions={
-          <Button
-            icon={<Plus className="size-4" />}
-            onClick={() => {
-              setEditing(null);
-              setDialog(true);
-            }}
-          >
+          <Button size="lg" icon={<Plus className="size-5" />} onClick={() => setCreate(true)} className="rounded-[16px] w-full sm:w-auto">
             Nova tarefa
           </Button>
         }
       />
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Tabs
-          value={view}
-          onChange={setView}
-          items={[
-            { value: "today", label: "Hoje", count: data?.counts.today },
-            { value: "overdue", label: "Atrasadas", count: data?.counts.overdue },
-            { value: "upcoming", label: "Próximas" },
-            { value: "done", label: "Concluídas" },
-          ]}
-        />
+      <Tabs
+        value={view}
+        onChange={setView}
+        className="self-start max-w-full overflow-x-auto"
+        items={VIEWS.map((v) => ({ ...v, count: v.value === "today" ? counts?.today : v.value === "overdue" ? counts?.overdue : v.value === "upcoming" ? counts?.upcoming : undefined }))}
+      />
+      <div className="flex flex-wrap gap-2">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden />
+          <Input aria-label="Buscar tarefa" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar por título ou lead" className="bg-white pl-10" />
+        </div>
+        <Select aria-label="Prioridade" value={priority} onChange={(e) => setPriority(e.target.value)} className="w-auto bg-white">
+          <option value="">Toda prioridade</option>
+          {(["high", "medium", "low"] as Priority[]).map((p) => (
+            <option key={p} value={p}>
+              Prioridade {PRIORITY[p].label.toLowerCase()}
+            </option>
+          ))}
+        </Select>
+        {view !== "done" && (
+          <Select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto bg-white">
+            <option value="">Pendentes e em andamento</option>
+            <option value="open">Só pendentes</option>
+            <option value="in_progress">Só em andamento{counts?.inProgress ? ` (${counts.inProgress})` : ""}</option>
+          </Select>
+        )}
         {me.permissions.dataAll && (
-          <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="sm:w-[220px] bg-white">
+          <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="w-auto bg-white">
             <option value="">Toda a equipe</option>
-            {team.map((m) => (
-              <option key={m.userId} value={m.userId}>
-                {m.name}
-              </option>
-            ))}
+            {team
+              .filter((m) => m.status === "active")
+              .map((m) => (
+                <option key={m.userId} value={m.userId}>
+                  {m.name}
+                </option>
+              ))}
           </Select>
         )}
       </div>
-      <Card>
-        {error ? (
+
+      {error && !data ? (
+        <Card>
           <ErrorState error={error} onRetry={() => mutate()} />
-        ) : isLoading && !data ? (
-          <LoadingState rows={5} className="p-4" />
-        ) : !data?.rows.length ? (
-          <EmptyState icon={<SquareCheck />} title={view === "done" ? "Nenhuma tarefa concluída" : view === "overdue" ? "Nada atrasado" : "Nenhuma tarefa aqui"} description="Crie tarefas para organizar os próximos passos com cada contato." />
-        ) : (
-          <ul className="divide-y divide-line">
-            {data.rows.map((t) => {
-              const tone = t.status === "open" ? dueTone(t.dueAt) : "none";
-              return (
-                <li key={t.id} className="flex items-start gap-2 sm:gap-4 px-3 sm:px-5 py-3 sm:py-4">
-                  <label className="-m-1 flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-[10px] hover:bg-page">
-                    <input type="checkbox" checked={t.status === "done"} onChange={() => toggle(t)} aria-label={t.status === "done" ? `Reabrir ${t.title}` : `Concluir ${t.title}`} className="size-5 cursor-pointer accent-[#008a65]" />
-                  </label>
-                  <div className="min-w-0 flex-1">
-                    <p className={cx("text-[15px] font-semibold", t.status === "done" && "line-through text-muted")}>{t.title}</p>
-                    {t.notes && <p className="text-[13.5px] text-muted line-clamp-2">{t.notes}</p>}
-                    <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted">
-                      {t.contactId && (
-                        <button className="font-medium text-brand hover:underline" onClick={() => openContact(t.contactId!)}>
-                          {t.contactName}
-                        </button>
-                      )}
-                      {t.opportunityTitle && <span>Oportunidade: {t.opportunityTitle}</span>}
-                      <span>{t.ownerName ?? "Sem responsável"}</span>
-                      {t.status === "done" && t.completedAt && <span>Concluída {formatDateTime(t.completedAt)}</span>}
-                    </p>
-                    {t.dueAt && (
-                      <span className={cx("mt-1.5 inline-flex sm:hidden items-center gap-1.5 text-[13px] font-medium", tone === "overdue" ? "text-danger" : tone === "today" ? "text-success" : "text-muted")}>
-                        <CalendarClock className="size-4" aria-hidden />
-                        {tone === "overdue" ? "Atrasada · " : ""}
-                        {dayLabel(t.dueAt)}
-                      </span>
-                    )}
-                  </div>
-                  {t.dueAt && (
-                    <span className={cx("hidden sm:inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] font-medium", tone === "overdue" ? "text-danger" : tone === "today" ? "text-success" : "text-muted")}>
-                      <CalendarClock className="size-4" aria-hidden />
-                      {tone === "overdue" ? "Atrasada · " : ""}
-                      {dayLabel(t.dueAt)}
-                    </span>
-                  )}
-                  <Menu>
-                    <MenuTrigger asChild>
-                      <IconButton label={`Ações para ${t.title}`} size="sm">
-                        <Ellipsis className="size-5" />
-                      </IconButton>
-                    </MenuTrigger>
-                    <MenuContent>
-                      <MenuItem
-                        onSelect={() => {
-                          setEditing(t);
-                          setDialog(true);
-                        }}
-                      >
-                        Editar
-                      </MenuItem>
-                      <MenuItem onSelect={() => toggle(t)}>{t.status === "done" ? "Reabrir" : "Concluir"}</MenuItem>
-                      <MenuItem icon={<Trash2 />} danger onSelect={() => remove(t)}>
-                        Excluir
-                      </MenuItem>
-                    </MenuContent>
-                  </Menu>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Card>
-      <TaskDialog task={editing} open={dialog} onOpenChange={setDialog} onSaved={() => mutate()} />
+        </Card>
+      ) : isLoading && !data ? (
+        <LoadingState rows={5} />
+      ) : !data?.rows.length ? (
+        <Card>
+          <EmptyState
+            icon={view === "done" ? <SquareCheck /> : <ListTodo />}
+            title={view === "today" ? "Nada para hoje" : view === "overdue" ? "Nenhuma tarefa atrasada" : view === "upcoming" ? "Nenhuma tarefa futura" : "Nenhuma tarefa concluída"}
+            description={view === "done" ? undefined : "Crie tarefas com prazo, checklist e materiais — também pela página de cada lead."}
+            action={
+              view !== "done" ? (
+                <Button icon={<Plus className="size-4" />} onClick={() => setCreate(true)}>
+                  Nova tarefa
+                </Button>
+              ) : undefined
+            }
+          />
+        </Card>
+      ) : (
+        <Card className={cx("divide-y divide-line px-4 sm:px-5", isLoading && "opacity-70")}>
+          {data.rows.map((t, i) => (
+            <div key={t.id} className="anim-fade" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
+              <TaskLine t={t} onOpen={() => setTaskId(t.id)} onToggle={() => toggle(t)} />
+            </div>
+          ))}
+        </Card>
+      )}
+      <NewTaskDialog open={create} onOpenChange={setCreate} onCreated={(id) => setTaskId(id)} />
+      <TaskSheet taskId={taskId || null} onClose={() => setTaskId("")} />
     </div>
   );
 }

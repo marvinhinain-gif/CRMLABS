@@ -1,12 +1,13 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "../db";
-import { appointments, contactTags, contacts, leadForms, leads, notes, opportunities, pipelineStages, stageHistory, tags, users } from "../db/schema";
+import { db, type DbOrTx } from "../db";
+import { appointments, contactTags, contacts, leadForms, leads, memberships, notes, opportunities, pipelineStages, products, stageHistory, tags, users } from "../db/schema";
 import type { Ctx } from "../context";
-import { appointmentScope, assertCan, can, contactScope, opportunityScope } from "../permissions";
+import { appointmentScope, assertCan, can, contactScope, opportunityScope, ROLE_LABEL } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
 import { publish } from "../realtime";
-import { audit, cleanText, getPipeline, notifyUser } from "./common";
+import { audit, cleanText, getPipeline, notifyUser, salesPipelineFor } from "./common";
+import { recordContactMade, recordDecision, recordForward, recordMeetingStatus, recordStageMove } from "./salesEvents";
 import { assertMember } from "./team";
 import { listStages, getStageInOrg } from "./stages";
 import { activeEntryFor } from "./board";
@@ -19,6 +20,7 @@ export const opportunityInputSchema = z.object({
   contactId: z.string().uuid(),
   title: z.string().trim().min(1, "Informe o título.").max(160),
   product: z.string().trim().max(160).nullish(),
+  productId: z.string().uuid().nullish(),
   valueCents: cents.default(0),
   closerId: z.string().uuid().nullish(),
   stageId: z.string().uuid().nullish(),
@@ -42,6 +44,8 @@ const oppSelect = {
   contactUsername: contacts.username,
   closerId: opportunities.closerId,
   closerName: users.name,
+  sellerId: opportunities.sellerId,
+  forwardedAt: opportunities.forwardedAt,
   createdAt: opportunities.createdAt,
 };
 
@@ -57,14 +61,15 @@ export async function listOpportunities(ctx: Ctx, f: z.infer<typeof listOpportun
   if (f.closerId) conds.push(eq(opportunities.closerId, f.closerId));
   if (f.q) conds.push(sql`(${opportunities.title} ilike ${"%" + f.q + "%"} or ${contacts.name} ilike ${"%" + f.q + "%"})`);
   const rows = await db
-    .select(oppSelect)
+    .select({ ...oppSelect, stageName: pipelineStages.name, sellerName: sql<string | null>`(select u.name from ${users} u where u.id = ${opportunities.sellerId})` })
     .from(opportunities)
     .innerJoin(contacts, eq(contacts.id, opportunities.contactId))
     .leftJoin(users, eq(users.id, opportunities.closerId))
+    .leftJoin(pipelineStages, eq(pipelineStages.id, opportunities.stageId))
     .where(and(...conds))
     .orderBy(desc(opportunities.updatedAt))
     .limit(300);
-  const stages = await listStages(ctx, "sales");
+  const stages = await listStages(ctx, "sales", { ownerId: ctx.role === "closer" ? ctx.userId : (f.closerId ?? null) });
   return { stages, rows };
 }
 
@@ -75,18 +80,73 @@ async function getVisibleOpportunity(ctx: Ctx, id: string) {
 }
 
 async function assertCloser(ctx: Ctx, closerId: string | null | undefined) {
-  if (!closerId) return;
+  if (!closerId) return null;
   const m = await assertMember(ctx.orgId, closerId, { activeOnly: true });
   if (!["closer", "manager", "admin"].includes(m.role)) throw invalid("O responsável comercial precisa ter papel de closer, gestor ou administrador.");
+  return m;
 }
 
-export async function createOpportunity(ctx: Ctx, input: z.infer<typeof opportunityInputSchema>) {
+type StageRow = typeof pipelineStages.$inferSelect;
+
+async function stagesOf(pipelineId: string, tx: DbOrTx = db) {
+  return tx
+    .select()
+    .from(pipelineStages)
+    .where(and(eq(pipelineStages.pipelineId, pipelineId), isNull(pipelineStages.archivedAt)))
+    .orderBy(asc(pipelineStages.position));
+}
+
+/** Etapa de mesmo significado em outro funil (ex.: ao trocar de closer). */
+function equivalent(list: StageRow[], type: string | null | undefined, fallback: "entry" | "negotiation" = "entry") {
+  return list.find((s) => s.stageType === type) ?? list.find((s) => s.stageType === fallback) ?? list.find((s) => s.stageType === "entry") ?? list[0];
+}
+
+/** Social seller que recebe o crédito: quem encaminha (se seller) ou o dono do contato (se seller). */
+async function sellerFor(ctx: Ctx, contactOwnerId: string | null) {
+  if (ctx.role === "seller") return ctx.userId;
+  if (!contactOwnerId) return null;
+  const [m] = await db.select({ role: memberships.role }).from(memberships).where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, contactOwnerId)));
+  return m?.role === "seller" ? contactOwnerId : null;
+}
+
+async function latestLeadProduct(orgId: string, contactId: string) {
+  const [l] = await db
+    .select({ productId: leads.productId, productName: products.name })
+    .from(leads)
+    .leftJoin(products, eq(products.id, leads.productId))
+    .where(and(eq(leads.orgId, orgId), eq(leads.contactId, contactId)))
+    .orderBy(desc(leads.createdAt))
+    .limit(1);
+  return l ?? null;
+}
+
+export async function createOpportunity(ctx: Ctx, input: z.infer<typeof opportunityInputSchema>, opts: { reason?: string; silent?: boolean; forwarded?: boolean } = {}) {
   const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, input.contactId), contactScope(ctx)));
   if (!contact) throw invalid("Contato inválido.");
   await assertCloser(ctx, input.closerId);
-  const stage = input.stageId ? await getStageInOrg(ctx.orgId, input.stageId, "sales") : (await listStages(ctx, "sales"))[0];
-  if (!stage) throw invalid("O funil comercial não tem etapas.");
   const closerId = input.closerId ?? (ctx.role === "closer" ? ctx.userId : null);
+  const pipeline = await salesPipelineFor(ctx.orgId, closerId);
+  const list = await stagesOf(pipeline.id);
+  let stage = input.stageId ? list.find((s) => s.id === input.stageId) : equivalent(list, "entry");
+  if (input.stageId && !stage) {
+    // Etapa de outro funil (ex.: funil padrão escolhido na integração): usa a de mesmo tipo no funil do closer.
+    const other = await getStageInOrg(ctx.orgId, input.stageId, "sales");
+    stage = equivalent(list, other.stageType);
+  }
+  if (!stage) throw invalid("O funil comercial não tem etapas.");
+  if (stage.stageType === "won" || stage.stageType === "lost") stage = equivalent(list, "entry");
+  let productId = input.productId ?? null;
+  let product = cleanText(input.product, 160);
+  if (productId) {
+    const [p] = await db.select().from(products).where(and(eq(products.id, productId), eq(products.orgId, ctx.orgId)));
+    if (!p) throw invalid("Produto inválido.");
+    product ??= p.name;
+  } else if (!product) {
+    const l = await latestLeadProduct(ctx.orgId, contact.id);
+    productId = l?.productId ?? null;
+    product = l?.productName ?? null;
+  }
+  const sellerId = await sellerFor(ctx, contact.ownerId);
   const opp = await db.transaction(async (tx) => {
     const [o] = await tx
       .insert(opportunities)
@@ -94,10 +154,13 @@ export async function createOpportunity(ctx: Ctx, input: z.infer<typeof opportun
         orgId: ctx.orgId,
         contactId: contact.id,
         title: input.title,
-        product: cleanText(input.product, 160),
+        product,
+        productId,
         valueCents: input.valueCents,
         closerId,
-        stageId: stage.id,
+        sellerId,
+        forwardedAt: opts.forwarded ? new Date() : null,
+        stageId: stage!.id,
         expectedCloseDate: input.expectedCloseDate ?? null,
         createdBy: ctx.userId,
       })
@@ -107,16 +170,16 @@ export async function createOpportunity(ctx: Ctx, input: z.infer<typeof opportun
       entityType: "opportunity",
       entityId: o.id,
       contactId: contact.id,
-      toStageId: stage.id,
-      toStageName: stage.name,
+      toStageId: stage!.id,
+      toStageName: stage!.name,
       actorId: ctx.userId,
-      reason: "Oportunidade criada",
+      reason: opts.reason ?? "Oportunidade criada",
     });
     await audit(tx, ctx, "opportunity.created", "opportunity", o.id, { valueCents: o.valueCents });
     return o;
   });
-  if (closerId && closerId !== ctx.userId) {
-    await notifyUser({ orgId: ctx.orgId, userId: closerId, type: "opportunity.assigned", title: `Nova oportunidade: ${opp.title}`, body: `Contato: ${contact.name}`, link: "/comercial" });
+  if (!opts.silent && closerId && closerId !== ctx.userId) {
+    await notifyUser({ orgId: ctx.orgId, userId: closerId, type: "opportunity.assigned", title: `Nova oportunidade: ${opp.title}`, body: `Contato: ${contact.name}`, link: `/comercial?op=${opp.id}` });
   }
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: opp.id, ownerIds: [closerId, contact.ownerId] });
   return opp;
@@ -125,12 +188,41 @@ export async function createOpportunity(ctx: Ctx, input: z.infer<typeof opportun
 export const updateOpportunitySchema = z.object({
   title: z.string().trim().min(1).max(160).optional(),
   product: z.string().trim().max(160).nullish(),
+  productId: z.string().uuid().nullish(),
   valueCents: cents.optional(),
   closerId: z.string().uuid().nullish(),
   expectedCloseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   stageId: z.string().uuid().optional(),
   expectedVersion: z.number().int().positive().optional(),
+  /** Ao arrastar para "Venda ganha". */
+  wonValueCents: cents.optional(),
+  /** Ao arrastar para "Venda perdida". */
+  lostReason: z.string().trim().max(300).optional(),
 });
+
+/** Efeitos de entrar numa etapa com significado (contato, reunião realizada). */
+async function applyStageEffects(ctx: Ctx, o: typeof opportunities.$inferSelect, to: StageRow) {
+  if (to.stageType === "contacted") await recordContactMade(ctx, o.contactId);
+  if (to.stageType === "meeting_done") {
+    // Conclui a reunião pendente mais recente; sem reunião registrada, registra uma já realizada.
+    const [pending] = await db
+      .select()
+      .from(appointments)
+      .where(and(eq(appointments.orgId, ctx.orgId), eq(appointments.contactId, o.contactId), eq(appointments.status, "scheduled"), lt(appointments.startsAt, new Date(Date.now() + 12 * 3600_000))))
+      .orderBy(desc(appointments.startsAt))
+      .limit(1);
+    if (pending) await updateAppointment(ctx, pending.id, { status: "done" }, { skipScope: true, internal: true });
+    else {
+      const end = new Date();
+      const a = await createAppointment(
+        ctx,
+        { contactId: o.contactId, opportunityId: o.id, ownerId: o.closerId ?? ctx.userId, title: "Reunião", startsAt: new Date(end.getTime() - 3600_000), endsAt: end, timezone: ctx.org.timezone, notes: "Registrada ao mover o lead para “" + to.name + "”." },
+        { silent: true },
+      );
+      await updateAppointment(ctx, a.id, { status: "done" }, { skipScope: true, internal: true });
+    }
+  }
+}
 
 export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typeof updateOpportunitySchema>) {
   const o = await getVisibleOpportunity(ctx, id);
@@ -141,47 +233,83 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
   if (!isDecider && (input.valueCents !== undefined || input.closerId !== undefined || input.stageId !== undefined)) {
     throw forbidden("Somente closers, gestores e administradores alteram valor, etapa ou responsável comercial.");
   }
+  const [current] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, o.stageId));
+  let target: StageRow | null = null;
+  let reason: string | null = null;
+  // Troca de closer: o lead vai para a etapa equivalente no funil do novo closer.
   if (input.closerId !== undefined && input.closerId !== o.closerId) {
     if (ctx.role === "closer" && input.closerId !== ctx.userId) assertCan(ctx, "contacts.assign", "Somente gestores redistribuem oportunidades.");
     await assertCloser(ctx, input.closerId);
+    const list = await stagesOf((await salesPipelineFor(ctx.orgId, input.closerId)).id);
+    target = equivalent(list, current?.stageType);
+    const [nu] = input.closerId ? await db.select({ name: users.name }).from(users).where(eq(users.id, input.closerId)) : [];
+    reason = `Responsável comercial: ${nu?.name ?? "sem closer"}`;
   }
-  const patch: Partial<typeof opportunities.$inferInsert> = { updatedAt: new Date(), version: o.version + 1 };
+  if (input.stageId && input.stageId !== o.stageId) {
+    const to = await getStageInOrg(ctx.orgId, input.stageId, "sales");
+    if (to.archivedAt) throw invalid("Etapa arquivada.");
+    if (current && to.pipelineId !== (target?.pipelineId ?? current.pipelineId)) throw invalid("Etapa de outro funil.");
+    target = to;
+  }
+  // Arrastar para Venda ganha / perdida = registrar o fechamento.
+  if (target && (target.stageType === "won" || target.stageType === "lost") && o.status === "open") {
+    if (target.stageType === "won") {
+      const value = input.wonValueCents ?? input.valueCents ?? Number(o.valueCents);
+      if (!value) throw invalid("Informe o valor da venda.", { fields: { wonValueCents: "Informe o valor da venda." }, need: "wonValueCents" });
+      return decideOpportunity(ctx, o.id, { status: "won", valueCents: value }, { stageId: target.id });
+    }
+    if (!input.lostReason || input.lostReason.length < 3) throw invalid("Informe o motivo da perda.", { fields: { lostReason: "Informe o motivo da perda." }, need: "lostReason" });
+    return decideOpportunity(ctx, o.id, { status: "lost", lostReason: input.lostReason }, { stageId: target.id });
+  }
+  // Tirar de Venda ganha / perdida = reabrir.
+  if (target && o.status !== "open" && target.stageType !== "won" && target.stageType !== "lost") {
+    await decideOpportunity(ctx, o.id, { status: "open" }, { stageId: target.id });
+    return (await db.select().from(opportunities).where(eq(opportunities.id, o.id)))[0];
+  }
+  const fresh = (await db.select().from(opportunities).where(eq(opportunities.id, o.id)))[0];
+  const patch: Partial<typeof opportunities.$inferInsert> = { updatedAt: new Date(), version: fresh.version + 1 };
   if (input.title !== undefined) patch.title = input.title;
   if (input.product !== undefined) patch.product = cleanText(input.product, 160);
+  if (input.productId !== undefined) {
+    if (input.productId) {
+      const [p] = await db.select().from(products).where(and(eq(products.id, input.productId), eq(products.orgId, ctx.orgId)));
+      if (!p) throw invalid("Produto inválido.");
+      patch.product = p.name;
+    }
+    patch.productId = input.productId;
+  }
   if (input.valueCents !== undefined) patch.valueCents = input.valueCents;
   if (input.closerId !== undefined) patch.closerId = input.closerId;
   if (input.expectedCloseDate !== undefined) patch.expectedCloseDate = input.expectedCloseDate;
-  let to: Awaited<ReturnType<typeof getStageInOrg>> | null = null;
-  if (input.stageId && input.stageId !== o.stageId) {
-    to = await getStageInOrg(ctx.orgId, input.stageId, "sales");
-    if (to.archivedAt) throw invalid("Etapa arquivada.");
-    patch.stageId = to.id;
-  }
-  let fromName: string | null = null;
+  if (target && target.id !== fresh.stageId) patch.stageId = target.id;
   const updated = await db.transaction(async (tx) => {
-    const [u] = await tx.update(opportunities).set(patch).where(and(eq(opportunities.id, o.id), eq(opportunities.version, o.version))).returning();
+    const [u] = await tx.update(opportunities).set(patch).where(and(eq(opportunities.id, o.id), eq(opportunities.version, fresh.version))).returning();
     if (!u) throw new AppError("conflict", "Esta oportunidade foi alterada por outra pessoa. Os dados foram atualizados.");
-    if (to) {
-      const [from] = await tx.select().from(pipelineStages).where(eq(pipelineStages.id, o.stageId));
-      fromName = from?.name ?? null;
+    if (patch.stageId && target) {
       await tx.insert(stageHistory).values({
         orgId: ctx.orgId,
         entityType: "opportunity",
         entityId: o.id,
         contactId: o.contactId,
         fromStageId: o.stageId,
-        toStageId: to.id,
-        fromStageName: from?.name,
-        toStageName: to.name,
+        toStageId: target.id,
+        fromStageName: current?.name,
+        toStageName: target.name,
         actorId: ctx.userId,
+        reason,
       });
+      await recordStageMove(ctx, u, current?.stageType ?? null, target.stageType, tx);
     }
     return u;
   });
-  await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId, updated.closerId] });
-  if (to) {
+  await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId, updated.closerId, o.sellerId] });
+  if (patch.stageId && target) {
+    await applyStageEffects(ctx, updated, target).catch((e) => logger.warn("Falha ao aplicar efeitos da etapa", e));
     const [c] = await db.select({ name: contacts.name }).from(contacts).where(eq(contacts.id, o.contactId));
-    await alertOpportunityStage(ctx, { contactName: c?.name ?? "Contato", title: updated.title, from: fromName, to: to.name }).catch((e) => logger.warn("Falha no alerta de etapa comercial", e));
+    await alertOpportunityStage(ctx, { contactName: c?.name ?? "Contato", title: updated.title, from: current?.name ?? null, to: target.name }).catch((e) => logger.warn("Falha no alerta de etapa comercial", e));
+    if (input.closerId !== undefined && input.closerId && input.closerId !== ctx.userId) {
+      await notifyUser({ orgId: ctx.orgId, userId: input.closerId, type: "opportunity.assigned", title: `🔥 Novo Lead recebido`, body: `${c?.name ?? "Um lead"} foi encaminhado para você por ${ctx.userName}.`, link: `/comercial?op=${o.id}` });
+    }
   }
   return updated;
 }
@@ -192,12 +320,20 @@ export const decideSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("open") }),
 ]);
 
-/** Ganhar, perder ou reabrir. Métricas são recalculadas a partir do estado atual; histórico é mantido. */
-export async function decideOpportunity(ctx: Ctx, id: string, input: z.infer<typeof decideSchema>) {
+/** Ganhar, perder ou reabrir. Grava o evento (anula o anterior ao reabrir) e põe o cartão na coluna certa. */
+export async function decideOpportunity(ctx: Ctx, id: string, input: z.infer<typeof decideSchema>, opts: { stageId?: string } = {}) {
   assertCan(ctx, "opportunity.decide", "Somente closers, gestores e administradores registram ganhos e perdas.");
   const o = await getVisibleOpportunity(ctx, id);
   if (input.status === o.status) throw invalid("A oportunidade já está neste status.");
+  const [current] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, o.stageId));
+  const list = current ? await stagesOf(current.pipelineId) : [];
+  let target: StageRow | undefined = opts.stageId ? list.find((s) => s.id === opts.stageId) : undefined;
+  if (!target) {
+    if (input.status === "won" || input.status === "lost") target = list.find((s) => s.stageType === input.status);
+    else if (current?.stageType === "won" || current?.stageType === "lost") target = equivalent(list, "negotiation", "negotiation");
+  }
   const patch: Partial<typeof opportunities.$inferInsert> = { status: input.status, updatedAt: new Date(), version: o.version + 1 };
+  if (target && target.id !== o.stageId) patch.stageId = target.id;
   if (input.status === "won") {
     patch.closedAt = input.closedAt ?? new Date();
     patch.lostReason = null;
@@ -217,17 +353,21 @@ export async function decideOpportunity(ctx: Ctx, id: string, input: z.infer<typ
       entityId: o.id,
       contactId: o.contactId,
       fromStageId: o.stageId,
-      toStageId: o.stageId,
+      toStageId: u.stageId,
+      fromStageName: current?.name,
+      toStageName: target?.name ?? current?.name,
       actorId: ctx.userId,
       reason: `Status: ${label}${input.status === "lost" ? ` — ${input.lostReason}` : ""}`,
     });
+    await recordDecision(ctx, u, tx);
+    if (patch.stageId) await recordStageMove(ctx, u, current?.stageType ?? null, target?.stageType ?? null, tx);
     await audit(tx, ctx, `opportunity.${input.status === "open" ? "reopened" : input.status}`, "opportunity", o.id, {
       previous: { status: o.status, closedAt: o.closedAt, valueCents: o.valueCents },
       next: { status: u.status, closedAt: u.closedAt, valueCents: u.valueCents },
     });
     return u;
   });
-  await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId] });
+  await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId, o.sellerId] });
   if (input.status === "won") {
     await alertSale(ctx, { contactId: updated.contactId, title: updated.title, valueCents: Number(updated.valueCents), closerId: updated.closerId }).catch((e) => logger.warn("Falha no alerta de venda", e));
   }
@@ -237,20 +377,85 @@ export async function decideOpportunity(ctx: Ctx, id: string, input: z.infer<typ
 // ---------- Encaminhar ao closer ----------
 export const forwardSchema = z.object({
   closerId: z.string().uuid(),
-  title: z.string().trim().min(1).max(160),
-  valueCents: cents.default(0),
-  nextStep: z.string().trim().min(3, "Descreva o próximo passo.").max(300),
+  /** Observação para o closer (fica nas anotações do lead). */
+  note: z.string().trim().max(2000).nullish(),
+  title: z.string().trim().max(160).nullish(),
+  valueCents: cents.optional(),
+  nextStep: z.string().trim().max(300).nullish(),
   dueAt: z.coerce.date().nullish(),
 });
 
-/** Encaminha a oportunidade mantendo o mesmo contato, vínculo e histórico. */
+/** Situação do encaminhamento de um contato: para quem foi, quando e em que etapa está. */
+export async function forwardStatus(ctx: Ctx, contactId: string) {
+  const [contact] = await db.select({ id: contacts.id }).from(contacts).where(and(eq(contacts.id, contactId), contactScope(ctx)));
+  if (!contact) throw notFound("Contato não encontrado.");
+  const [o] = await db
+    .select({
+      id: opportunities.id,
+      status: opportunities.status,
+      closerId: opportunities.closerId,
+      closerName: users.name,
+      forwardedAt: opportunities.forwardedAt,
+      createdAt: opportunities.createdAt,
+      stageName: pipelineStages.name,
+      valueCents: opportunities.valueCents,
+    })
+    .from(opportunities)
+    .leftJoin(users, eq(users.id, opportunities.closerId))
+    .leftJoin(pipelineStages, eq(pipelineStages.id, opportunities.stageId))
+    .where(and(eq(opportunities.contactId, contactId), eq(opportunities.orgId, ctx.orgId)))
+    .orderBy(sql`${opportunities.status} = 'open' desc`, desc(opportunities.createdAt))
+    .limit(1);
+  const closers = await db
+    .select({ id: users.id, name: users.name })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, "active"), eq(memberships.role, "closer")))
+    .orderBy(asc(users.name));
+  return { current: o ? { ...o, forwardedAt: o.forwardedAt ?? o.createdAt } : null, closers };
+}
+
+/**
+ * Social seller encaminha o lead qualificado: ele entra na etapa "Novo lead" do Kanban do closer escolhido,
+ * com todo o histórico do contato. Se já houver oportunidade aberta, ela é transferida (sem duplicar).
+ */
 export async function forwardToCloser(ctx: Ctx, contactId: string, input: z.infer<typeof forwardSchema>) {
   const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, contactId), contactScope(ctx)));
   if (!contact) throw notFound("Contato não encontrado.");
   await assertCloser(ctx, input.closerId);
-  const opp = await createOpportunity(ctx, { contactId, title: input.title, valueCents: input.valueCents, closerId: input.closerId });
+  const [closer] = await db.select({ name: users.name }).from(users).where(eq(users.id, input.closerId));
+  const [open] = await db.select().from(opportunities).where(and(eq(opportunities.contactId, contact.id), eq(opportunities.orgId, ctx.orgId), eq(opportunities.status, "open")));
+  const who = `${ROLE_LABEL[ctx.role]} — ${ctx.userName}`;
+  const reason = `Lead qualificado por ${who} · encaminhado para Closer — ${closer?.name ?? "?"}`;
+  let opp: typeof opportunities.$inferSelect;
+  if (open) {
+    if (open.closerId === input.closerId) throw invalid(`Este lead já está com ${closer?.name ?? "este closer"}.`);
+    const list = await stagesOf((await salesPipelineFor(ctx.orgId, input.closerId)).id);
+    const entry = equivalent(list, "entry");
+    const [from] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, open.stageId));
+    opp = await db.transaction(async (tx) => {
+      const [u] = await tx
+        .update(opportunities)
+        .set({ closerId: input.closerId, stageId: entry.id, sellerId: open.sellerId ?? (await sellerFor(ctx, contact.ownerId)), forwardedAt: new Date(), updatedAt: new Date(), version: open.version + 1 })
+        .where(eq(opportunities.id, open.id))
+        .returning();
+      await tx.insert(stageHistory).values({ orgId: ctx.orgId, entityType: "opportunity", entityId: open.id, contactId: contact.id, fromStageId: open.stageId, toStageId: entry.id, fromStageName: from?.name, toStageName: entry.name, actorId: ctx.userId, reason });
+      return u;
+    });
+  } else {
+    const product = await latestLeadProduct(ctx.orgId, contact.id);
+    opp = await createOpportunity(
+      ctx,
+      { contactId: contact.id, title: input.title?.trim() || (product?.productName ? `${product.productName} — ${contact.name}` : contact.name), valueCents: input.valueCents ?? 0, closerId: input.closerId },
+      { reason, silent: true, forwarded: true },
+    );
+  }
+  await recordForward(ctx, opp);
+  if (input.note?.trim()) {
+    await db.insert(notes).values({ orgId: ctx.orgId, contactId: contact.id, authorId: ctx.userId, body: `Ao encaminhar para ${closer?.name ?? "o closer"}: ${input.note.trim()}` });
+  }
 
-  // Move o cartão para a etapa "Encaminhado ao closer", se existir e o contato estiver no quadro.
+  // O cartão do Social Seller vai para "Encaminhado ao closer", se existir.
   const rel = await getPipeline(ctx.orgId, "relationship");
   const [target] = await db
     .select()
@@ -259,16 +464,191 @@ export async function forwardToCloser(ctx: Ctx, contactId: string, input: z.infe
   const entry = await activeEntryFor(contact.id, ctx.orgId);
   if (target && entry && entry.stageId !== target.id) {
     const { moveEntry } = await import("./board");
-    await moveEntry(ctx, entry.id, { toStageId: target.id, expectedVersion: entry.version });
+    await moveEntry(ctx, entry.id, { toStageId: target.id, expectedVersion: entry.version }).catch((e) => logger.warn("Falha ao mover o cartão do social seller", e));
   }
-  const { createTask } = await import("./tasks");
-  if (input.closerId === ctx.userId || can(ctx, "contacts.assign")) {
-    await createTask(ctx, { title: input.nextStep, contactId: contact.id, opportunityId: opp.id, ownerId: input.closerId, dueAt: input.dueAt ?? null });
-  } else {
-    // Seller não atribui tarefas a terceiros: o próximo passo vai como notificação ao closer.
-    await notifyUser({ orgId: ctx.orgId, userId: input.closerId, type: "opportunity.forwarded", title: `Encaminhado: ${contact.name}`, body: `Próximo passo: ${input.nextStep}`, link: "/comercial" });
+  if (input.nextStep?.trim()) {
+    const { createTask } = await import("./tasks");
+    await createTask(ctx, { title: input.nextStep.trim(), contactId: contact.id, opportunityId: opp.id, ownerId: input.closerId, dueAt: input.dueAt ?? null });
   }
-  return opp;
+  if (input.closerId !== ctx.userId) {
+    await notifyUser({
+      orgId: ctx.orgId,
+      userId: input.closerId,
+      type: "opportunity.forwarded",
+      title: "🔥 Novo Lead recebido",
+      body: `${contact.name} foi encaminhad${/a$/i.test(contact.name.split(" ")[0]) ? "a" : "o"} para você por ${ctx.userName.split(" ")[0]}.`,
+      link: `/comercial?op=${opp.id}`,
+    });
+  }
+  await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: opp.id, ownerIds: [input.closerId, contact.ownerId] });
+  return { ...opp, closerName: closer?.name ?? null };
+}
+
+const FLOW = ["entry", "contacted", "scheduled", "meeting_done", "follow_up", "negotiation"];
+
+/**
+ * O CRM organiza sozinho: reunião marcada ou realizada avança o lead no Kanban do closer
+ * (somente para frente, nunca volta etapas nem mexe em vendas fechadas).
+ */
+async function autoAdvance(ctx: Ctx, contactId: string, toType: "scheduled" | "meeting_done", reason: string) {
+  try {
+    const [o] = await db.select().from(opportunities).where(and(eq(opportunities.contactId, contactId), eq(opportunities.orgId, ctx.orgId), eq(opportunities.status, "open"))).orderBy(desc(opportunities.updatedAt)).limit(1);
+    if (!o) return;
+    const [cur] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, o.stageId));
+    if (!cur) return;
+    const curIdx = FLOW.indexOf(cur.stageType);
+    if (curIdx === -1 || curIdx >= FLOW.indexOf(toType)) return;
+    const to = (await stagesOf(cur.pipelineId)).find((s) => s.stageType === toType);
+    if (!to) return;
+    await db.transaction(async (tx) => {
+      const [u] = await tx.update(opportunities).set({ stageId: to.id, version: o.version + 1, updatedAt: new Date() }).where(and(eq(opportunities.id, o.id), eq(opportunities.version, o.version))).returning();
+      if (!u) return;
+      await tx.insert(stageHistory).values({ orgId: ctx.orgId, entityType: "opportunity", entityId: o.id, contactId, fromStageId: cur.id, toStageId: to.id, fromStageName: cur.name, toStageName: to.name, actorId: ctx.userId, reason: `Automático: ${reason}` });
+      await recordStageMove(ctx, u, cur.stageType, to.stageType, tx);
+    });
+    await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId, o.sellerId] });
+  } catch (e) {
+    logger.warn("Falha ao avançar o lead no Kanban", e);
+  }
+}
+
+// ---------- Kanban comercial ----------
+export const boardSchema = z.object({ ownerId: z.string().uuid().optional() });
+
+/** Kanban do closer (gestores escolhem de quem). Mostra abertas + fechadas nos últimos 30 dias. */
+export async function getCommercialBoard(ctx: Ctx, f: z.infer<typeof boardSchema>) {
+  if (ctx.role === "seller") throw forbidden("O Kanban comercial é dos closers. Acompanhe seus encaminhamentos na aba Encaminhados.");
+  const people = can(ctx, "data.all")
+    ? await db
+        .select({ id: users.id, name: users.name, role: memberships.role })
+        .from(memberships)
+        .innerJoin(users, eq(users.id, memberships.userId))
+        .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, "active"), inArray(memberships.role, ["closer", "manager", "admin"])))
+        .orderBy(sql`${memberships.role} <> 'closer'`, asc(users.name))
+    : [];
+  const ownerId = ctx.role === "closer" ? ctx.userId : (f.ownerId ?? people.find((p) => p.role === "closer")?.id ?? null);
+  const pipeline = await salesPipelineFor(ctx.orgId, ownerId);
+  const stages = await stagesOf(pipeline.id);
+
+  // Autocorreção: oportunidade do closer que ficou em etapa de outro funil vai para a equivalente.
+  if (ownerId) {
+    const stray = await db
+      .select({ id: opportunities.id, type: pipelineStages.stageType, status: opportunities.status })
+      .from(opportunities)
+      .innerJoin(pipelineStages, eq(pipelineStages.id, opportunities.stageId))
+      .where(and(eq(opportunities.orgId, ctx.orgId), eq(opportunities.closerId, ownerId), sql`${pipelineStages.pipelineId} <> ${pipeline.id}`, sql`(${opportunities.status} = 'open' or ${opportunities.closedAt} > now() - interval '30 days')`));
+    for (const s of stray) {
+      const to = equivalent(stages, s.status === "open" ? s.type : s.status);
+      if (to) await db.update(opportunities).set({ stageId: to.id }).where(eq(opportunities.id, s.id));
+    }
+  }
+
+  const stageIds = stages.map((s) => s.id);
+  const cards = stageIds.length
+    ? await db
+        .select({
+          id: opportunities.id,
+          title: opportunities.title,
+          valueCents: opportunities.valueCents,
+          status: opportunities.status,
+          stageId: opportunities.stageId,
+          version: opportunities.version,
+          contactId: contacts.id,
+          contactName: contacts.name,
+          contactUsername: contacts.username,
+          contactPhone: contacts.phone,
+          avatarUrl: contacts.avatarUrl,
+          product: opportunities.product,
+          closedAt: opportunities.closedAt,
+          lostReason: opportunities.lostReason,
+          forwardedAt: opportunities.forwardedAt,
+          createdAt: opportunities.createdAt,
+          updatedAt: opportunities.updatedAt,
+          sellerName: sql<string | null>`(select u.name from ${users} u where u.id = ${opportunities.sellerId})`,
+          sourceName: sql<string | null>`(select s.name from lead_sources s where s.id = ${contacts.firstSourceId})`,
+          sourceColor: sql<string | null>`(select s.color from lead_sources s where s.id = ${contacts.firstSourceId})`,
+          nextMeetingAt: sql<string | null>`(select min(a.starts_at) from ${appointments} a where a.contact_id = ${contacts.id} and a.status = 'scheduled' and a.starts_at > now() - interval '2 hours')`,
+          nextTaskAt: sql<string | null>`(select min(t.due_at) from tasks t where t.contact_id = ${contacts.id} and t.status <> 'done')`,
+          openTasks: sql<number>`(select count(*)::int from tasks t where t.contact_id = ${contacts.id} and t.status <> 'done')`,
+          enteredStageAt: sql<string | null>`(select max(h.created_at) from ${stageHistory} h where h.entity_id = ${opportunities.id} and h.to_stage_id = ${opportunities.stageId})`,
+        })
+        .from(opportunities)
+        .innerJoin(contacts, eq(contacts.id, opportunities.contactId))
+        .where(
+          and(
+            opportunityScope(ctx),
+            inArray(opportunities.stageId, stageIds),
+            ownerId ? eq(opportunities.closerId, ownerId) : isNull(opportunities.closerId),
+            sql`(${opportunities.status} = 'open' or ${opportunities.closedAt} > now() - interval '30 days')`,
+          ),
+        )
+        .orderBy(desc(opportunities.updatedAt))
+        .limit(500)
+    : [];
+  return {
+    ownerId,
+    pipelineId: pipeline.id,
+    canEdit: (!!ownerId && ownerId === ctx.userId) || can(ctx, "pipeline.edit"),
+    people,
+    stages: stages.map((s) => ({ id: s.id, key: s.key, name: s.name, color: s.color, position: s.position, stageType: s.stageType })),
+    cards: cards.map((c) => ({ ...c, valueCents: Number(c.valueCents) })),
+  };
+}
+
+/** Lead dentro do Comercial: tudo o que veio do social seller, do formulário e o histórico. */
+export async function getOpportunityDetail(ctx: Ctx, id: string) {
+  const o = await getVisibleOpportunity(ctx, id);
+  const [contact] = await db
+    .select({ id: contacts.id, name: contacts.name, phone: contacts.phone, email: contacts.email, username: contacts.username, avatarUrl: contacts.avatarUrl, summary: contacts.summary, ownerId: contacts.ownerId })
+    .from(contacts)
+    .where(eq(contacts.id, o.contactId));
+  const [stage] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, o.stageId));
+  const stages = stage ? await stagesOf(stage.pipelineId) : [];
+  const ids = [o.closerId, o.sellerId, contact?.ownerId].filter((x): x is string => !!x);
+  const names = ids.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids)) : [];
+  const nameOf = (uid: string | null | undefined) => names.find((n) => n.id === uid)?.name ?? null;
+  const [lead] = await db
+    .select({ id: leads.id, answers: leads.answers, utm: leads.utm, preferredAt: leads.preferredAt, preferredText: leads.preferredText, createdAt: leads.createdAt, formName: leadForms.name, campaign: leads.campaign, custom: leads.custom })
+    .from(leads)
+    .leftJoin(leadForms, eq(leadForms.id, leads.formId))
+    .where(and(eq(leads.contactId, o.contactId), eq(leads.orgId, ctx.orgId)))
+    .orderBy(desc(leads.createdAt))
+    .limit(1);
+  const history = await db
+    .select({ id: stageHistory.id, at: stageHistory.createdAt, from: stageHistory.fromStageName, to: stageHistory.toStageName, reason: stageHistory.reason, actorName: users.name })
+    .from(stageHistory)
+    .leftJoin(users, eq(users.id, stageHistory.actorId))
+    .where(and(eq(stageHistory.entityType, "opportunity"), eq(stageHistory.entityId, o.id)))
+    .orderBy(desc(stageHistory.createdAt))
+    .limit(50);
+  const noteRows = await db
+    .select({ id: notes.id, body: notes.body, createdAt: notes.createdAt, authorName: users.name })
+    .from(notes)
+    .leftJoin(users, eq(users.id, notes.authorId))
+    .where(eq(notes.contactId, o.contactId))
+    .orderBy(desc(notes.createdAt))
+    .limit(20);
+  const meetings = await db
+    .select({ id: appointments.id, title: appointments.title, startsAt: appointments.startsAt, status: appointments.status, location: appointments.location })
+    .from(appointments)
+    .where(and(eq(appointments.contactId, o.contactId), eq(appointments.orgId, ctx.orgId)))
+    .orderBy(desc(appointments.startsAt))
+    .limit(10);
+  const { contactJourney } = await import("./journey");
+  return {
+    ...o,
+    valueCents: Number(o.valueCents),
+    closerName: nameOf(o.closerId),
+    sellerName: nameOf(o.sellerId),
+    stage: stage ? { id: stage.id, name: stage.name, color: stage.color, stageType: stage.stageType } : null,
+    stages: stages.map((s) => ({ id: s.id, name: s.name, color: s.color, stageType: s.stageType })),
+    contact: contact ? { ...contact, ownerName: nameOf(contact.ownerId) } : null,
+    lead: lead ?? null,
+    history,
+    notes: noteRows,
+    meetings,
+    journey: await contactJourney(ctx, o.contactId),
+  };
 }
 
 // ---------- Reuniões ----------
@@ -321,7 +701,7 @@ export async function listAppointments(ctx: Ctx, f: z.infer<typeof listAppointme
     .limit(200);
 }
 
-export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointmentInputSchema>) {
+export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointmentInputSchema>, opts: { silent?: boolean } = {}) {
   const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, input.contactId), contactScope(ctx)));
   if (!contact) throw invalid("Contato inválido.");
   const ownerId = input.ownerId ?? ctx.userId;
@@ -344,15 +724,18 @@ export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointm
       timezone: input.timezone,
       location: cleanText(input.location, 300),
       notes: cleanText(input.notes),
+      createdBy: ctx.userId,
     })
     .returning();
   await audit(db, ctx, "appointment.created", "appointment", a.id);
+  await recordMeetingStatus(ctx, a, null).catch((e) => logger.warn("Falha ao registrar reunião agendada", e));
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: a.id, ownerIds: [ownerId, contact.ownerId] });
-  await alertMeeting(ctx, { contactId: contact.id, title: a.title, startsAt: a.startsAt, ownerId }).catch((e) => logger.warn("Falha no alerta de reunião", e));
+  if (!opts.silent) await autoAdvance(ctx, contact.id, "scheduled", "Reunião agendada");
+  if (!opts.silent) await alertMeeting(ctx, { contactId: contact.id, title: a.title, startsAt: a.startsAt, ownerId }).catch((e) => logger.warn("Falha no alerta de reunião", e));
   // Agenda Google do responsável (se conectada): cria o evento e o link do Meet.
   const { syncSoon } = await import("./calendar");
   syncSoon(a.id);
-  if (ownerId !== ctx.userId) {
+  if (ownerId !== ctx.userId && !opts.silent) {
     await notifyUser({
       orgId: ctx.orgId,
       userId: ownerId,
@@ -374,8 +757,11 @@ export const updateAppointmentSchema = z.object({
   status: z.enum(["scheduled", "done", "canceled", "no_show"]).optional(),
 });
 
-export async function updateAppointment(ctx: Ctx, id: string, input: z.infer<typeof updateAppointmentSchema>) {
-  const [a] = await db.select().from(appointments).where(and(eq(appointments.id, id), appointmentScope(ctx)));
+export async function updateAppointment(ctx: Ctx, id: string, input: z.infer<typeof updateAppointmentSchema>, opts: { skipScope?: boolean; internal?: boolean } = {}) {
+  const [a] = await db
+    .select()
+    .from(appointments)
+    .where(and(eq(appointments.id, id), opts.skipScope ? eq(appointments.orgId, ctx.orgId) : appointmentScope(ctx)));
   if (!a) throw notFound("Reunião não encontrada.");
   const startsAt = input.startsAt ?? a.startsAt;
   const endsAt = input.endsAt ?? a.endsAt;
@@ -390,7 +776,11 @@ export async function updateAppointment(ctx: Ctx, id: string, input: z.infer<typ
     })
     .where(eq(appointments.id, a.id))
     .returning();
-  if (input.status && input.status !== a.status) await audit(db, ctx, "appointment.status", "appointment", a.id, { from: a.status, to: input.status });
+  if (input.status && input.status !== a.status) {
+    await audit(db, ctx, "appointment.status", "appointment", a.id, { from: a.status, to: input.status });
+    await recordMeetingStatus(ctx, u, a.status).catch((e) => logger.warn("Falha ao registrar status da reunião", e));
+    if (input.status === "done" && !opts.internal) await autoAdvance(ctx, a.contactId, "meeting_done", "Reunião realizada");
+  }
   // Reunião de lead cancelada: o lead volta para "em contato" para ser remarcado.
   if (a.leadId && input.status === "canceled" && a.status !== "canceled") {
     await db.update(leads).set({ status: "contacted", updatedAt: new Date() }).where(and(eq(leads.id, a.leadId), eq(leads.appointmentId, a.id)));

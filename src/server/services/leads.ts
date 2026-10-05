@@ -26,7 +26,7 @@ import { can, leadScope } from "../permissions";
 import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
-import { audit, cleanText, getPipeline, normalizeHandle, notifyUser } from "./common";
+import { audit, cleanText, closerPipeline, getPipeline, normalizeHandle, notifyUser } from "./common";
 import { addToBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 
@@ -297,17 +297,21 @@ export async function ingestLead(form: Integration, input: LeadInput) {
     // Funil de destino.
     let opportunityId: string | null = null;
     if (locked.pipelineKind === "sales") {
-      const sales = await getPipeline(form.orgId, "sales", tx);
-      const [stage] = locked.salesStageId
-        ? await tx.select().from(pipelineStages).where(and(eq(pipelineStages.id, locked.salesStageId), isNull(pipelineStages.archivedAt)))
-        : await tx.select().from(pipelineStages).where(and(eq(pipelineStages.pipelineId, sales.id), isNull(pipelineStages.archivedAt))).orderBy(asc(pipelineStages.position)).limit(1);
+      // Closer recebe no próprio Kanban (etapa de mesmo tipo da escolhida na integração); sem closer, funil padrão.
+      const [am] = assignedTo ? await tx.select({ role: memberships.role }).from(memberships).where(and(eq(memberships.orgId, form.orgId), eq(memberships.userId, assignedTo))) : [];
+      const closerId = am && am.role !== "seller" ? assignedTo : null;
+      const sales = closerId ? await closerPipeline(form.orgId, closerId, tx) : await getPipeline(form.orgId, "sales", tx);
+      const list = await tx.select().from(pipelineStages).where(and(eq(pipelineStages.pipelineId, sales.id), isNull(pipelineStages.archivedAt))).orderBy(asc(pipelineStages.position));
+      const [chosen] = locked.salesStageId ? await tx.select().from(pipelineStages).where(eq(pipelineStages.id, locked.salesStageId)) : [];
+      const wanted = chosen && !["won", "lost"].includes(chosen.stageType) ? chosen.stageType : "entry";
+      const stage = list.find((x) => x.id === chosen?.id) ?? list.find((x) => x.stageType === wanted) ?? list.find((x) => x.stageType === "entry") ?? list[0];
       if (stage) {
         const [open] = await tx.select({ id: opportunities.id }).from(opportunities).where(and(eq(opportunities.contactId, contact.id), eq(opportunities.status, "open")));
         if (open) opportunityId = open.id;
         else {
           const [o] = await tx
             .insert(opportunities)
-            .values({ orgId: form.orgId, contactId: contact.id, title: `${prod?.name ?? locked.name} — ${input.name}`, product: prod?.name ?? null, valueCents: 0, closerId: assignedTo, stageId: stage.id })
+            .values({ orgId: form.orgId, contactId: contact.id, title: `${prod?.name ?? locked.name} — ${input.name}`, product: prod?.name ?? null, productId: productId ?? null, valueCents: 0, closerId, sellerId: closerId ? null : assignedTo, stageId: stage.id })
             .returning();
           await tx.insert(stageHistory).values({ orgId: form.orgId, entityType: "opportunity", entityId: o.id, contactId: contact.id, toStageId: stage.id, toStageName: stage.name, reason: `Lead · ${locked.name}` });
           opportunityId = o.id;
@@ -531,6 +535,10 @@ export async function updateLead(ctx: Ctx, id: string, input: z.infer<typeof upd
     patch.assignedTo = input.assignedTo;
   }
   const [u] = await db.update(leads).set(patch).where(eq(leads.id, l.id)).returning();
+  if (input.status === "contacted" || input.status === "no_answer") {
+    const { recordContactMade } = await import("./salesEvents");
+    if (input.status === "contacted") await recordContactMade(ctx, l.contactId);
+  }
   if (patch.assignedTo) {
     // Contato acompanha o lead quando ainda não tinha dono.
     await db.update(contacts).set({ ownerId: patch.assignedTo }).where(and(eq(contacts.id, l.contactId), isNull(contacts.ownerId)));

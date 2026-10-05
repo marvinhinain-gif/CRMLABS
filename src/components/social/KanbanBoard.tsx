@@ -18,7 +18,8 @@ import {
   type Announcements,
   type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
-import { ArrowRightLeft, Clock, Ellipsis, MessageCircle, Plus, SquarePen, UserRound, X } from "lucide-react";
+import { ArrowRightLeft, Clock, Ellipsis, MessageCircle, Plus, Send, SquarePen, UserRound, X } from "lucide-react";
+import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { api, ApiError, fetcher, qs } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useOpenContact } from "@/lib/nav";
@@ -81,7 +82,7 @@ function CardBody({ card, menu }: { card: BoardCard; menu?: React.ReactNode }) {
   );
 }
 
-function DraggableCard({ card, stages, onMove, onOpen, onRemove }: { card: BoardCard; stages: Board["stages"]; onMove: (card: BoardCard, toStageId: string) => void; onOpen: () => void; onRemove: () => void }) {
+function DraggableCard({ card, stages, onMove, onOpen, onRemove, onForward }: { card: BoardCard; stages: Board["stages"]; onMove: (card: BoardCard, toStageId: string) => void; onOpen: () => void; onRemove: () => void; onForward: () => void }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: card.entryId, data: { card } });
   return (
     <article
@@ -131,6 +132,9 @@ function DraggableCard({ card, stages, onMove, onOpen, onRemove }: { card: Board
                     ))}
                   </MenuSubContent>
                 </MenuSub>
+                <MenuItem icon={<Send />} onSelect={onForward}>
+                  Encaminhar para Closer
+                </MenuItem>
                 <MenuSeparator />
                 <MenuItem icon={<X />} onSelect={onRemove}>
                   Remover do quadro
@@ -151,6 +155,7 @@ function Column({
   onMove,
   onOpen,
   onRemove,
+  onForward,
   onAdd,
   onEditStages,
   canEdit,
@@ -161,6 +166,7 @@ function Column({
   onMove: (card: BoardCard, toStageId: string) => void;
   onOpen: (contactId: string) => void;
   onRemove: (card: BoardCard) => void;
+  onForward: (card: BoardCard) => void;
   onAdd: (stageId: string) => void;
   onEditStages: () => void;
   canEdit: boolean;
@@ -214,7 +220,7 @@ function Column({
       </header>
       <div className="flex min-h-[80px] flex-col gap-3">
         {cards.map((card) => (
-          <DraggableCard key={card.entryId} card={card} stages={stages} onMove={onMove} onOpen={() => onOpen(card.contactId)} onRemove={() => onRemove(card)} />
+          <DraggableCard key={card.entryId} card={card} stages={stages} onMove={onMove} onOpen={() => onOpen(card.contactId)} onRemove={() => onRemove(card)} onForward={() => onForward(card)} />
         ))}
         {cards.length === 0 && <p className="px-2 py-6 text-center text-[13px] text-muted">Nenhum contato nesta etapa.</p>}
         {cards.length < stage.total && (
@@ -291,6 +297,7 @@ export function KanbanBoard({ filters, onAdd, onEditStages }: { filters: BoardFi
     }
   };
 
+  const [forwarding, setForwarding] = useState<BoardCard | null>(null);
   const remove = async (card: BoardCard) => {
     try {
       await api.del(`/api/board/entries/${card.entryId}`);
@@ -332,10 +339,11 @@ export function KanbanBoard({ filters, onAdd, onEditStages }: { filters: BoardFi
       <div className="-mx-4 sm:mx-0 overflow-x-auto scroll-thin pb-3">
         <div className="flex snap-x snap-mandatory gap-4 px-4 sm:px-0 sm:snap-none items-start">
           {data.stages.map((s) => (
-            <Column key={s.id} stage={s} stages={data.stages} filters={filters} onMove={move} onOpen={openContact} onRemove={remove} onAdd={onAdd} onEditStages={onEditStages} canEdit={me.permissions.pipelineEdit} />
+            <Column key={s.id} stage={s} stages={data.stages} filters={filters} onMove={move} onOpen={openContact} onRemove={remove} onForward={setForwarding} onAdd={onAdd} onEditStages={onEditStages} canEdit={me.permissions.pipelineEdit} />
           ))}
         </div>
       </div>
+      {forwarding && <ForwardDialog open onOpenChange={(v) => !v && setForwarding(null)} contactId={forwarding.contactId} contactName={forwarding.name} />}
       <DragOverlay dropAnimation={null}>
         {active && (
           <div className="w-[270px] rotate-[1.5deg] rounded-[20px] border-2 border-brand bg-white p-4 shadow-[var(--shadow-pop)]">

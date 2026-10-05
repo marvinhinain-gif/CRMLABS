@@ -260,6 +260,9 @@ export async function moveEntry(ctx: Ctx, entryId: string, input: z.infer<typeof
   });
   if (result.changed) {
     await publish({ orgId: ctx.orgId, topic: "board", entityId: result.contact.id, ownerIds: [result.contact.ownerId] });
+    // Mover o cartão é trabalho com o contato: conta como contato realizado (uma vez por dia).
+    const { recordContactMade } = await import("./salesEvents");
+    await recordContactMade(ctx, result.contact.id);
     await alertLeadStage(ctx, { contactId: result.contact.id, contactName: result.contact.name, from: result.fromName, to: result.toName }).catch((e) => logger.warn("Falha no alerta de etapa", e));
   }
   return { id: result.entry.id, stageId: result.entry.stageId, version: result.entry.version };
