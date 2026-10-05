@@ -10,7 +10,7 @@ import { logger } from "../logger";
 import { audit } from "./common";
 
 /** Chaves cujo valor é guardado criptografado. */
-const SECRET_KEYS = new Set(["instagram.app_secret", "instagram.verify_token", "push.vapid_private"]);
+const SECRET_KEYS = new Set(["instagram.app_secret", "instagram.verify_token", "push.vapid_private", "google.client_secret"]);
 const TTL_MS = 30_000;
 
 /** Carrega (com cache curto) as configurações salvas no banco. Seguro chamar em toda requisição. */

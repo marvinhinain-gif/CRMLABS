@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from "react";
 import useSWR from "swr";
-import { CalendarCheck, ChevronRight, ClipboardList, Inbox, Megaphone, Search } from "lucide-react";
+import Link from "next/link";
+import { CalendarCheck, ChevronRight, Inbox, Plug, Search } from "lucide-react";
 import { fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useQueryParam } from "@/lib/nav";
 import { formatPhone, longDayTime, relativeTime } from "@/lib/format";
-import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Select, Tabs } from "@/components/ui";
+import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Select } from "@/components/ui";
+import { SourceChip } from "@/components/integrations/shared";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { LeadSheet, LEAD_STATUS } from "./LeadSheet";
-import { FormsManager } from "./FormsManager";
 
 export type LeadRow = {
   id: string;
@@ -27,6 +28,9 @@ export type LeadRow = {
   assignedName: string | null;
   formName: string | null;
   utmCampaign: string | null;
+  sourceName: string | null;
+  sourceColor: string | null;
+  productName: string | null;
   appointmentAt: string | null;
 };
 type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number> };
@@ -64,7 +68,12 @@ function LeadCard({ l, i, onOpen }: { l: LeadRow; i: number; onOpen: () => void 
             <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
           </span>
           <span className="mt-0.5 block truncate text-[13px] text-muted">
-            {[formatPhone(l.phone), l.instagram && `@${l.instagram}`, l.formName].filter(Boolean).join(" · ")}
+            {[formatPhone(l.phone), l.instagram && `@${l.instagram}`].filter(Boolean).join(" · ")}
+          </span>
+          <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px]">
+            {l.sourceName && <SourceChip name={l.sourceName} color={l.sourceColor} />}
+            {l.formName && <span className="rounded-full bg-page px-2.5 py-0.5 text-muted">{l.formName}</span>}
+            {l.productName && <span className="rounded-full bg-page px-2.5 py-0.5 text-ink">Interesse: {l.productName}</span>}
           </span>
           <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
             <span className="text-muted">{relativeTime(l.createdAt)}</span>
@@ -152,7 +161,7 @@ function LeadList() {
           <EmptyState
             icon={<Inbox />}
             title={status === "open" ? "Nenhum lead esperando atendimento" : "Nenhum lead encontrado"}
-            description={me.permissions.dataAll ? "Leads chegam pelos formulários dos anúncios. Crie um na aba Formulários." : "Quando um lead de anúncio chegar para você, ele aparece aqui e você recebe uma notificação."}
+            description={me.user.role === "admin" ? "Leads chegam pelas integrações (formulários, quizzes, webhooks). Configure em Integrações." : "Quando um novo lead chegar para você, ele aparece aqui e você recebe uma notificação."}
           />
         ) : (
           <>
@@ -185,24 +194,21 @@ function LeadList() {
 
 export function LeadsView() {
   const me = useMe();
-  const manage = me.permissions.dataAll && me.user.role !== "closer";
-  const [tab, setTab] = useQueryParam("aba", "leads");
   const [leadId, setLeadId] = useQueryParam("lead", "");
   return (
     <div className="mx-auto flex max-w-[1200px] flex-col gap-5">
-      <PageHeader title="Leads" subtitle="Pessoas que preencheram o formulário de um anúncio. Atenda rápido e confirme a reunião." />
-      {manage && (
-        <Tabs
-          value={tab as "leads" | "formularios"}
-          onChange={(v) => setTab(v)}
-          items={[
-            { value: "leads", label: "Leads", icon: <Megaphone /> },
-            { value: "formularios", label: "Formulários", icon: <ClipboardList /> },
-          ]}
-          className="self-start"
-        />
-      )}
-      {manage && tab === "formularios" ? <FormsManager /> : <LeadList />}
+      <PageHeader
+        title="Leads"
+        subtitle="Pessoas que chegaram pelos formulários, quizzes e integrações. Atenda rápido e confirme a reunião."
+        actions={
+          me.user.role === "admin" ? (
+            <Link href="/integracoes" className="inline-flex h-11 items-center gap-2 rounded-[14px] border border-line bg-white px-4 text-[14px] font-medium hover:bg-page">
+              <Plug className="size-4" aria-hidden /> Configurar entradas
+            </Link>
+          ) : undefined
+        }
+      />
+      <LeadList />
       <LeadSheet leadId={leadId || null} onClose={() => setLeadId(null)} />
     </div>
   );

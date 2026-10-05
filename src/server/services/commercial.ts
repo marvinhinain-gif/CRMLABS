@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { appointments, contactTags, contacts, leadForms, leads, opportunities, pipelineStages, stageHistory, tags, users } from "../db/schema";
+import { appointments, contactTags, contacts, leadForms, leads, notes, opportunities, pipelineStages, stageHistory, tags, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { appointmentScope, assertCan, can, contactScope, opportunityScope } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
@@ -349,6 +349,9 @@ export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointm
   await audit(db, ctx, "appointment.created", "appointment", a.id);
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: a.id, ownerIds: [ownerId, contact.ownerId] });
   await alertMeeting(ctx, { contactId: contact.id, title: a.title, startsAt: a.startsAt, ownerId }).catch((e) => logger.warn("Falha no alerta de reunião", e));
+  // Agenda Google do responsável (se conectada): cria o evento e o link do Meet.
+  const { syncSoon } = await import("./calendar");
+  syncSoon(a.id);
   if (ownerId !== ctx.userId) {
     await notifyUser({
       orgId: ctx.orgId,
@@ -398,6 +401,10 @@ export async function updateAppointment(ctx: Ctx, id: string, input: z.infer<typ
     await publish({ orgId: ctx.orgId, topic: "leads", entityId: a.leadId });
   }
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: a.id, ownerIds: [a.ownerId] });
+  if (input.startsAt || input.endsAt || input.status || input.title || input.location !== undefined || input.notes !== undefined) {
+    const { syncSoon } = await import("./calendar");
+    syncSoon(a.id);
+  }
   return u;
 }
 
@@ -484,6 +491,15 @@ export async function getAgendaItem(ctx: Ctx, id: string) {
     .where(and(eq(appointments.contactId, a.contactId), appointmentScope(ctx), sql`${appointments.id} <> ${a.id}`))
     .orderBy(desc(appointments.startsAt))
     .limit(5);
+  // Ficha de preparação: anotações do social seller e jornada de origem.
+  const noteRows = await db
+    .select({ id: notes.id, body: notes.body, createdAt: notes.createdAt, authorName: users.name })
+    .from(notes)
+    .leftJoin(users, eq(users.id, notes.authorId))
+    .where(eq(notes.contactId, a.contactId))
+    .orderBy(desc(notes.createdAt))
+    .limit(10);
+  const { contactJourney } = await import("./journey");
   return {
     ...a,
     ownerName: nameOf(a.ownerId),
@@ -491,5 +507,7 @@ export async function getAgendaItem(ctx: Ctx, id: string) {
     lead,
     opportunity,
     history,
+    sellerNotes: noteRows,
+    journey: await contactJourney(ctx, a.contactId),
   };
 }

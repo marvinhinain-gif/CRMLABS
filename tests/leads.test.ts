@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/server/db";
 import { appointments, contacts, leadForms, leads, notifications, relationshipEntries } from "@/server/db/schema";
-import { createForm, getLead, ingestWebhookLead, listForms, listLeads, normalizePhone, scheduleLead, submitPublicForm, updateForm, updateLead } from "@/server/services/leads";
+import { getLead, listLeads, normalizePhone, scheduleLead, submitPublicForm, updateLead } from "@/server/services/leads";
+import { createForm, ingestWebhookLead, listForms, updateForm } from "@/server/services/integrations";
 import { listAppointments } from "@/server/services/commercial";
 import { setupOrg } from "./helpers";
 
@@ -38,7 +39,7 @@ describe("leads de anúncio", () => {
     expect(all).toHaveLength(2);
     expect(new Set(all.map((l) => l.assignedTo))).toEqual(new Set([u.seller.id, u.seller2.id])); // rodízio
     const ana = all[0];
-    expect(ana).toMatchObject({ name: "Ana Souza", phone: "+5571999991111", email: "ana@x.com", instagram: "anasouza", status: "new", channel: "form" });
+    expect(ana).toMatchObject({ name: "Ana Souza", phone: "+5571999991111", email: "ana@x.com", instagram: "anasouza", status: "new", channel: "crmlabs_form" });
     expect(ana.answers).toEqual([
       { label: "Qual o seu faturamento mensal?", value: "10 a 50 mil" },
       { label: "Seu maior desafio hoje", value: "Gerar leads" },

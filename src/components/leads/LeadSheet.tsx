@@ -11,6 +11,7 @@ import { formatDateTime, formatPhone, longDayTime, relativeTime, whatsappLink } 
 import { Avatar, Button, cx, ErrorState, LoadingState, Select, Sheet, SheetClose } from "@/components/ui";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
+import { JourneySection, OriginTrail, type Journey } from "@/components/integrations/Journey";
 
 export const LEAD_STATUS = {
   new: { label: "Novo", cls: "bg-brand text-white" },
@@ -54,6 +55,14 @@ type LeadDetail = {
   contact: { id: string; name: string; avatarUrl: string | null; username: string | null } | null;
   appointment: { id: string; startsAt: string; endsAt: string; status: string; title: string; ownerName: string | null; location: string | null } | null;
   previous: { id: string; createdAt: string; formName: string | null }[];
+  source: { name: string; color: string } | null;
+  productName: string | null;
+  campaign: string | null;
+  adChannel: string | null;
+  partner: string | null;
+  adName: string | null;
+  customValues: { label: string; value: string }[];
+  journey: Journey | null;
 };
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -170,8 +179,20 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
         )}
 
-        <h3 className="mt-6 text-[13px] font-semibold uppercase tracking-wide text-muted">Dados do formulário</h3>
+        <h3 className="mt-6 text-[13px] font-semibold uppercase tracking-wide text-muted">Origem</h3>
+        <div className="mt-2 rounded-[16px] border border-line p-3.5">
+          <OriginTrail source={l.source} parts={[l.adChannel, l.partner, l.campaign, l.formName]} at={l.createdAt} />
+          {l.adName && <p className="mt-1.5 text-[12.5px] text-muted">Conteúdo / anúncio: {l.adName}</p>}
+        </div>
+
+        <h3 className="mt-6 text-[13px] font-semibold uppercase tracking-wide text-muted">Formulário / Aplicação{l.formName ? ` · ${l.formName}` : ""}</h3>
         <dl className="mt-1 divide-y divide-line">
+          {l.productName && <Row label="Produto de interesse">{l.productName}</Row>}
+          {l.customValues.map((c) => (
+            <Row key={c.label} label={c.label}>
+              {c.value}
+            </Row>
+          ))}
           <Row label="Nome">{l.name}</Row>
           {l.phone && <Row label="WhatsApp">{formatPhone(l.phone)}</Row>}
           {l.email && <Row label="E-mail">{l.email}</Row>}
@@ -191,7 +212,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
 
         {utm.length > 0 && (
           <>
-            <h3 className="mt-6 text-[13px] font-semibold uppercase tracking-wide text-muted">Anúncio</h3>
+            <h3 className="mt-6 text-[13px] font-semibold uppercase tracking-wide text-muted">Parâmetros do anúncio (UTM)</h3>
             <div className="mt-2 flex flex-wrap gap-2">
               {utm.map(([k, v]) => (
                 <span key={k} className="rounded-full bg-page px-3 py-1 text-[12.5px]">
@@ -224,6 +245,9 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           {l.contactedAt && <Row label="Primeiro contato">{formatDateTime(l.contactedAt)}</Row>}
           {l.previous.length > 0 && <Row label="Já preencheu antes">{l.previous.map((p) => `${formatDateTime(p.createdAt)}${p.formName ? ` · ${p.formName}` : ""}`).join("\n")}</Row>}
         </dl>
+        <div className="mt-6">
+          <JourneySection contactId={l.contactId} initial={l.journey} />
+        </div>
         <Link href={`?contato=${l.contactId}`} className="mt-4 inline-flex items-center gap-1.5 text-[14px] font-semibold text-brand hover:underline">
           <SquareUser className="size-4" aria-hidden /> Abrir ficha completa do contato
         </Link>

@@ -27,6 +27,7 @@ import {
   UserRound,
   Megaphone,
   CalendarDays,
+  Plug,
 } from "lucide-react";
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { api, fetcher } from "@/lib/api";
@@ -38,7 +39,7 @@ import { Avatar, cx, IconButton, Menu, MenuContent, MenuItem, MenuLabel, MenuSep
 import { ContactPanel } from "@/components/contacts/ContactPanel";
 import { PushPrompt } from "./PushPrompt";
 
-const NAV: { href: string; label: string; icon: typeof House; badge?: "conversations" | "leads" }[] = [
+const NAV: { href: string; label: string; icon: typeof House; badge?: "conversations" | "leads"; adminOnly?: boolean }[] = [
   { href: "/dashboard", label: "Visão geral", icon: House },
   { href: "/social-seller", label: "Social Seller", icon: Users },
   { href: "/leads", label: "Leads", icon: Megaphone, badge: "leads" },
@@ -47,6 +48,7 @@ const NAV: { href: string; label: string; icon: typeof House; badge?: "conversat
   { href: "/contatos", label: "Contatos", icon: SquareUser },
   { href: "/comercial", label: "Comercial", icon: ChartNoAxesColumn },
   { href: "/tarefas", label: "Tarefas", icon: SquareCheck },
+  { href: "/integracoes", label: "Integrações", icon: Plug, adminOnly: true },
 ];
 
 const TITLES: Record<string, string> = {
@@ -54,6 +56,7 @@ const TITLES: Record<string, string> = {
   "/social-seller": "Social Seller",
   "/leads": "Leads",
   "/agendamentos": "Agendamentos",
+  "/integracoes": "Integrações",
   "/conversas": "Conversas",
   "/contatos": "Contatos",
   "/comercial": "Comercial",
@@ -66,7 +69,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?:
   const me = useMe();
   return (
     <nav aria-label="Menu principal" className="flex flex-col gap-1.5">
-      {NAV.map((item) => {
+      {NAV.filter((item) => !item.adminOnly || me.user.role === "admin").map((item) => {
         const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
         const Icon = item.icon;
         const count = item.badge === "conversations" ? me.counts.unreadConversations : item.badge === "leads" ? (me.counts.newLeads ?? 0) : 0;

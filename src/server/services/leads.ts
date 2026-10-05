@@ -1,17 +1,34 @@
 import { and, asc, desc, eq, gt, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbOrTx } from "../db";
-import { appointments, contacts, leadForms, leads, loginAttempts, memberships, organizations, pipelineStages, relationshipEntries, users, type LeadQuestion } from "../db/schema";
+import {
+  appointments,
+  contactTouchpoints,
+  contacts,
+  customFields,
+  integrationLogs,
+  leadForms,
+  leadSources,
+  leads,
+  loginAttempts,
+  memberships,
+  opportunities,
+  organizations,
+  pipelineStages,
+  products,
+  relationshipEntries,
+  stageHistory,
+  users,
+} from "../db/schema";
 import type { Ctx } from "../context";
-import { decryptSecret, encryptSecret, randomToken, sha256 } from "../crypto";
-import { appUrl } from "../env";
 import { AppError, forbidden, invalid, notFound } from "../errors";
-import { assertCan, can, leadScope } from "../permissions";
+import { can, leadScope } from "../permissions";
 import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
-import { audit, cleanText, normalizeHandle, notifyUser, NOVO_INTERESSADO_KEY, getPipeline } from "./common";
+import { audit, cleanText, getPipeline, normalizeHandle, notifyUser } from "./common";
 import { addToBoard } from "./board";
+import { UTM_KEYS } from "../integrations/forms/normalize";
 
 // ---------- Normalização ----------
 
@@ -26,14 +43,12 @@ export function normalizePhone(v: string | null | undefined) {
   return `+${d}`;
 }
 
-function normalizeEmail(v: string | null | undefined) {
+export function normalizeEmail(v: string | null | undefined) {
   const e = cleanText(v, 200)?.toLowerCase() ?? null;
   return e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
 }
 
-const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "fbclid", "gclid", "ad_id", "ad_name", "adset_name", "campaign_name", "form_name", "platform"];
-
-function cleanUtm(input: Record<string, unknown> | undefined | null) {
+export function cleanUtm(input: Record<string, unknown> | undefined | null) {
   const out: Record<string, string> = {};
   if (!input) return out;
   for (const k of UTM_KEYS) {
@@ -46,215 +61,7 @@ function cleanUtm(input: Record<string, unknown> | undefined | null) {
   return out;
 }
 
-// ---------- Formulários (gestão) ----------
-
-const questionSchema = z.object({
-  id: z.string().trim().min(1).max(40),
-  label: z.string().trim().min(1, "Escreva a pergunta.").max(200),
-  type: z.enum(["text", "textarea", "choice", "number"]),
-  required: z.boolean().default(false),
-  options: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
-});
-
-const formShape = {
-  name: z.string().trim().min(2, "Dê um nome ao formulário.").max(120),
-  slug: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .regex(/^[a-z0-9](?:[a-z0-9-]{1,58}[a-z0-9])$/, "Use letras minúsculas, números e hífen (3 a 60)."),
-  headline: z.string().trim().min(2, "Escreva o título da página.").max(160),
-  description: z.string().trim().max(1000).nullable(),
-  questions: z.array(questionSchema).max(25),
-  askEmail: z.boolean(),
-  askInstagram: z.boolean(),
-  askPreferredTime: z.boolean(),
-  thankYou: z.string().trim().max(500).nullable(),
-  assigneeIds: z.array(z.string().uuid()).max(50),
-  stageId: z.string().uuid().nullable(),
-  active: z.boolean(),
-};
-
-export const formInputSchema = z.object({
-  ...formShape,
-  slug: formShape.slug.optional(),
-  description: formShape.description.optional(),
-  questions: formShape.questions.default([]),
-  askEmail: formShape.askEmail.default(true),
-  askInstagram: formShape.askInstagram.default(true),
-  askPreferredTime: formShape.askPreferredTime.default(true),
-  thankYou: formShape.thankYou.optional(),
-  assigneeIds: formShape.assigneeIds.default([]),
-  stageId: formShape.stageId.optional(),
-  active: formShape.active.default(true),
-});
-
-/** Atualização parcial: campos ausentes ficam como estão (sem valores padrão). */
-export const formUpdateSchema = z.object(formShape).partial();
-
-function slugify(s: string) {
-  return s
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-}
-
-async function uniqueSlug(base: string, exceptId?: string) {
-  let slug = base || "formulario";
-  for (let i = 0; i < 6; i++) {
-    const [hit] = await db.select({ id: leadForms.id }).from(leadForms).where(eq(leadForms.slug, slug));
-    if (!hit || hit.id === exceptId) return slug;
-    slug = `${base}-${randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4) || Math.floor(Math.random() * 9999)}`;
-  }
-  throw new AppError("conflict", "Não foi possível gerar um endereço único. Tente outro nome.");
-}
-
-async function validateAssignees(orgId: string, ids: string[]) {
-  if (!ids.length) return [];
-  const rows = await db
-    .select({ userId: memberships.userId })
-    .from(memberships)
-    .where(and(eq(memberships.orgId, orgId), inArray(memberships.userId, ids), eq(memberships.status, "active")));
-  if (rows.length !== new Set(ids).size) throw invalid("Algum responsável escolhido não está ativo na equipe.");
-  return [...new Set(ids)];
-}
-
-async function validateStage(orgId: string, stageId: string | null | undefined) {
-  if (!stageId) return null;
-  const p = await getPipeline(orgId, "relationship");
-  const [s] = await db.select({ id: pipelineStages.id }).from(pipelineStages).where(and(eq(pipelineStages.id, stageId), eq(pipelineStages.pipelineId, p.id), isNull(pipelineStages.archivedAt)));
-  if (!s) throw invalid("Etapa do funil inválida.");
-  return s.id;
-}
-
-function publicForm(f: typeof leadForms.$inferSelect, withSecrets: boolean) {
-  const base = appUrl();
-  let token: string | null = null;
-  if (withSecrets) {
-    try {
-      token = decryptSecret(f.tokenEnc);
-    } catch {
-      token = null;
-    }
-  }
-  return {
-    id: f.id,
-    name: f.name,
-    slug: f.slug,
-    headline: f.headline,
-    description: f.description,
-    questions: f.questions,
-    askEmail: f.askEmail,
-    askInstagram: f.askInstagram,
-    askPreferredTime: f.askPreferredTime,
-    thankYou: f.thankYou,
-    assigneeIds: f.assigneeIds,
-    stageId: f.stageId,
-    active: f.active,
-    publicUrl: `${base}/f/${f.slug}`,
-    webhookUrl: token ? `${base}/api/public/leads/${token}` : null,
-    createdAt: f.createdAt,
-  };
-}
-
-export async function listForms(ctx: Ctx) {
-  assertCan(ctx, "leads.manage", "Somente administradores e gestores configuram formulários.");
-  const rows = await db.select().from(leadForms).where(eq(leadForms.orgId, ctx.orgId)).orderBy(desc(leadForms.createdAt));
-  const counts = await db
-    .select({ formId: leads.formId, n: sql<number>`count(*)::int`, last: sql<Date | null>`max(${leads.createdAt})` })
-    .from(leads)
-    .where(eq(leads.orgId, ctx.orgId))
-    .groupBy(leads.formId);
-  return rows.map((f) => {
-    const c = counts.find((x) => x.formId === f.id);
-    return { ...publicForm(f, true), leadCount: c?.n ?? 0, lastLeadAt: c?.last ?? null };
-  });
-}
-
-export async function createForm(ctx: Ctx, raw: z.input<typeof formInputSchema>) {
-  assertCan(ctx, "leads.manage", "Somente administradores e gestores criam formulários.");
-  const input = formInputSchema.parse(raw);
-  const assigneeIds = await validateAssignees(ctx.orgId, input.assigneeIds);
-  let stageId = await validateStage(ctx.orgId, input.stageId);
-  if (input.stageId === undefined) {
-    // Padrão: contatos de anúncio entram em "Novo interessado".
-    const p = await getPipeline(ctx.orgId, "relationship");
-    const [s] = await db.select({ id: pipelineStages.id }).from(pipelineStages).where(and(eq(pipelineStages.pipelineId, p.id), eq(pipelineStages.key, NOVO_INTERESSADO_KEY), isNull(pipelineStages.archivedAt)));
-    stageId = s?.id ?? null;
-  }
-  const slug = await uniqueSlug(input.slug ?? slugify(input.name));
-  const token = randomToken(24);
-  const [f] = await db
-    .insert(leadForms)
-    .values({
-      orgId: ctx.orgId,
-      name: input.name,
-      slug,
-      headline: input.headline,
-      description: cleanText(input.description, 1000),
-      questions: input.questions as LeadQuestion[],
-      askEmail: input.askEmail,
-      askInstagram: input.askInstagram,
-      askPreferredTime: input.askPreferredTime,
-      thankYou: cleanText(input.thankYou, 500),
-      assigneeIds,
-      stageId,
-      active: input.active,
-      tokenHash: sha256(token),
-      tokenEnc: encryptSecret(token),
-    })
-    .returning();
-  await audit(db, ctx, "lead_form.created", "lead_form", f.id);
-  return publicForm(f, true);
-}
-
-async function getOwnForm(ctx: Ctx, id: string) {
-  const [f] = await db.select().from(leadForms).where(and(eq(leadForms.id, id), eq(leadForms.orgId, ctx.orgId)));
-  if (!f) throw notFound("Formulário não encontrado.");
-  return f;
-}
-
-export async function updateForm(ctx: Ctx, id: string, raw: z.input<typeof formUpdateSchema>) {
-  assertCan(ctx, "leads.manage", "Somente administradores e gestores alteram formulários.");
-  const f = await getOwnForm(ctx, id);
-  const input = formUpdateSchema.parse(raw);
-  const patch: Partial<typeof leadForms.$inferInsert> = { updatedAt: new Date() };
-  if (input.name !== undefined) patch.name = input.name;
-  if (input.slug !== undefined && input.slug !== f.slug) patch.slug = await uniqueSlug(input.slug, f.id);
-  if (input.headline !== undefined) patch.headline = input.headline;
-  if (input.description !== undefined) patch.description = cleanText(input.description, 1000);
-  if (input.questions !== undefined) patch.questions = input.questions as LeadQuestion[];
-  for (const k of ["askEmail", "askInstagram", "askPreferredTime", "active"] as const) if (input[k] !== undefined) patch[k] = input[k];
-  if (input.thankYou !== undefined) patch.thankYou = cleanText(input.thankYou, 500);
-  if (input.assigneeIds !== undefined) patch.assigneeIds = await validateAssignees(ctx.orgId, input.assigneeIds);
-  if (input.stageId !== undefined) patch.stageId = await validateStage(ctx.orgId, input.stageId);
-  const [u] = await db.update(leadForms).set(patch).where(eq(leadForms.id, f.id)).returning();
-  await audit(db, ctx, "lead_form.updated", "lead_form", f.id);
-  return publicForm(u, true);
-}
-
-/** Troca o token do webhook (o endereço antigo para de funcionar na hora). */
-export async function regenerateFormToken(ctx: Ctx, id: string) {
-  assertCan(ctx, "leads.manage");
-  const f = await getOwnForm(ctx, id);
-  const token = randomToken(24);
-  const [u] = await db.update(leadForms).set({ tokenHash: sha256(token), tokenEnc: encryptSecret(token), updatedAt: new Date() }).where(eq(leadForms.id, f.id)).returning();
-  await audit(db, ctx, "lead_form.token_regenerated", "lead_form", f.id);
-  return publicForm(u, true);
-}
-
-export async function deleteForm(ctx: Ctx, id: string) {
-  assertCan(ctx, "leads.manage");
-  const f = await getOwnForm(ctx, id);
-  // Leads já recebidos continuam (form_id vira null).
-  await db.delete(leadForms).where(eq(leadForms.id, f.id));
-  await audit(db, ctx, "lead_form.deleted", "lead_form", f.id, { name: f.name });
-}
-
-// ---------- Formulário público ----------
+// ---------- Formulário público (Formulário CRMLABS) ----------
 
 export async function getPublicForm(slug: string) {
   const [row] = await db
@@ -315,7 +122,10 @@ export async function submitPublicForm(slug: string, raw: unknown, ip: string | 
   if (form.askEmail && input.email && !email) throw new AppError("invalid", "E-mail inválido.", { fields: { email: "Confira o e-mail." } });
 
   const answers: { label: string; value: string }[] = [];
+  const custom: Record<string, string> = {};
+  let productText: string | null = null;
   const fieldErrors: Record<string, string> = {};
+  const mapOf = (qid: string) => form.fieldMap.find((m) => m.key === qid)?.target ?? "answer";
   for (const q of form.questions) {
     let v = cleanText(input.answers[q.id], q.type === "textarea" ? 2000 : 500) ?? "";
     if (q.type === "choice" && v && q.options?.length && !q.options.includes(v)) v = "";
@@ -324,7 +134,12 @@ export async function submitPublicForm(slug: string, raw: unknown, ip: string | 
       continue;
     }
     if (q.required && !v) fieldErrors[`q_${q.id}`] = "Responda esta pergunta.";
-    if (v) answers.push({ label: q.label, value: v });
+    if (!v) continue;
+    const target = mapOf(q.id);
+    if (target === "ignore") continue;
+    if (target === "product") productText = v;
+    if (typeof target === "string" && target.startsWith("custom:")) custom[target.slice(7)] = v;
+    answers.push({ label: q.label, value: v });
   }
   let preferredAt: Date | null = null;
   if (form.askPreferredTime && input.preferredAt) {
@@ -339,113 +154,54 @@ export async function submitPublicForm(slug: string, raw: unknown, ip: string | 
     email,
     instagram: form.askInstagram ? normalizeHandle(input.instagram) : null,
     answers,
+    custom,
+    productText,
     preferredAt,
     preferredText: null,
     utm: cleanUtm(input.utm),
-    channel: "form",
+    channel: "crmlabs_form",
   });
   return thanks;
 }
 
 // ---------- Webhook (Zapier, Make, landing pages, Meta via integradores) ----------
 
-const NAME_KEYS = ["name", "nome", "fullname", "nomecompleto", "full_name", "seunome"];
-const FIRST_KEYS = ["firstname", "first_name", "primeironome"];
-const LAST_KEYS = ["lastname", "last_name", "sobrenome"];
-const PHONE_KEYS = ["phone", "telefone", "whatsapp", "celular", "phonenumber", "phone_number", "fone", "tel", "numerodewhatsapp"];
-const EMAIL_KEYS = ["email", "e-mail", "emailaddress", "mail"];
-const IG_KEYS = ["instagram", "insta", "arroba", "usuariodoinstagram", "ig"];
-const PREF_KEYS = ["melhorhorario", "melhordiaehorario", "preferredtime", "preferred_time", "horario", "datareuniao"];
 
-const norm = (k: string) => k.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+// ---------- Entrada do lead (comum a todos os conectores) ----------
 
-/** Achata o corpo recebido em pares chave → valor (aceita field_data do Lead Ads da Meta). */
-function flatten(body: unknown): [string, string][] {
-  const out: [string, string][] = [];
-  const push = (k: string, v: unknown) => {
-    if (v === null || v === undefined || out.length >= 60) return;
-    if (Array.isArray(v)) v = v.filter((x) => typeof x !== "object").join(", ");
-    if (typeof v === "object") return;
-    const s = String(v).trim();
-    if (s) out.push([k.slice(0, 80), s.slice(0, 2000)]);
-  };
-  if (!body || typeof body !== "object") return out;
-  const obj = body as Record<string, unknown>;
-  const fieldData = (obj.field_data ?? (obj.data as Record<string, unknown> | undefined)?.field_data) as { name?: string; values?: unknown[] }[] | undefined;
-  if (Array.isArray(fieldData)) for (const f of fieldData) if (f?.name) push(f.name, f.values);
-  const fields = obj.fields ?? obj.answers ?? obj.data;
-  if (fields && typeof fields === "object" && !Array.isArray(fields)) for (const [k, v] of Object.entries(fields)) push(k, v);
-  if (Array.isArray(fields)) for (const f of fields as { label?: string; name?: string; key?: string; value?: unknown }[]) push(f?.label ?? f?.name ?? f?.key ?? "", f?.value);
-  for (const [k, v] of Object.entries(obj)) if (!["field_data", "fields", "answers", "data"].includes(k)) push(k, v);
-  return out.filter(([k]) => k);
-}
-
-export async function ingestWebhookLead(token: string, body: unknown) {
-  if (!/^[A-Za-z0-9_-]{16,80}$/.test(token)) throw notFound("Endereço de webhook inválido.");
-  const [form] = await db.select().from(leadForms).where(eq(leadForms.tokenHash, sha256(token)));
-  if (!form) throw notFound("Endereço de webhook inválido.");
-  if (!form.active) throw new AppError("forbidden", "Formulário desativado no CRMLABS.");
-  const pairs = flatten(body);
-  const take = (keys: string[]) => {
-    const i = pairs.findIndex(([k]) => keys.includes(norm(k)));
-    return i >= 0 ? pairs.splice(i, 1)[0][1] : null;
-  };
-  const utmSrc: Record<string, string> = {};
-  for (let i = pairs.length - 1; i >= 0; i--) {
-    const k = norm(pairs[i][0]);
-    if (UTM_KEYS.includes(k)) {
-      utmSrc[k] = pairs[i][1];
-      pairs.splice(i, 1);
-    }
-  }
-  const first = take(FIRST_KEYS);
-  const last = take(LAST_KEYS);
-  const phone = normalizePhone(take(PHONE_KEYS));
-  const email = normalizeEmail(take(EMAIL_KEYS));
-  const instagram = normalizeHandle(take(IG_KEYS));
-  const prefRaw = take(PREF_KEYS);
-  const name = cleanText(take(NAME_KEYS) ?? [first, last].filter(Boolean).join(" "), 120) || email || phone || "Lead sem nome";
-  const ignored = new Set(["id", "created_time", "leadgen_id", "page_id", "form_id", "adgroup_id", "is_organic", "token", "secret"]);
-  const answers = pairs.filter(([k]) => !ignored.has(norm(k))).map(([label, value]) => ({ label, value }));
-  const preferredAt = prefRaw ? parseLocalDateTime(prefRaw, "America/Bahia") : null;
-  const lead = await ingestLead(form, {
-    name,
-    phone,
-    email,
-    instagram,
-    answers,
-    preferredAt,
-    preferredText: preferredAt ? null : cleanText(prefRaw, 200),
-    utm: cleanUtm(utmSrc),
-    channel: "webhook",
-  });
-  return { ok: true, leadId: lead.id };
-}
-
-// ---------- Entrada do lead ----------
-
-type LeadInput = {
+export type LeadInput = {
   name: string;
   phone: string | null;
   email: string | null;
   instagram: string | null;
   answers: { label: string; value: string }[];
+  custom?: Record<string, string>;
+  productText?: string | null;
   preferredAt: Date | null;
   preferredText: string | null;
   utm: Record<string, string>;
-  channel: "form" | "webhook";
+  /** Conector que trouxe o lead (crmlabs_form, webhook, typeform…). */
+  channel: string;
 };
 
-/** Social sellers ativos que podem receber o lead (rodízio). */
-async function candidates(tx: DbOrTx, form: typeof leadForms.$inferSelect) {
-  const conds: SQL[] = [eq(memberships.orgId, form.orgId), eq(memberships.status, "active")];
+type Integration = typeof leadForms.$inferSelect;
+
+/** Quem pode receber o lead: responsável fixo ou rodízio (selecionados; senão todos os sellers/closers ativos). */
+async function candidates(tx: DbOrTx, form: Integration) {
+  const active = and(eq(memberships.orgId, form.orgId), eq(memberships.status, "active"));
+  if (form.assignMode === "fixed" && form.fixedAssigneeId) {
+    const rows = await tx.select({ userId: memberships.userId }).from(memberships).where(and(active, eq(memberships.userId, form.fixedAssigneeId)));
+    if (rows.length) return { pool: rows.map((r) => r.userId), fixed: true };
+  }
+  const conds: SQL[] = [active!];
   if (form.assigneeIds.length) conds.push(inArray(memberships.userId, form.assigneeIds));
-  else conds.push(eq(memberships.role, "seller"));
+  else conds.push(eq(memberships.role, form.pipelineKind === "sales" ? "closer" : "seller"));
   const rows = await tx.select({ userId: memberships.userId }).from(memberships).where(and(...conds)).orderBy(asc(memberships.createdAt), asc(memberships.userId));
-  return rows.map((r) => r.userId);
+  return { pool: rows.map((r) => r.userId), fixed: false };
 }
 
-async function findContact(tx: DbOrTx, orgId: string, input: Pick<LeadInput, "phone" | "email" | "instagram">) {
+/** Procura a pessoa por telefone, e-mail ou Instagram (sem criar duplicado). */
+export async function findContact(tx: DbOrTx, orgId: string, input: Pick<LeadInput, "phone" | "email" | "instagram">) {
   const ors: SQL[] = [];
   if (input.email) ors.push(sql`lower(${contacts.email}) = ${input.email}`);
   if (input.phone) ors.push(sql`regexp_replace(coalesce(${contacts.phone}, ''), '\\D', '', 'g') = ${input.phone.replace(/\D/g, "")}`);
@@ -460,22 +216,44 @@ async function findContact(tx: DbOrTx, orgId: string, input: Pick<LeadInput, "ph
   return c ?? null;
 }
 
-export async function ingestLead(form: typeof leadForms.$inferSelect, input: LeadInput) {
-  const { lead, contactCreated } = await db.transaction(async (tx) => {
-    // Trava o formulário para o rodízio não entregar dois leads seguidos à mesma pessoa.
+export async function logIntegration(tx: DbOrTx, form: Pick<Integration, "id" | "orgId" | "name">, entry: { event: string; result: "success" | "error"; message?: string | null; leadId?: string | null; detected?: Record<string, boolean> }) {
+  await tx.insert(integrationLogs).values({ orgId: form.orgId, integrationId: form.id, integrationName: form.name, event: entry.event, result: entry.result, message: entry.message ?? null, leadId: entry.leadId ?? null, detected: entry.detected ?? null });
+}
+
+/**
+ * Recebe um lead de qualquer conector: atribui origem, procura a pessoa (sem duplicar),
+ * cria ou atualiza o contato, registra o ponto de contato na jornada, coloca no funil
+ * escolhido, distribui e avisa somente quem recebeu.
+ */
+export async function ingestLead(form: Integration, input: LeadInput) {
+  const now = new Date();
+  const { lead, contactCreated, returning, sourceName, productName } = await db.transaction(async (tx) => {
     const [locked] = await tx.select().from(leadForms).where(eq(leadForms.id, form.id)).for("update");
-    const pool = await candidates(tx, locked);
+    const { pool, fixed } = await candidates(tx, locked);
     let contact = await findContact(tx, form.orgId, input);
+    const returning = !!contact;
+
+    // Produto: o que o lead escolheu (se existir no cadastro) ou o produto da integração.
+    let productId = locked.productId;
+    if (input.productText) {
+      const [p] = await tx.select({ id: products.id }).from(products).where(and(eq(products.orgId, form.orgId), sql`lower(${products.name}) = ${input.productText.toLowerCase()}`, isNull(products.archivedAt)));
+      if (p) productId = p.id;
+    }
+    const [prod] = productId ? await tx.select({ name: products.name }).from(products).where(eq(products.id, productId)) : [];
+    const [src] = locked.sourceId ? await tx.select({ name: leadSources.name }).from(leadSources).where(eq(leadSources.id, locked.sourceId)) : [];
+
+    // Distribuição: cliente que volta fica com o mesmo responsável (se ativo e no funil social seller).
     let assignedTo: string | null = null;
-    // Cliente que volta fica com o mesmo social seller, se ele ainda estiver ativo.
-    if (contact?.ownerId) {
+    if (!fixed && contact?.ownerId && locked.pipelineKind !== "sales") {
       const [m] = await tx.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.orgId, form.orgId), eq(memberships.userId, contact.ownerId), eq(memberships.status, "active")));
       if (m) assignedTo = contact.ownerId;
     }
     if (!assignedTo && pool.length) {
       assignedTo = pool[locked.rotation % pool.length];
-      await tx.update(leadForms).set({ rotation: locked.rotation + 1 }).where(eq(leadForms.id, form.id));
+      if (!fixed) await tx.update(leadForms).set({ rotation: locked.rotation + 1 }).where(eq(leadForms.id, form.id));
     }
+    const contactOwner = locked.pipelineKind === "sales" ? null : assignedTo;
+
     let contactCreated = false;
     if (!contact) {
       [contact] = await tx
@@ -487,31 +265,65 @@ export async function ingestLead(form: typeof leadForms.$inferSelect, input: Lea
           profileUrl: input.instagram ? `https://www.instagram.com/${input.instagram}/` : null,
           email: input.email,
           phone: input.phone,
-          ownerId: assignedTo,
+          ownerId: contactOwner,
           source: "lead_form",
-          summary: `Lead do anúncio · ${form.name}`,
-          lastInteractionAt: new Date(),
+          summary: [src?.name, locked.name].filter(Boolean).join(" · "),
+          lastInteractionAt: now,
+          firstSourceId: locked.sourceId,
+          firstTouchAt: now,
+          lastSourceId: locked.sourceId,
+          lastTouchAt: now,
         })
         .returning();
       contactCreated = true;
     } else {
-      const patch: Partial<typeof contacts.$inferInsert> = { lastInteractionAt: new Date(), updatedAt: new Date() };
-      if (!contact.ownerId && assignedTo) patch.ownerId = assignedTo;
+      const patch: Partial<typeof contacts.$inferInsert> = { lastInteractionAt: now, updatedAt: now };
+      if (!contact.ownerId && contactOwner) patch.ownerId = contactOwner;
       if (!contact.email && input.email) patch.email = input.email;
       if (!contact.phone && input.phone) patch.phone = input.phone;
       if (!contact.username && input.instagram) patch.username = input.instagram;
+      // Histórico preservado: a primeira origem nunca é sobrescrita.
+      if (locked.sourceId) {
+        if (!contact.firstSourceId) {
+          patch.firstSourceId = locked.sourceId;
+          patch.firstTouchAt = now;
+        }
+        patch.lastSourceId = locked.sourceId;
+        patch.lastTouchAt = now;
+      }
       [contact] = await tx.update(contacts).set(patch).where(eq(contacts.id, contact.id)).returning();
     }
-    if (form.stageId) {
+
+    // Funil de destino.
+    let opportunityId: string | null = null;
+    if (locked.pipelineKind === "sales") {
+      const sales = await getPipeline(form.orgId, "sales", tx);
+      const [stage] = locked.salesStageId
+        ? await tx.select().from(pipelineStages).where(and(eq(pipelineStages.id, locked.salesStageId), isNull(pipelineStages.archivedAt)))
+        : await tx.select().from(pipelineStages).where(and(eq(pipelineStages.pipelineId, sales.id), isNull(pipelineStages.archivedAt))).orderBy(asc(pipelineStages.position)).limit(1);
+      if (stage) {
+        const [open] = await tx.select({ id: opportunities.id }).from(opportunities).where(and(eq(opportunities.contactId, contact.id), eq(opportunities.status, "open")));
+        if (open) opportunityId = open.id;
+        else {
+          const [o] = await tx
+            .insert(opportunities)
+            .values({ orgId: form.orgId, contactId: contact.id, title: `${prod?.name ?? locked.name} — ${input.name}`, product: prod?.name ?? null, valueCents: 0, closerId: assignedTo, stageId: stage.id })
+            .returning();
+          await tx.insert(stageHistory).values({ orgId: form.orgId, entityType: "opportunity", entityId: o.id, contactId: contact.id, toStageId: stage.id, toStageName: stage.name, reason: `Lead · ${locked.name}` });
+          opportunityId = o.id;
+        }
+      }
+    } else if (locked.stageId) {
       const [onBoard] = await tx.select({ id: relationshipEntries.id }).from(relationshipEntries).where(and(eq(relationshipEntries.contactId, contact.id), isNull(relationshipEntries.closedAt)));
       if (!onBoard) {
         try {
-          await addToBoard({ orgId: form.orgId, userId: null }, contact.id, form.stageId, tx, `Lead do anúncio · ${form.name}`);
+          await addToBoard({ orgId: form.orgId, userId: null }, contact.id, locked.stageId, tx, `Lead · ${locked.name}`);
         } catch (e) {
-          logger.warn("Etapa do formulário indisponível; lead entrou sem cartão", e);
+          logger.warn("Etapa da integração indisponível; lead entrou sem cartão", e);
         }
       }
     }
+
     const [lead] = await tx
       .insert(leads)
       .values({
@@ -524,29 +336,63 @@ export async function ingestLead(form: typeof leadForms.$inferSelect, input: Lea
         email: input.email,
         instagram: input.instagram,
         answers: input.answers,
+        custom: input.custom ?? {},
         preferredAt: input.preferredAt,
         preferredText: input.preferredText,
         utm: input.utm,
         channel: input.channel,
+        sourceId: locked.sourceId,
+        campaign: locked.campaign ?? input.utm.utm_campaign ?? input.utm.campaign_name ?? null,
+        adChannel: locked.channel,
+        partner: locked.partner,
+        adName: locked.adName ?? input.utm.ad_name ?? input.utm.utm_content ?? null,
+        productId,
+        opportunityId,
       })
       .returning();
-    await audit(tx, { orgId: form.orgId, userId: null }, "lead.received", "lead", lead.id, { formId: form.id, channel: input.channel, assignedTo });
-    return { lead, contactCreated };
+    await tx.insert(contactTouchpoints).values({
+      orgId: form.orgId,
+      contactId: contact.id,
+      sourceId: locked.sourceId,
+      kind: "form",
+      campaign: lead.campaign,
+      channel: locked.channel,
+      partner: locked.partner,
+      adName: lead.adName,
+      integrationId: form.id,
+      integrationName: locked.name,
+      leadId: lead.id,
+      utm: input.utm,
+      note: returning ? `Preencheu novamente “${locked.name}”.` : `Preencheu “${locked.name}”.`,
+      occurredAt: now,
+    });
+    await tx.update(leadForms).set({ lastLeadAt: now, lastError: null, lastErrorAt: null }).where(eq(leadForms.id, form.id));
+    await logIntegration(tx, locked, {
+      event: returning ? "Lead atualizado" : "Lead recebido",
+      result: "success",
+      message: returning ? `${input.name} já estava no CRM: contato atualizado e novo envio registrado na jornada.` : `${input.name} entrou no CRM.`,
+      leadId: lead.id,
+      detected: { nome: !!input.name, telefone: !!input.phone, email: !!input.email, instagram: !!input.instagram, origem: !!locked.sourceId, utm: Object.keys(input.utm).length > 0 },
+    });
+    await audit(tx, { orgId: form.orgId, userId: null }, "lead.received", "lead", lead.id, { formId: form.id, channel: input.channel, assignedTo, returning });
+    return { lead, contactCreated, returning, sourceName: src?.name ?? null, productName: prod?.name ?? null };
   });
 
-  // Notificação somente para o social seller que recebeu o lead.
-  const body = [form.name, input.preferredAt ? `prefere ${fmtWhen(input.preferredAt)}` : null].filter(Boolean).join(" · ");
+  // Notificação somente para quem recebeu o lead.
+  const body = [sourceName, form.name, productName, input.preferredAt ? `prefere ${fmtWhen(input.preferredAt)}` : null].filter(Boolean).join(" · ");
   if (lead.assignedTo) {
-    await notifyUser({ orgId: form.orgId, userId: lead.assignedTo, type: "lead.new", title: `Novo lead: ${lead.name}`, body, link: `/leads?lead=${lead.id}` }).catch((e) => logger.warn("Falha ao avisar o social seller", e));
+    await notifyUser({ orgId: form.orgId, userId: lead.assignedTo, type: "lead.new", title: returning ? `Lead voltou: ${lead.name}` : `Novo lead: ${lead.name}`, body, link: `/leads?lead=${lead.id}` }).catch((e) => logger.warn("Falha ao avisar o responsável", e));
   } else {
     // Ninguém para receber: avisa os administradores para o lead não se perder.
     const admins = await db.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.orgId, form.orgId), eq(memberships.role, "admin"), eq(memberships.status, "active")));
     for (const a of admins) {
-      await notifyUser({ orgId: form.orgId, userId: a.userId, type: "lead.unassigned", title: `Lead sem responsável: ${lead.name}`, body: `${form.name} · nenhum social seller ativo para receber`, link: `/leads?lead=${lead.id}` }).catch(() => {});
+      await notifyUser({ orgId: form.orgId, userId: a.userId, type: "lead.unassigned", title: `Lead sem responsável: ${lead.name}`, body: `${form.name} · ninguém ativo para receber`, link: `/leads?lead=${lead.id}` }).catch(() => {});
     }
   }
   await publish({ orgId: form.orgId, topic: "leads", entityId: lead.id, ownerIds: [lead.assignedTo] });
-  if (contactCreated || form.stageId) await publish({ orgId: form.orgId, topic: "board", entityId: lead.contactId, ownerIds: [lead.assignedTo] });
+  if (contactCreated || form.stageId || lead.opportunityId) {
+    await publish({ orgId: form.orgId, topic: form.pipelineKind === "sales" ? "opportunities" : "board", entityId: lead.contactId, ownerIds: [lead.assignedTo] });
+  }
   return lead;
 }
 
@@ -554,7 +400,7 @@ function fmtWhen(d: Date) {
   return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Bahia", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
 }
 
-// ---------- Leads (equipe) ----------
+// ---------- Leads (operação) ----------
 
 export const listLeadsSchema = z.object({
   status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open"]).default("open"),
@@ -592,13 +438,18 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
       assignedTo: leads.assignedTo,
       assignedName: users.name,
       formName: leadForms.name,
-      utmCampaign: sql<string | null>`${leads.utm}->>'utm_campaign'`,
+      utmCampaign: sql<string | null>`coalesce(${leads.campaign}, ${leads.utm}->>'utm_campaign')`,
+      sourceName: leadSources.name,
+      sourceColor: leadSources.color,
+      productName: products.name,
       appointmentAt: appointments.startsAt,
     })
     .from(leads)
     .leftJoin(users, eq(users.id, leads.assignedTo))
     .leftJoin(leadForms, eq(leadForms.id, leads.formId))
     .leftJoin(appointments, eq(appointments.id, leads.appointmentId))
+    .leftJoin(leadSources, eq(leadSources.id, leads.sourceId))
+    .leftJoin(products, eq(products.id, leads.productId))
     .where(where)
     .orderBy(desc(leads.createdAt))
     .limit(PAGE)
@@ -639,7 +490,23 @@ export async function getLead(ctx: Ctx, id: string) {
     .where(and(eq(leads.contactId, l.contactId), leadScope(ctx), sql`${leads.id} <> ${l.id}`))
     .orderBy(desc(leads.createdAt))
     .limit(5);
-  return { ...l, formName: form?.name ?? null, assignedName: assigned?.name ?? null, contact, appointment, previous };
+  const { contactJourney } = await import("./journey");
+  const [src] = l.sourceId ? await db.select({ name: leadSources.name, color: leadSources.color }).from(leadSources).where(eq(leadSources.id, l.sourceId)) : [];
+  const [prod] = l.productId ? await db.select({ name: products.name }).from(products).where(eq(products.id, l.productId)) : [];
+  const fieldIds = Object.keys(l.custom ?? {});
+  const fieldRows = fieldIds.length ? await db.select({ id: customFields.id, label: customFields.label }).from(customFields).where(inArray(customFields.id, fieldIds)).orderBy(asc(customFields.position)) : [];
+  return {
+    ...l,
+    formName: form?.name ?? null,
+    assignedName: assigned?.name ?? null,
+    contact,
+    appointment,
+    previous,
+    source: src ?? null,
+    productName: prod?.name ?? null,
+    customValues: fieldRows.map((f) => ({ label: f.label, value: l.custom[f.id] })),
+    journey: await contactJourney(ctx, l.contactId),
+  };
 }
 
 export const updateLeadSchema = z.object({

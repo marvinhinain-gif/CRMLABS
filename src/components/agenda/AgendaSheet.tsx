@@ -12,6 +12,7 @@ import { Avatar, Badge, Button, cx, ErrorState, LoadingState, Sheet, SheetClose 
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "./ScheduleDialog";
+import { JourneySection, type Journey } from "@/components/integrations/Journey";
 
 export const APPT_STATUS = {
   scheduled: { label: "Agendada", cls: "bg-selected text-brand" },
@@ -31,11 +32,14 @@ type Detail = {
   location: string | null;
   notes: string | null;
   ownerId: string | null;
+  calendarSyncedAt: string | null;
   ownerName: string | null;
   contact: { id: string; name: string; phone: string | null; email: string | null; username: string | null; avatarUrl: string | null; summary: string | null; source: string; ownerId: string | null; ownerName: string | null; tags: string[]; createdAt: string } | null;
   lead: { id: string; answers: { label: string; value: string }[]; utm: Record<string, string>; preferredAt: string | null; preferredText: string | null; createdAt: string; formName: string | null; channel: string } | null;
   opportunity: { id: string; title: string; valueCents: number; status: string } | null;
   history: { id: string; startsAt: string; status: keyof typeof APPT_STATUS; title: string }[];
+  sellerNotes: { id: string; body: string; createdAt: string; authorName: string | null }[];
+  journey: Journey | null;
 };
 
 function Section({ title, children, icon }: { title: string; children: React.ReactNode; icon?: React.ReactNode }) {
@@ -123,6 +127,11 @@ function Body({ id, onClose, onChanged }: { id: string; onClose: () => void; onC
               <TeamAvatar userId={a.ownerId} name={a.ownerName} size={20} /> com {a.ownerId === me.user.id ? "você" : a.ownerName}
             </span>
           )}
+          {a.calendarSyncedAt && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-3 py-1 font-medium text-success">
+              <Check className="size-4" aria-hidden /> Na agenda Google
+            </span>
+          )}
           {a.location &&
             (isLink ? (
               <a href={a.location} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-info-soft px-3 py-1 font-medium text-info hover:underline">
@@ -186,9 +195,30 @@ function Body({ id, onClose, onChanged }: { id: string; onClose: () => void; onC
           </>
         )}
 
+        {c && a.journey && (
+          <Section title="Ficha de preparação">
+            <JourneySection contactId={c.id} initial={a.journey} closerView />
+          </Section>
+        )}
+
         {a.notes && (
           <Section title="Observações da reunião">
             <p className="whitespace-pre-wrap rounded-[14px] bg-page/70 px-4 py-3 text-[14.5px]">{a.notes}</p>
+          </Section>
+        )}
+
+        {a.sellerNotes.length > 0 && (
+          <Section title="Anotações do social seller">
+            <ul className="flex flex-col gap-2">
+              {a.sellerNotes.map((n) => (
+                <li key={n.id} className="rounded-[14px] bg-page/70 px-4 py-3">
+                  <p className="whitespace-pre-wrap text-[14px]">{n.body}</p>
+                  <p className="mt-1 text-[12px] text-muted">
+                    {n.authorName ?? "—"} · {formatDateTime(n.createdAt)}
+                  </p>
+                </li>
+              ))}
+            </ul>
           </Section>
         )}
 
@@ -284,6 +314,8 @@ function Body({ id, onClose, onChanged }: { id: string; onClose: () => void; onC
         defaultTitle={a.title}
         showOwner={false}
         submitLabel="Salvar novo horário"
+        excludeId={a.id}
+        defaultOwnerId={a.ownerId}
         onSubmit={reschedule}
       />
     </div>

@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db, type DbOrTx } from "../db";
-import { auditEvents, notifications, pipelines, pipelineStages, organizations } from "../db/schema";
+import { auditEvents, customFields, leadSources, notifications, pipelines, pipelineStages, organizations } from "../db/schema";
 import type { Ctx } from "../context";
 import { publish } from "../realtime";
 
@@ -41,6 +41,10 @@ export async function createOrganization(input: { name: string; isDemo?: boolean
     .insert(pipelineStages)
     .values(DEFAULT_SALES_STAGES.map((s, i) => ({ ...s, orgId: org.id, pipelineId: sales.id, position: i })));
   await tx.update(organizations).set({ autoEntryStageId: relStages[0].id }).where(eq(organizations.id, org.id));
+  // Origens e campos personalizados padrão (integrações de captação).
+  const { DEFAULT_SOURCES, DEFAULT_CUSTOM_FIELDS } = await import("./integrations");
+  await tx.insert(leadSources).values(DEFAULT_SOURCES.map((x, i) => ({ ...x, orgId: org.id, position: i }))).onConflictDoNothing();
+  await tx.insert(customFields).values(DEFAULT_CUSTOM_FIELDS.map((x, i) => ({ ...x, orgId: org.id, position: i }))).onConflictDoNothing();
   return org;
 }
 

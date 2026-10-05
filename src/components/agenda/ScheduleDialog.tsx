@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarCheck } from "lucide-react";
+import useSWR from "swr";
+import { CalendarCheck, TriangleAlert } from "lucide-react";
+import { fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
-import { fromLocalInputs, localInputs, longDayTime } from "@/lib/format";
+import { formatTime, fromLocalInputs, localInputs, longDayTime } from "@/lib/format";
 import { Button, Dialog, Field, Input, Select, Textarea } from "@/components/ui";
 
 export type ScheduleValues = { startsAt: string; endsAt: string; ownerId: string | null; title: string; location: string | null; notes: string | null };
@@ -21,6 +23,7 @@ export function ScheduleDialog({
   defaultOwnerId,
   showOwner = true,
   submitLabel = "Confirmar reunião",
+  excludeId,
   onSubmit,
 }: {
   open: boolean;
@@ -32,6 +35,8 @@ export function ScheduleDialog({
   defaultOwnerId?: string | null;
   showOwner?: boolean;
   submitLabel?: string;
+  /** Reunião sendo remarcada (não conta como conflito com ela mesma). */
+  excludeId?: string;
   onSubmit: (v: ScheduleValues) => Promise<void>;
 }) {
   const me = useMe();
@@ -64,6 +69,13 @@ export function ScheduleDialog({
     setNotes("");
     setError(null);
   }, [open, suggested, defaultTitle, defaultOwnerId, me.user.id]);
+
+  // Horários ocupados de quem vai atender (CRM + Google Agenda, se conectada).
+  const busyKey = open && date && (ownerId || me.user.id) ? `/api/calendar/busy${qs({ ownerId: ownerId || me.user.id, date, excludeId })}` : null;
+  const { data: busy } = useSWR<{ ownerName: string; google: string; busy: { start: string; end: string; source: "crm" | "google"; label?: string }[] }>(busyKey, fetcher);
+  const chosenStart = date && time ? new Date(fromLocalInputs(date, time)).getTime() : null;
+  const chosenEnd = chosenStart ? chosenStart + duration * 60000 : null;
+  const conflict = chosenStart && chosenEnd ? busy?.busy.find((b) => new Date(b.start).getTime() < chosenEnd && new Date(b.end).getTime() > chosenStart) : undefined;
 
   // Social seller: marca para si ou para um closer. Gestores: qualquer pessoa ativa.
   const owners = team.filter((m) => m.status === "active" && (me.permissions.assign || m.userId === me.user.id || m.role === "closer"));
@@ -142,6 +154,29 @@ export function ScheduleDialog({
               ))}
             </Select>
           </Field>
+        )}
+        {busy && (busy.busy.length > 0 || busy.google !== "not_connected") && (
+          <div className={`anim-fade rounded-[14px] px-4 py-3 text-[13px] ${conflict ? "bg-warning-soft text-[#6b4a00]" : "bg-page/70 text-muted"}`}>
+            {conflict ? (
+              <p className="flex items-center gap-1.5 font-semibold">
+                <TriangleAlert className="size-4" aria-hidden /> {busy.ownerName.split(" ")[0]} já tem compromisso nesse horário ({formatTime(conflict.start)}–{formatTime(conflict.end)}).
+              </p>
+            ) : (
+              <p className="font-medium text-ink">{busy.ownerName.split(" ")[0]} neste dia:</p>
+            )}
+            {busy.busy.length === 0 ? (
+              <p className="mt-0.5">Livre o dia todo{busy.google === "connected" ? " (Google Agenda conferida)" : ""}.</p>
+            ) : (
+              <p className="mt-1 flex flex-wrap gap-1.5">
+                {busy.busy.map((b, i) => (
+                  <span key={i} className="rounded-full bg-white px-2.5 py-0.5 text-[12.5px] text-ink">
+                    Ocupado {formatTime(b.start)}–{formatTime(b.end)}
+                    {b.source === "google" ? " · Google" : ""}
+                  </span>
+                ))}
+              </p>
+            )}
+          </div>
         )}
         <Field label="Título" htmlFor="sch-title">
           <Input id="sch-title" value={name} onChange={(e) => setName(e.target.value)} maxLength={160} />

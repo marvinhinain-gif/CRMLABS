@@ -219,6 +219,8 @@ export const oauthStates = pgTable(
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     expiresAt: ts("expires_at").notNull(),
     usedAt: ts("used_at"),
+    /** instagram ou google_calendar */
+    purpose: text("purpose").notNull().default("instagram"),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("oauth_states_hash_uq").on(t.stateHash)],
@@ -245,6 +247,11 @@ export const contacts = pgTable(
     lastInteractionAt: ts("last_interaction_at"),
     mergedIntoId: uuid("merged_into_id"),
     archivedAt: ts("archived_at"),
+    /** Atribuição: primeira e última origem conhecidas (a jornada completa fica em contact_touchpoints). */
+    firstSourceId: uuid("first_source_id"),
+    firstTouchAt: ts("first_touch_at"),
+    lastSourceId: uuid("last_source_id"),
+    lastTouchAt: ts("last_touch_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -413,6 +420,9 @@ export const appointments = pgTable(
     notes: text("notes"),
     /** Lead (formulário de anúncio) que originou a reunião. */
     leadId: uuid("lead_id"),
+    /** Evento correspondente na agenda Google do responsável. */
+    googleEventId: text("google_event_id"),
+    calendarSyncedAt: ts("calendar_synced_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -674,6 +684,9 @@ export const integrationJobs = pgTable(
 export type Role = (typeof roleEnum.enumValues)[number];
 
 // ---------- Leads de anúncios ----------
+/** Destino de um campo recebido: campo padrão, campo personalizado (custom:<id>), só resposta, ou ignorar. */
+export type FieldMapping = { key: string; target: "name" | "phone" | "email" | "instagram" | "product" | "answer" | "ignore" | `custom:${string}` };
+
 export type LeadQuestion = {
   id: string;
   label: string;
@@ -708,6 +721,31 @@ export const leadForms = pgTable(
     /** Token do webhook: hash para busca e cópia criptografada para o administrador ver de novo. */
     tokenHash: text("token_hash").notNull(),
     tokenEnc: text("token_enc").notNull(),
+    // ----- Integração (conector, atribuição, destino, mapeamento) -----
+    /** crmlabs_form · webhook · typeform · tally · google_forms · api */
+    provider: text("provider").notNull().default("crmlabs_form"),
+    sourceId: uuid("source_id"),
+    campaign: text("campaign"),
+    channel: text("channel"),
+    partner: text("partner"),
+    adName: text("ad_name"),
+    productId: uuid("product_id"),
+    /** relationship (Social Seller) ou sales (Comercial). */
+    pipelineKind: text("pipeline_kind").notNull().default("relationship"),
+    salesStageId: uuid("sales_stage_id"),
+    /** round_robin ou fixed. Regras futuras em assignRules. */
+    assignMode: text("assign_mode").notNull().default("round_robin"),
+    fixedAssigneeId: uuid("fixed_assignee_id"),
+    assignRules: jsonb("assign_rules").$type<Record<string, unknown>>().notNull().default({}),
+    /** Campo recebido → campo do CRM. */
+    fieldMap: jsonb("field_map").$type<FieldMapping[]>().notNull().default([]),
+    /** Segredo de assinatura (Typeform, Tally, HMAC próprio), criptografado. */
+    signingSecretEnc: text("signing_secret_enc"),
+    /** Último envio recebido (rótulo → valor), para ajudar no mapeamento. Só administradores veem. */
+    lastSample: jsonb("last_sample").$type<{ key: string; value: string }[]>(),
+    lastLeadAt: ts("last_lead_at"),
+    lastErrorAt: ts("last_error_at"),
+    lastError: text("last_error"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -734,10 +772,128 @@ export const leads = pgTable(
     /** Origem do anúncio: utm_source, utm_campaign, utm_content, fbclid… */
     utm: jsonb("utm").$type<Record<string, string>>().notNull().default({}),
     channel: text("channel").notNull().default("form"),
+    sourceId: uuid("source_id"),
+    campaign: text("campaign"),
+    adChannel: text("ad_channel"),
+    partner: text("partner"),
+    adName: text("ad_name"),
+    productId: uuid("product_id"),
+    /** Valores dos campos personalizados: { [customFieldId]: valor } */
+    custom: jsonb("custom").$type<Record<string, string>>().notNull().default({}),
+    opportunityId: uuid("opportunity_id"),
     appointmentId: uuid("appointment_id"),
     contactedAt: ts("contacted_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [index("leads_org_idx").on(t.orgId, t.createdAt), index("leads_assigned_idx").on(t.orgId, t.assignedTo, t.status)],
+);
+
+// ---------- Origens, produtos, campos personalizados e jornada ----------
+export const leadSources = pgTable(
+  "lead_sources",
+  {
+    id: id(),
+    orgId: orgRef(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    color: text("color").notNull().default("gray"),
+    position: integer("position").notNull().default(0),
+    archivedAt: ts("archived_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("lead_sources_org_key_uq").on(t.orgId, t.key)],
+);
+
+export const products = pgTable(
+  "products",
+  {
+    id: id(),
+    orgId: orgRef(),
+    name: text("name").notNull(),
+    archivedAt: ts("archived_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("products_org_name_uq").on(t.orgId, sql`lower(${t.name})`)],
+);
+
+export const customFields = pgTable(
+  "custom_fields",
+  {
+    id: id(),
+    orgId: orgRef(),
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    /** Aparece na ficha de preparação do closer. */
+    showToCloser: boolean("show_to_closer").notNull().default(true),
+    position: integer("position").notNull().default(0),
+    archivedAt: ts("archived_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("custom_fields_org_key_uq").on(t.orgId, t.key)],
+);
+
+/** Pontos de contato: cada vez que a pessoa chega por uma origem (formulário, registro manual…). */
+export const contactTouchpoints = pgTable(
+  "contact_touchpoints",
+  {
+    id: id(),
+    orgId: orgRef(),
+    contactId: uuid("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    sourceId: uuid("source_id"),
+    kind: text("kind").notNull().default("form"),
+    campaign: text("campaign"),
+    channel: text("channel"),
+    partner: text("partner"),
+    adName: text("ad_name"),
+    integrationId: uuid("integration_id"),
+    integrationName: text("integration_name"),
+    leadId: uuid("lead_id"),
+    utm: jsonb("utm").$type<Record<string, string>>().notNull().default({}),
+    note: text("note"),
+    actorId: uuid("actor_id"),
+    occurredAt: ts("occurred_at").notNull().defaultNow(),
+  },
+  (t) => [index("contact_touchpoints_contact_idx").on(t.contactId, t.occurredAt), index("contact_touchpoints_org_idx").on(t.orgId, t.occurredAt)],
+);
+
+export const integrationLogs = pgTable(
+  "integration_logs",
+  {
+    id: id(),
+    orgId: orgRef(),
+    integrationId: uuid("integration_id"),
+    integrationName: text("integration_name"),
+    event: text("event").notNull(),
+    result: text("result").notNull(),
+    message: text("message"),
+    leadId: uuid("lead_id"),
+    detected: jsonb("detected").$type<Record<string, boolean>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("integration_logs_org_idx").on(t.orgId, t.createdAt), index("integration_logs_integration_idx").on(t.integrationId, t.createdAt)],
+);
+
+// ---------- Agenda pessoal (closer, social seller) ----------
+/** Conexão da agenda de cada pessoa: link de assinatura (ICS) e, opcionalmente, Google Agenda. */
+export const calendarConnections = pgTable(
+  "calendar_connections",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    orgId: orgRef(),
+    feedTokenHash: text("feed_token_hash").notNull(),
+    feedTokenEnc: text("feed_token_enc").notNull(),
+    googleEmail: text("google_email"),
+    googleRefreshEnc: text("google_refresh_enc"),
+    googleCalendarId: text("google_calendar_id").notNull().default("primary"),
+    /** Cria link do Google Meet quando a reunião não tem local. */
+    createMeet: boolean("create_meet").notNull().default(true),
+    googleConnectedAt: ts("google_connected_at"),
+    lastSyncAt: ts("last_sync_at"),
+    lastError: text("last_error"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("calendar_connections_feed_uq").on(t.feedTokenHash)],
 );

@@ -15,6 +15,7 @@ import { ProfilePhoto } from "./ProfilePhoto";
 import { Copyable } from "./Copyable";
 import { InstagramSetup } from "./InstagramSetup";
 import { PushSettings } from "./PushSettings";
+import { CalendarSettings } from "./CalendarSettings";
 import { StagesEditor } from "@/components/social/EditStagesDialog";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ACCOUNT_STATUS, type IntegrationAccount } from "@/components/social/AccountPill";
@@ -54,6 +55,7 @@ function ProfileTab() {
       </div>
       <p className="mt-5 text-center sm:text-left text-[13.5px] text-muted">Alterações de papel são feitas pelo administrador.</p>
     </Section>
+    <CalendarSettings />
     <PushSettings />
     <ChangePassword />
     </div>
@@ -712,7 +714,7 @@ export function SettingsView() {
     { value: "organizacao", label: "Organização", icon: <Building />, show: me.permissions.dataAll },
     { value: "equipe", label: "Equipe", icon: <Users />, show: true },
     { value: "funis", label: "Funis", icon: <SlidersHorizontal />, show: me.permissions.pipelineEdit },
-    { value: "integracoes", label: "Integrações", icon: <Plug />, show: true },
+    { value: "integracoes", label: "Instagram", icon: <Plug />, show: true },
     { value: "respostas", label: "Respostas salvas", icon: <MessageSquareQuote />, show: true },
   ];
   const visible = items.filter((i) => i.show);

@@ -121,6 +121,12 @@ export function leadScope(ctx: Ctx): SQL {
   if (can(ctx, "data.all")) return base;
   return and(
     base,
-    or(eq(leads.assignedTo, ctx.userId), exists(sql`(select 1 from ${contacts} c where c.id = ${leads.contactId} and c.owner_id = ${ctx.userId})`)),
+    or(
+      eq(leads.assignedTo, ctx.userId),
+      exists(sql`(select 1 from ${contacts} c where c.id = ${leads.contactId} and c.owner_id = ${ctx.userId})`),
+      // Quando o lead chega ao closer (oportunidade ou reunião dele), o histórico vai junto.
+      exists(sql`(select 1 from ${opportunities} o where o.contact_id = ${leads.contactId} and o.closer_id = ${ctx.userId})`),
+      exists(sql`(select 1 from ${appointments} a where a.contact_id = ${leads.contactId} and a.owner_id = ${ctx.userId})`),
+    ),
   )!;
 }

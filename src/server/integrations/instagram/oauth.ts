@@ -55,7 +55,7 @@ export async function handleCallback(params: { code?: string | null; state?: str
   const [st] = await db
     .update(oauthStates)
     .set({ usedAt: new Date() })
-    .where(and(eq(oauthStates.stateHash, sha256(params.state)), isNull(oauthStates.usedAt), gt(oauthStates.expiresAt, new Date())))
+    .where(and(eq(oauthStates.stateHash, sha256(params.state)), eq(oauthStates.purpose, "instagram"), isNull(oauthStates.usedAt), gt(oauthStates.expiresAt, new Date())))
     .returning();
   if (!st) throw new AppError("invalid", "Pedido de conexão expirado ou inválido. Tente conectar novamente.");
   if (!sessionCtx || sessionCtx.userId !== st.userId || sessionCtx.orgId !== st.orgId) {
