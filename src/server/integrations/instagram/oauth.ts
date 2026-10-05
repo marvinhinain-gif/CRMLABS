@@ -12,6 +12,7 @@ import { logger } from "../../logger";
 import { getInstagramApi, ProviderError } from "./client";
 import { capabilitiesOf, getAccountToken, REQUIRED_SCOPES, type Account } from "./accounts";
 import { createHmac } from "node:crypto";
+import { loadInstanceSettings } from "../../services/instance";
 
 const SCOPES = [REQUIRED_SCOPES.basic, REQUIRED_SCOPES.messages, REQUIRED_SCOPES.comments];
 const WEBHOOK_FIELDS = ["messages", "comments"];
@@ -26,6 +27,7 @@ export function assertInstagramConfigured() {
 
 /** Passo 1: somente administrador inicia. Retorna a URL de autorização oficial. */
 export async function startConnect(ctx: Ctx) {
+  await loadInstanceSettings();
   assertCan(ctx, "integrations.manage", "Somente administradores conectam contas.");
   if (ctx.org.isDemo) throw new AppError("forbidden", "Organizações de demonstração não conectam contas reais.");
   const cfg = assertInstagramConfigured();
@@ -48,6 +50,7 @@ export async function startConnect(ctx: Ctx) {
 
 /** Passos 2–5: callback validado por state + vínculo com organização e administrador. */
 export async function handleCallback(params: { code?: string | null; state?: string | null; error?: string | null }, sessionCtx: Ctx | null) {
+  await loadInstanceSettings();
   if (!params.state) throw new AppError("invalid", "Retorno do Instagram sem parâmetro state.");
   const [st] = await db
     .update(oauthStates)
@@ -116,6 +119,7 @@ export async function handleCallback(params: { code?: string | null; state?: str
 
 /** Testa a credencial chamando /me no provedor e atualiza o status com o resultado real. */
 export async function testConnection(ctx: Ctx, accountId: string) {
+  await loadInstanceSettings();
   assertCan(ctx, "integrations.manage");
   const [acc] = await db.select().from(connectedAccounts).where(and(eq(connectedAccounts.id, accountId), eq(connectedAccounts.orgId, ctx.orgId)));
   if (!acc) throw new AppError("not_found", "Conta não encontrada.");
@@ -204,6 +208,7 @@ export function publicAccount(acc: Account) {
 
 /** Renova tokens longos com menos de 10 dias de validade (token precisa ter ao menos 24 h). */
 export async function refreshExpiringTokens() {
+  await loadInstanceSettings();
   const soon = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
   const accounts = await db
     .select()

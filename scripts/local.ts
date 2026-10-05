@@ -97,6 +97,7 @@ async function main() {
     // Sem SMTP no modo local: links de convite/recuperação aparecem nesta janela.
     MAIL_TRANSPORT: "console",
     CRMLABS_LOCAL: "1",
+    RUN_WORKER: "true",
     INSTAGRAM_GRAPH_VERSION: "v25.0",
     NEXT_TELEMETRY_DISABLED: "1",
   };

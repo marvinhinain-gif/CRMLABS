@@ -12,6 +12,9 @@ import { ROLE_LABEL, type Member, type Role, type Stage } from "@/lib/types";
 import { formatDateTime, relativeTime } from "@/lib/format";
 import { Avatar, Badge, Button, Card, Dialog, EmptyState, Field, Input, LoadingState, NoPermission, PageHeader, Select, Switch, Tabs, Textarea } from "@/components/ui";
 import { ProfilePhoto } from "./ProfilePhoto";
+import { Copyable } from "./Copyable";
+import { InstagramSetup } from "./InstagramSetup";
+import { PushSettings } from "./PushSettings";
 import { StagesEditor } from "@/components/social/EditStagesDialog";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ACCOUNT_STATUS, type IntegrationAccount } from "@/components/social/AccountPill";
@@ -51,6 +54,7 @@ function ProfileTab() {
       </div>
       <p className="mt-5 text-center sm:text-left text-[13.5px] text-muted">Alterações de papel são feitas pelo administrador.</p>
     </Section>
+    <PushSettings />
     <ChangePassword />
     </div>
   );
@@ -478,24 +482,6 @@ type IntegrationsData = {
   mail: { mode: string; ready: boolean; note: string } | null;
 };
 
-function Copyable({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[12.5px] text-muted">{label}</span>
-      <div className="flex items-center gap-2 rounded-[12px] border border-line bg-page/60 px-3 py-2">
-        <code className="flex-1 truncate text-[12.5px]">{value}</code>
-        <button
-          onClick={() => navigator.clipboard.writeText(value).then(() => toast.success("Copiado."))}
-          className="text-muted hover:text-ink"
-          aria-label={`Copiar ${label}`}
-        >
-          <Copy className="size-4" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 const CAP_LABEL: Record<string, string> = {
   receiveMessages: "Receber mensagens do Direct",
   sendMessages: "Responder mensagens (janela do provedor)",
@@ -625,7 +611,7 @@ function IntegrationsTab() {
             <ul className="flex flex-col gap-2 text-[13.5px]">
               <li className="flex items-center gap-2">
                 {data.instagram.configured ? <CircleCheck className="size-4 text-success" /> : <CircleX className="size-4 text-danger" />}
-                {data.instagram.configured ? "Credenciais do app configuradas" : `Faltam variáveis: ${data.instagram.missing.join(", ")}`}
+                {data.instagram.configured ? "Credenciais do app configuradas" : "Credenciais do app da Meta ainda não informadas (veja “Ligar o app da Meta” abaixo)"}
               </li>
               <li className="flex items-center gap-2">
                 {data.instagram.httpsPublic ? <CircleCheck className="size-4 text-success" /> : <CircleX className="size-4 text-danger" />}
@@ -635,16 +621,12 @@ function IntegrationsTab() {
                 <ShieldCheck className="size-4" /> Graph API {data.instagram.graphVersion} · tokens criptografados (AES-256-GCM) somente no servidor
               </li>
             </ul>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Copyable label="URI de redirecionamento OAuth" value={data.instagram.redirectUri} />
-              <Copyable label="URL de callback dos webhooks" value={data.instagram.webhookUrl} />
-              <Copyable label="Callback de desautorização" value={data.instagram.webhookUrl + "/deauthorize"} />
-              <Copyable label="Callback de exclusão de dados" value={data.instagram.webhookUrl + "/data-deletion"} />
-            </div>
-            <p className="text-[12.5px] text-muted">Campos de webhook a assinar no app: messages, comments. Passo a passo completo no README (“Configurar o Instagram”).</p>
           </div>
         )}
       </Section>
+      {admin && data.instagram && !me.org.isDemo && (
+        <InstagramSetup redirectUri={data.instagram.redirectUri} webhookUrl={data.instagram.webhookUrl} connected={account?.status === "connected"} onSaved={() => mutate()} />
+      )}
       {admin && data.mail && (
         <Section title="E-mail transacional" description="Usado para convites e recuperação de senha.">
           <p className="flex items-center gap-2 text-[14px]">

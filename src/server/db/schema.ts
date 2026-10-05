@@ -120,6 +120,8 @@ export const memberships = pgTable(
     status: membershipStatusEnum("status").notNull().default("invited"),
     /** Mensagem enviada por quem pediu acesso pela tela de cadastro. */
     requestNote: text("request_note"),
+    /** Preferências de notificação por tipo (ausente = padrão do tipo). */
+    notifyPrefs: jsonb("notify_prefs").$type<Record<string, boolean>>().notNull().default({}),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("memberships_org_user_uq").on(t.orgId, t.userId)],
@@ -586,10 +588,39 @@ export const notifications = pgTable(
     body: text("body"),
     link: text("link"),
     readAt: ts("read_at"),
+    /** Quando o envio para o celular foi processado (null = pendente). */
+    pushedAt: ts("pushed_at"),
     createdAt: createdAt(),
   },
-  (t) => [index("notifications_user_idx").on(t.userId, t.readAt, t.createdAt)],
+  (t) => [
+    index("notifications_user_idx").on(t.userId, t.readAt, t.createdAt),
+    index("notifications_push_pending_idx").on(t.createdAt).where(sql`${t.pushedAt} is null`),
+  ],
 );
+
+/** Aparelhos inscritos para receber notificações (Web Push). */
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: id(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    userAgent: text("user_agent"),
+    createdAt: createdAt(),
+    lastSuccessAt: ts("last_success_at"),
+    failures: integer("failures").notNull().default(0),
+  },
+  (t) => [uniqueIndex("push_subscriptions_endpoint_uq").on(t.endpoint), index("push_subscriptions_user_idx").on(t.userId)],
+);
+
+/** Configurações da instalação (ex.: credenciais do app da Meta, chaves do Web Push). Segredos ficam criptografados. */
+export const instanceSettings = pgTable("instance_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: updatedAt(),
+});
 
 export const webhookEvents = pgTable(
   "webhook_events",

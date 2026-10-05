@@ -3,11 +3,13 @@ import { instagramConfig } from "@/server/env";
 import { safeEqual } from "@/server/crypto";
 import { ingestWebhook, processPendingEvents, verifySignature } from "@/server/integrations/instagram/webhooks";
 import { logger } from "@/server/logger";
+import { loadInstanceSettings } from "@/server/services/instance";
 
 export const dynamic = "force-dynamic";
 
 /** Verificação do endpoint pela Meta (hub.challenge). */
 export async function GET(req: NextRequest) {
+  await loadInstanceSettings();
   const sp = req.nextUrl.searchParams;
   const token = instagramConfig().verifyToken;
   if (sp.get("hub.mode") === "subscribe" && token && safeEqual(sp.get("hub.verify_token") ?? "", token)) {
@@ -19,6 +21,7 @@ export async function GET(req: NextRequest) {
 /** Recebe eventos: valida assinatura, persiste na fila e responde rápido. */
 export async function POST(req: NextRequest) {
   const raw = await req.text();
+  await loadInstanceSettings();
   if (!verifySignature(raw, req.headers.get("x-hub-signature-256"))) {
     logger.warn("Webhook do Instagram com assinatura inválida");
     return new NextResponse("Invalid signature", { status: 401 });

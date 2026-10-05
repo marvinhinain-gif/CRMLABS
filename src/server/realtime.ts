@@ -82,3 +82,9 @@ export async function subscribe(ctx: Ctx, onEvent: (e: RealtimeEvent) => void) {
   bus().on("event", listener);
   return () => bus().off("event", listener);
 }
+
+/** Escuta todos os eventos no próprio servidor (ex.: entregar notificações no celular). */
+export async function onServerEvent(fn: (e: RealtimeEvent) => void) {
+  await ensureListening();
+  bus().on("event", fn);
+}

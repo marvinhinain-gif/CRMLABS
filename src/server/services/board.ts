@@ -19,6 +19,8 @@ import { publish } from "../realtime";
 import { getPipeline } from "./common";
 import { getStageInOrg, listStages } from "./stages";
 import { dayRange } from "../time";
+import { alertLeadStage } from "./alerts";
+import { logger } from "../logger";
 
 export const boardFiltersSchema = z.object({
   q: z.string().trim().max(100).optional(),
@@ -135,7 +137,7 @@ export async function getColumnPage(ctx: Ctx, stageId: string, offset: number, f
 
 async function assertContactVisible(ctx: Ctx, contactId: string, tx: DbOrTx = db) {
   const [c] = await tx
-    .select({ id: contacts.id, ownerId: contacts.ownerId })
+    .select({ id: contacts.id, ownerId: contacts.ownerId, name: contacts.name })
     .from(contacts)
     .where(and(eq(contacts.id, contactId), contactScope(ctx)));
   if (!c) throw notFound("Contato não encontrado.");
@@ -225,7 +227,7 @@ export async function moveEntry(ctx: Ctx, entryId: string, input: z.infer<typeof
         { currentStageId: entry.stageId, currentVersion: entry.version },
       );
     }
-    if (entry.stageId === input.toStageId) return { entry, contact, changed: false };
+    if (entry.stageId === input.toStageId) return { entry, contact, changed: false, fromName: null as string | null, toName: "" };
 
     const from = await tx.select().from(pipelineStages).where(eq(pipelineStages.id, entry.stageId)).then((r) => r[0]);
     const [to] = await tx
@@ -254,10 +256,11 @@ export async function moveEntry(ctx: Ctx, entryId: string, input: z.infer<typeof
       toStageName: to.name,
       actorId: ctx.userId,
     });
-    return { entry: updated, contact, changed: true };
+    return { entry: updated, contact, changed: true, fromName: from?.name ?? null, toName: to.name };
   });
   if (result.changed) {
     await publish({ orgId: ctx.orgId, topic: "board", entityId: result.contact.id, ownerIds: [result.contact.ownerId] });
+    await alertLeadStage(ctx, { contactId: result.contact.id, contactName: result.contact.name, from: result.fromName, to: result.toName }).catch((e) => logger.warn("Falha no alerta de etapa", e));
   }
   return { id: result.entry.id, stageId: result.entry.stageId, version: result.entry.version };
 }

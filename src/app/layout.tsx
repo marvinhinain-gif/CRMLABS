@@ -13,6 +13,7 @@ export const metadata: Metadata = {
   applicationName: "CRMLABS",
   appleWebApp: { capable: true, title: "CRMLABS", statusBarStyle: "default" },
   formatDetection: { telephone: false },
+  icons: { icon: "/icon.svg", apple: "/apple-touch-icon.png" },
 };
 
 export const viewport: Viewport = { themeColor: "#008A65", width: "device-width", initialScale: 1, viewportFit: "cover" };

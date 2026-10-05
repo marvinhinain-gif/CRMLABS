@@ -34,6 +34,7 @@ import { ROLE_LABEL, type Me } from "@/lib/types";
 import { relativeTime } from "@/lib/format";
 import { Avatar, cx, IconButton, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui";
 import { ContactPanel } from "@/components/contacts/ContactPanel";
+import { PushPrompt } from "./PushPrompt";
 
 const NAV = [
   { href: "/dashboard", label: "Visão geral", icon: House },
@@ -439,6 +440,7 @@ export function AppShell({ me, children }: { me: Me; children: React.ReactNode }
           </div>
         </div>
         <RealtimeBridge />
+        <PushPrompt />
         <Suspense>
           <ContactPanelHost />
         </Suspense>

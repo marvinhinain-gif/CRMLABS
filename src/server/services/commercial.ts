@@ -10,6 +10,8 @@ import { audit, cleanText, getPipeline, notifyUser } from "./common";
 import { assertMember } from "./team";
 import { listStages, getStageInOrg } from "./stages";
 import { activeEntryFor } from "./board";
+import { alertMeeting, alertOpportunityStage, alertSale } from "./alerts";
+import { logger } from "../logger";
 
 const cents = z.coerce.number().int("Use centavos inteiros.").min(0).max(1_000_000_000_00);
 
@@ -155,11 +157,13 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
     if (to.archivedAt) throw invalid("Etapa arquivada.");
     patch.stageId = to.id;
   }
+  let fromName: string | null = null;
   const updated = await db.transaction(async (tx) => {
     const [u] = await tx.update(opportunities).set(patch).where(and(eq(opportunities.id, o.id), eq(opportunities.version, o.version))).returning();
     if (!u) throw new AppError("conflict", "Esta oportunidade foi alterada por outra pessoa. Os dados foram atualizados.");
     if (to) {
       const [from] = await tx.select().from(pipelineStages).where(eq(pipelineStages.id, o.stageId));
+      fromName = from?.name ?? null;
       await tx.insert(stageHistory).values({
         orgId: ctx.orgId,
         entityType: "opportunity",
@@ -175,6 +179,10 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
     return u;
   });
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId, updated.closerId] });
+  if (to) {
+    const [c] = await db.select({ name: contacts.name }).from(contacts).where(eq(contacts.id, o.contactId));
+    await alertOpportunityStage(ctx, { contactName: c?.name ?? "Contato", title: updated.title, from: fromName, to: to.name }).catch((e) => logger.warn("Falha no alerta de etapa comercial", e));
+  }
   return updated;
 }
 
@@ -220,6 +228,9 @@ export async function decideOpportunity(ctx: Ctx, id: string, input: z.infer<typ
     return u;
   });
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId] });
+  if (input.status === "won") {
+    await alertSale(ctx, { contactId: updated.contactId, title: updated.title, valueCents: Number(updated.valueCents), closerId: updated.closerId }).catch((e) => logger.warn("Falha no alerta de venda", e));
+  }
   return updated;
 }
 
@@ -334,6 +345,7 @@ export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointm
     .returning();
   await audit(db, ctx, "appointment.created", "appointment", a.id);
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: a.id, ownerIds: [ownerId, contact.ownerId] });
+  await alertMeeting(ctx, { contactId: contact.id, title: a.title, startsAt: a.startsAt, ownerId }).catch((e) => logger.warn("Falha no alerta de reunião", e));
   return a;
 }
 

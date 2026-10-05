@@ -5,6 +5,7 @@ import { hmacSha256Hex, safeEqual, sha256 } from "../../crypto";
 import { instagramConfig } from "../../env";
 import { logger } from "../../logger";
 import { processEvent } from "./processor";
+import { loadInstanceSettings } from "../../services/instance";
 
 /** Valida X-Hub-Signature-256 sobre o corpo bruto com o App Secret. */
 export function verifySignature(rawBody: string, header: string | null): boolean {
@@ -106,6 +107,7 @@ export function backoffMs(attempt: number) {
  * Eventos fora de ordem são tolerados pelo processador (atualizações usam o horário do provedor).
  */
 export async function processPendingEvents(limit = 50) {
+  await loadInstanceSettings();
   let processed = 0;
   for (let i = 0; i < limit; i++) {
     const done = await db.transaction(async (tx) => {

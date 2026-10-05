@@ -36,6 +36,13 @@
       "when": 1791156507716,
       "tag": "0004_user_avatars",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791159087415,
+      "tag": "0005_push_and_instance_settings",
+      "breakpoints": true
     }
   ]
 }

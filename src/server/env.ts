@@ -5,12 +5,29 @@ export function appUrl() {
   return (process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:3000").replace(/\/$/, "");
 }
 
+/**
+ * Configurações salvas pelo painel (tabela instance_settings), já descriptografadas.
+ * Preenchido por loadInstanceSettings() (services/instance.ts); variáveis de ambiente têm prioridade.
+ */
+export const instanceCache: { values: Map<string, string>; loadedAt: number } = (globalThis as unknown as { __crmlabsInstance?: { values: Map<string, string>; loadedAt: number } }).__crmlabsInstance ??= {
+  values: new Map(),
+  loadedAt: 0,
+};
+
+/** Origem de cada credencial do Instagram: variável de ambiente, painel ou ausente. */
+export function instagramSource(envKey: string, settingKey: string): "env" | "panel" | "missing" {
+  if (process.env[envKey]) return "env";
+  if (instanceCache.values.get(settingKey)) return "panel";
+  return "missing";
+}
+
 /** Configuração do Instagram. Retorna lista do que falta para ativar a integração. */
 export function instagramConfig() {
+  const v = instanceCache.values;
   const cfg = {
-    appId: process.env.INSTAGRAM_APP_ID ?? "",
-    appSecret: process.env.INSTAGRAM_APP_SECRET ?? "",
-    verifyToken: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN ?? "",
+    appId: process.env.INSTAGRAM_APP_ID || v.get("instagram.app_id") || "",
+    appSecret: process.env.INSTAGRAM_APP_SECRET || v.get("instagram.app_secret") || "",
+    verifyToken: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN || v.get("instagram.verify_token") || "",
     graphVersion: process.env.INSTAGRAM_GRAPH_VERSION || "v25.0",
     humanAgentEnabled: process.env.INSTAGRAM_HUMAN_AGENT_ENABLED === "true",
     redirectUri: `${appUrl()}/api/integrations/instagram/callback`,

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { handleDeauthorize, parseSignedRequest } from "@/server/integrations/instagram/oauth";
 import { appUrl } from "@/server/env";
 import { randomToken } from "@/server/crypto";
+import { loadInstanceSettings } from "@/server/services/instance";
 
 /**
  * Solicitação de exclusão de dados (exigida pela Meta). Remove credenciais e desconecta a conta;
@@ -9,6 +10,7 @@ import { randomToken } from "@/server/crypto";
  */
 export async function POST(req: NextRequest) {
   const form = await req.formData().catch(() => null);
+  await loadInstanceSettings();
   const data = parseSignedRequest(String(form?.get("signed_request") ?? ""));
   if (!data?.user_id) return new NextResponse("Invalid", { status: 400 });
   await handleDeauthorize(String(data.user_id));
