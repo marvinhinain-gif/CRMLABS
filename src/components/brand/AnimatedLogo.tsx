@@ -1,14 +1,33 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId } from "react";
+import { SPLASH_KEY } from "./splash";
 
 /**
  * Logo animada das telas de entrada: as três faixas do funil caem e se encaixam,
  * o nome aparece em seguida e, em repetição suave, uma gota atravessa o funil
  * enquanto um brilho passa pelas faixas. Desliga com "reduzir movimento".
  */
-export function AnimatedLogo({ size = 36, className = "" }: { size?: number; className?: string }) {
+export function AnimatedLogo({
+  size = 36,
+  className = "",
+  showWord = true,
+  markSplashSeen = false,
+}: {
+  size?: number;
+  className?: string;
+  /** false mostra só o símbolo (menu recolhido, barra do celular). */
+  showWord?: boolean;
+  /** Telas de entrada: quem já viu a logo animada no login não vê a abertura de novo ao entrar. */
+  markSplashSeen?: boolean;
+}) {
   const id = useId().replace(/:/g, "");
+  useEffect(() => {
+    if (!markSplashSeen) return;
+    try {
+      sessionStorage.setItem(SPLASH_KEY, "1");
+    } catch {}
+  }, [markSplashSeen]);
   const clip = `logo-clip-${id}`;
   const grad = `logo-grad-${id}`;
   return (
@@ -38,14 +57,16 @@ export function AnimatedLogo({ size = 36, className = "" }: { size?: number; cla
         </g>
         <circle className="logo-drop" cx="32" cy="9.5" r="3.2" fill="#103C30" />
       </svg>
-      <span className="font-bold tracking-tight leading-none" style={{ fontSize: size * 0.82 }} aria-hidden="true">
-        <span className="logo-word" style={{ color: "#103C30" }}>
-          CRM
+      {showWord && (
+        <span className="font-bold tracking-tight leading-none" style={{ fontSize: size * 0.82 }} aria-hidden="true">
+          <span className="logo-word" style={{ color: "#103C30" }}>
+            CRM
+          </span>
+          <span className="logo-word" style={{ color: "#00A878" }}>
+            LABS
+          </span>
         </span>
-        <span className="logo-word" style={{ color: "#00A878" }}>
-          LABS
-        </span>
-      </span>
+      )}
     </span>
   );
 }

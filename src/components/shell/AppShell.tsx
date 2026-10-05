@@ -29,7 +29,7 @@ import {
   CalendarDays,
   Plug,
 } from "lucide-react";
-import { Logo, LogoMark } from "@/components/brand/Logo";
+import { AnimatedLogo } from "@/components/brand/AnimatedLogo";
 import { api, fetcher } from "@/lib/api";
 import { MeProvider, useMe } from "@/lib/me";
 import { RealtimeBridge } from "@/lib/realtime";
@@ -177,10 +177,10 @@ function Sidebar() {
     <aside className="hidden md:flex sticky top-0 h-dvh shrink-0 flex-col bg-white border-r border-line/60 md:w-[88px] xl:w-[270px] px-3 xl:px-4 py-6">
       <Link href="/dashboard" className="flex h-12 items-center xl:px-3 justify-center xl:justify-start" aria-label="CRMLABS — início">
         <span className="hidden xl:inline-flex">
-          <Logo size={32} />
+          <AnimatedLogo size={32} />
         </span>
         <span className="xl:hidden">
-          <LogoMark size={36} />
+          <AnimatedLogo size={36} showWord={false} />
         </span>
       </Link>
       <div className="mt-8 hidden xl:block">
@@ -231,7 +231,7 @@ function MobileNav() {
           <RDialog.Title className="sr-only">Menu</RDialog.Title>
           <RDialog.Description className="sr-only">Navegação principal</RDialog.Description>
           <div className="flex items-center justify-between">
-            <Logo size={28} />
+            <AnimatedLogo size={28} />
             <RDialog.Close asChild>
               <IconButton label="Fechar menu">
                 <X className="size-5" />
@@ -396,6 +396,9 @@ function Topbar() {
   return (
     <header className="sticky top-0 z-30 flex h-[72px] items-center gap-3 bg-white/95 backdrop-blur px-4 sm:px-6 border-b border-line/60 md:border-b-0">
       <MobileNav />
+      <Link href="/dashboard" className="md:hidden -ml-1 flex shrink-0 items-center" aria-label="CRMLABS — início">
+        <AnimatedLogo size={30} showWord={false} />
+      </Link>
       <span className="hidden md:block">
         <IconButton label="Voltar" onClick={() => router.back()}>
           <ArrowLeft className="size-5" />

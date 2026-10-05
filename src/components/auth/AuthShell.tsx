@@ -41,7 +41,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
         <div aria-hidden className="pointer-events-none absolute -right-24 -top-24 size-[420px] rounded-full bg-[#dcf2e8]" />
         <div aria-hidden className="pointer-events-none absolute -left-32 bottom-[-120px] size-[460px] rounded-full bg-[#e1f4eb]" />
         <div className="relative">
-          <AnimatedLogo size={36} />
+          <AnimatedLogo size={36} markSplashSeen />
         </div>
         <div className="relative mt-16 max-w-[560px] anim-rise" style={{ "--i": 2 } as React.CSSProperties}>
           <h2 className="text-[46px] xl:text-[52px] font-bold leading-[1.05] tracking-tight text-[#0f1f1a]">
@@ -62,7 +62,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
       </aside>
       <main className="flex min-h-dvh lg:min-h-0 flex-col px-5 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-12 sm:py-10">
         <div className="lg:hidden mb-8 flex justify-center sm:justify-start">
-          <AnimatedLogo size={34} />
+          <AnimatedLogo size={34} markSplashSeen />
         </div>
         <div className="flex flex-1 items-center justify-center">
           <div className="w-full max-w-[460px] anim-rise" style={{ "--i": 3 } as React.CSSProperties}>
