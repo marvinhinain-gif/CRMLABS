@@ -109,9 +109,10 @@ export class FakeInstagramApi implements InstagramApi {
     this.outcome();
     return { id: `reply.${++this.n}` };
   }
+  profiles: Record<string, { name?: string; username?: string }> = {};
   async getUserProfile(t: string, id: string) {
     this.record("getUserProfile", t, id);
-    return { name: "Ana Souza", username: "anasouza" };
+    return this.profiles[id] ?? { name: "Ana Souza", username: "anasouza" };
   }
   async findConversationMessages(t: string, id: string) {
     this.record("findConversationMessages", t, id);
@@ -125,9 +126,13 @@ export class FakeInstagramApi implements InstagramApi {
   }
   conversations: import("@/server/integrations/instagram/client").ConversationItem[] = [];
   media: import("@/server/integrations/instagram/client").MediaDetails[] = [];
-  async listConversations() {
-    this.record("listConversations");
-    return this.conversations;
+  /** Paginação por cursor como a API real: `after` é a posição da próxima página. */
+  async listConversations(_t: string, opts: { limit: number; after?: string | null }) {
+    this.record("listConversations", opts.after ?? null);
+    const start = opts.after ? Number(opts.after) : 0;
+    const items = this.conversations.slice(start, start + opts.limit);
+    const end = start + items.length;
+    return { items, next: end < this.conversations.length ? String(end) : null };
   }
   async listMediaWithComments() {
     this.record("listMediaWithComments");

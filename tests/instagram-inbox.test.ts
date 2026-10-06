@@ -13,7 +13,7 @@ import { ingestWebhook, processPendingEvents } from "@/server/integrations/insta
 import { syncAccount } from "@/server/integrations/instagram/sync";
 import { getConversation, listConversations, resolveConversation, sendMessage } from "@/server/services/conversations";
 import { replyToComment } from "@/server/services/comments";
-import { commentOnPost, createLeadFromInstagram, deleteComment, getPostThread, hideComment, inboxSummary, instagramHistory, leadSummary, listCommentPosts, resolveAllOnPost, resolveComment } from "@/server/services/instagram";
+import { commentOnPost, deleteComment, transformToLead, getPostThread, hideComment, inboxSummary, instagramHistory, leadSummary, listCommentPosts, resolveAllOnPost, resolveComment } from "@/server/services/instagram";
 import { FakeInstagramApi, setupOrg } from "./helpers";
 
 let api: FakeInstagramApi;
@@ -84,13 +84,13 @@ describe("Directs", () => {
     expect(h.rows[0]).toMatchObject({ actorName: "Admin", roleLabel: "Administrador", link: `/instagram?aba=directs&c=${conv.id}` });
     await expect(instagramHistory(ctx.manager, { kind: "all" })).rejects.toMatchObject({ code: "forbidden" });
 
-    // Contexto comercial: ainda não é lead → "Criar Lead" coloca no funil e assume o responsável.
+    // Contexto comercial: conversar não faz de ninguém um Lead → "Transformar em Lead" coloca no funil.
     const [c] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
-    await db.delete(relationshipEntries).where(eq(relationshipEntries.contactId, c.contactId));
+    expect(await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, c.contactId))).toHaveLength(0);
     expect((await leadSummary(ctx.admin, c.contactId))?.isLead).toBe(false);
-    const lead = await createLeadFromInstagram(ctx.seller, c.contactId, "direct").catch(() => null);
+    const lead = await transformToLead(ctx.seller, c.contactId, { from: "direct" }).catch(() => null);
     expect(lead).toBeNull(); // seller não vê esse contato
-    const ok = await createLeadFromInstagram(ctx.admin, c.contactId, "direct");
+    const ok = await transformToLead(ctx.admin, c.contactId, { from: "direct" });
     expect(ok).toMatchObject({ isLead: true, ownerName: "Admin" });
   });
 });

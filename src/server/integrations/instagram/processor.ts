@@ -7,13 +7,11 @@ import {
   conversations,
   messages,
   organizations,
-  pipelineStages,
   socialComments,
   socialPosts,
   webhookEvents,
 } from "../../db/schema";
-import { addToBoard } from "../../services/board";
-import { getPipeline, notifyUser } from "../../services/common";
+import { notifyUser } from "../../services/common";
 import { publish } from "../../realtime";
 import { logger } from "../../logger";
 import { getInstagramApi } from "./client";
@@ -47,18 +45,6 @@ export async function processEvent(ev: EventRow) {
     default:
       return; // evento não suportado: registrado em webhook_events para auditoria
   }
-}
-
-/** Resolve o estágio de entrada automática, ignorando etapas arquivadas. */
-async function autoEntryStage(orgId: string, tx: Tx) {
-  const [org] = await tx.select().from(organizations).where(eq(organizations.id, orgId));
-  if (!org?.autoEntryStageId) return null;
-  const rel = await getPipeline(orgId, "relationship", tx);
-  const [stage] = await tx
-    .select()
-    .from(pipelineStages)
-    .where(and(eq(pipelineStages.id, org.autoEntryStageId), eq(pipelineStages.pipelineId, rel.id), isNull(pipelineStages.archivedAt)));
-  return stage ?? null;
 }
 
 /**
@@ -108,13 +94,15 @@ export async function resolveContact(
     const [found] = await tx.select().from(contacts).where(eq(contacts.id, again.contactId));
     return { contact: found, created: false };
   }
-  const stage = await autoEntryStage(account.orgId, tx);
-  if (stage) await addToBoard({ orgId: account.orgId, userId: null }, c.id, stage.id, tx, opts.source === "instagram_dm" ? "Mensagem recebida" : "Comentário recebido");
+  // Contato do Instagram NÃO é Lead: conversa/comentário nunca coloca a pessoa no Kanban.
+  // Ela só entra no funil por "Transformar em Lead" (ação de alguém da equipe).
   return { contact: c, created: true };
 }
 
 /** Busca nome/@ oficiais do remetente (melhor esforço, fora da transação). */
 export async function enrichProfile(account: Account, contactId: string, igsid: string) {
+  // Marca a consulta antes de chamar a API: uma falha não vira tentativa infinita a cada sincronização.
+  await db.update(channelIdentities).set({ profileCheckedAt: new Date() }).where(and(eq(channelIdentities.accountId, account.id), eq(channelIdentities.externalId, igsid)));
   try {
     const p = await getInstagramApi().getUserProfile(await getAccountToken(account.id), igsid);
     const username = p.username?.toLowerCase() ?? null;
@@ -343,7 +331,6 @@ async function handleComment(account: Account, v: CommentValue) {
   // A conta respondeu pelo próprio Instagram: o comentário respondido (e o que veio antes na mesma conversa) sai de "Sem resposta".
   if (isOwn && v.parent_id) await autoResolveThreads(account.id);
   await publish({ orgId: account.orgId, topic: "comments", ownerIds: [res.ownerId], sharedInbox: !res.contactId });
-  if (res.created) await publish({ orgId: account.orgId, topic: "board" });
 }
 
 /**

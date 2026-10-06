@@ -7,17 +7,19 @@ import { assertCan, can, conversationScope } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
 import { publish } from "../realtime";
 import { audit, cleanText } from "./common";
+import { isRealLeadSql } from "./board";
 import { assertMember } from "./team";
 import { getInstagramApi, ProviderError } from "../integrations/instagram/client";
 import { capabilitiesOf, getAccountToken, recordProviderError, type Account } from "../integrations/instagram/accounts";
 import { logger } from "../logger";
 
 export const listConversationsSchema = z.object({
-  filter: z.enum(["all", "mine", "unread", "awaiting", "pending"]).default("all"),
+  filter: z.enum(["all", "mine", "unread", "awaiting", "pending", "stories"]).default("all"),
   owner: z.enum(["all", "mine", "none"]).optional(),
   channel: z.enum(["instagram"]).optional(),
   q: z.string().trim().max(100).optional(),
-  cursor: z.string().datetime().optional(),
+  /** Cursor estável "data|id" (empates de horário não pulam nem repetem conversas). */
+  cursor: z.string().regex(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\|[0-9a-f-]{36}$/).optional(),
   limit: z.coerce.number().int().min(5).max(50).default(30),
 });
 
@@ -33,18 +35,34 @@ export async function listConversations(ctx: Ctx, f: z.infer<typeof listConversa
   if (f.filter === "awaiting") conds.push(and(eq(conversations.status, "open"), eq(conversations.lastMessageDirection, "in"))!);
   // "Sem resposta": última mensagem do contato, depois da última resolução manual.
   if (f.filter === "pending") conds.push(sql`(${conversations.lastMessageDirection} = 'in' and ${conversations.status} = 'open' and (${conversations.resolvedAt} is null or ${conversations.resolvedAt} < ${conversations.lastInboundAt}))`);
+  // Interações com Stories que a API entrega: respostas aos stories da conta e menções em stories.
+  if (f.filter === "stories") conds.push(sql`exists (select 1 from messages m where m.conversation_id = ${conversations.id} and (m.attachments @> '[{"type":"story_reply"}]'::jsonb or m.attachments @> '[{"type":"story_mention"}]'::jsonb))`);
   if (f.owner === "mine") conds.push(eq(conversations.ownerId, ctx.userId));
   if (f.owner === "none") conds.push(sql`${conversations.ownerId} is null`);
   if (f.channel) conds.push(eq(conversations.channel, f.channel));
   if (f.q) {
-    const term = `%${f.q.replace(/^@/, "").replace(/[%_]/g, "\\$&")}%`;
-    // Nome, @ ou conteúdo das mensagens.
-    conds.push(or(ilike(contacts.name, term), ilike(contacts.username, term), sql`exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.body ilike ${term})`)!);
+    const raw = f.q.replace(/^@/, "");
+    const term = `%${raw.replace(/[%_\\]/g, "\\$&")}%`;
+    // Busca no banco (todas as conversas sincronizadas, não só as carregadas na tela):
+    // nome, @, identificador oficial do Instagram (IGSID) ou texto das mensagens.
+    conds.push(
+      or(
+        ilike(contacts.name, term),
+        ilike(contacts.username, term),
+        sql`exists (select 1 from channel_identities ci where ci.contact_id = ${contacts.id} and (ci.external_id = ${raw} or ci.username ilike ${term}))`,
+        sql`exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.body ilike ${term})`,
+      )!,
+    );
   }
-  if (f.cursor) conds.push(lt(conversations.lastMessageAt, new Date(f.cursor)));
+  const sortAt = sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`;
+  if (f.cursor) {
+    const [at, id] = f.cursor.split("|");
+    conds.push(sql`(${sortAt}, ${conversations.id}) < (${at}::timestamptz, ${id}::uuid)`);
+  }
   const rows = await db
     .select({
       id: conversations.id,
+      sortKey: sql<string>`to_char(${sortAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       channel: conversations.channel,
       status: conversations.status,
       unreadCount: conversations.unreadCount,
@@ -65,19 +83,21 @@ export async function listConversations(ctx: Ctx, f: z.infer<typeof listConversa
         and m.sent_at > coalesce((select max(o.sent_at) from messages o where o.conversation_id = ${conversations.id} and o.direction = 'out'), '-infinity'::timestamptz)
         and m.sent_at > coalesce(${conversations.resolvedAt}, '-infinity'::timestamptz))`,
       matchedText: f.q
-        ? sql<string | null>`(select m.body from messages m where m.conversation_id = ${conversations.id} and m.body ilike ${`%${f.q.replace(/^@/, "").replace(/[%_]/g, "\$&")}%`} order by m.sent_at desc limit 1)`
+        ? sql<string | null>`(select m.body from messages m where m.conversation_id = ${conversations.id} and m.body ilike ${`%${f.q.replace(/^@/, "").replace(/[%_\\]/g, "\\$&")}%`} order by m.sent_at desc limit 1)`
         : sql<string | null>`null`,
+      isLead: isRealLeadSql(contacts.id),
     })
     .from(conversations)
     .innerJoin(contacts, eq(contacts.id, conversations.contactId))
     .leftJoin(users, eq(users.id, conversations.ownerId))
     .leftJoin(connectedAccounts, eq(connectedAccounts.id, conversations.accountId))
     .where(and(...conds))
-    .orderBy(desc(sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`))
+    .orderBy(desc(sortAt), desc(conversations.id))
     .limit(f.limit + 1);
   const hasMore = rows.length > f.limit;
   const page = rows.slice(0, f.limit);
-  return { rows: page, nextCursor: hasMore ? page[page.length - 1]?.lastMessageAt?.toISOString() ?? null : null };
+  const last = page[page.length - 1];
+  return { rows: page.map(({ sortKey: _s, ...r }) => r), nextCursor: hasMore && last ? `${last.sortKey}|${last.id}` : null };
 }
 
 async function getVisibleConversation(ctx: Ctx, id: string) {
@@ -157,8 +177,8 @@ export async function getConversation(ctx: Ctx, id: string, q: z.infer<typeof me
     contact: { id: contact.id, name: contact.name, username: contact.username, avatarUrl: contact.avatarUrl, ownerId: contact.ownerId },
     messages: page,
     hasMore,
-    // O histórico disponível começa quando a conta foi conectada: a API não retorna conversas antigas integralmente.
-    historyNote: hasMore ? null : "Início do histórico disponível. Mensagens anteriores à conexão da conta não são importadas pela API.",
+    // A API entrega só as 20 mensagens mais recentes de cada conversa; o resto chega pelos webhooks depois da conexão.
+    historyNote: hasMore ? null : "Início do histórico disponível. Em conversas antigas, a API do Instagram entrega apenas as 20 mensagens mais recentes.",
     send: elig.allowed ? { allowed: true as const, humanAgent: elig.humanAgent, windowEndsAt: elig.windowEndsAt } : { allowed: false as const, reason: elig.reason, code: elig.code },
   };
 }
@@ -277,7 +297,15 @@ export async function sendMessage(ctx: Ctx, conversationId: string, input: z.inf
     [final] = await db.update(messages).set({ status, error }).where(eq(messages.id, pending.id)).returning();
     logger.warn(`Envio ${pending.id} terminou como ${status}`, { kind: pe.kind, code: pe.code });
   }
-  await audit(db, ctx, "instagram.dm_sent", "conversation", conv.id, { to: contact.username ?? contact.name, preview: pending.body?.slice(0, 120), status: final.status, error: final.error });
+  // Resposta a um story (a última mensagem recebida foi resposta/menção a story): aparece assim no histórico.
+  const [lastIn] = await db
+    .select({ attachments: messages.attachments })
+    .from(messages)
+    .where(and(eq(messages.conversationId, conv.id), eq(messages.direction, "in")))
+    .orderBy(desc(messages.sentAt))
+    .limit(1);
+  const story = !!lastIn?.attachments?.some((a) => a.type === "story_reply" || a.type === "story_mention");
+  await audit(db, ctx, "instagram.dm_sent", "conversation", conv.id, { to: contact.username ?? contact.name, preview: pending.body?.slice(0, 120), status: final.status, error: final.error, ...(story ? { story: true } : {}) });
   await publish({ orgId: ctx.orgId, topic: "conversations", entityId: conv.id, ownerIds: [conv.ownerId, contact.ownerId] });
   return final;
 }

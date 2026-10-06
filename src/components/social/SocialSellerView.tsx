@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import * as Popover from "@radix-ui/react-popover";
-import { Funnel, LayoutDashboard, MessageCircle, Plus, Search, Send, SlidersHorizontal, UserRound } from "lucide-react";
+import { Funnel, LayoutDashboard, MessageCircle, Plus, Search, Send, ShieldAlert, SlidersHorizontal, UserRound } from "lucide-react";
 import { fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useOpenContact, useQueryParam } from "@/lib/nav";
@@ -11,6 +11,7 @@ import type { Stage } from "@/lib/types";
 import { Button, cx, DemoBadge, Field, PageHeader, Select, Tabs } from "@/components/ui";
 import { KanbanBoard } from "./KanbanBoard";
 import { EditStagesDialog } from "./EditStagesDialog";
+import { LeadReviewDialog } from "./LeadReviewDialog";
 import { AccountPill, useActiveAccount } from "./AccountPill";
 import { NewContactDialog } from "@/components/contacts/NewContactDialog";
 import { useRouter } from "next/navigation";
@@ -39,6 +40,9 @@ export function SocialSellerView() {
   const [editStages, setEditStages] = useState(false);
   const { data: stages } = useSWR<Stage[]>("/api/stages?kind=relationship", fetcher);
   const { data: tags } = useSWR<{ id: string; name: string }[]>("/api/tags", fetcher);
+  const isAdmin = me.user.role === "admin";
+  const { data: ig } = useSWR<{ autoLeadsToReview: number }>(isAdmin ? "/api/instagram" : null, fetcher);
+  const [review, setReview] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(q.trim()), 300);
@@ -75,6 +79,17 @@ export function SocialSellerView() {
 
       {tab === "kanban" && (
         <>
+          {isAdmin && (ig?.autoLeadsToReview ?? 0) > 0 && (
+            <div role="status" className="flex flex-col gap-3 rounded-[18px] border border-[#f1d9a6] bg-warning-soft px-4 py-3 text-[13.5px] text-[#6b4a00] sm:flex-row sm:items-center">
+              <ShieldAlert className="hidden size-5 shrink-0 sm:block" aria-hidden />
+              <p className="flex-1">
+                <b className="font-semibold">{ig!.autoLeadsToReview} cartão(ões) entraram sozinhos no Kanban</b> só por mensagem ou comentário (regra antiga, já corrigida). Revise e decida quem continua como Lead — nada é apagado.
+              </p>
+              <Button size="sm" variant="secondary" className="shrink-0" onClick={() => setReview(true)}>
+                Revisar
+              </Button>
+            </div>
+          )}
           <div className="flex flex-col gap-3 rounded-[22px] border border-line/70 bg-white/60 p-3 sm:flex-row sm:items-center">
             <div className="relative sm:w-[260px]">
               <UserRound className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-ink" aria-hidden />
@@ -163,6 +178,7 @@ export function SocialSellerView() {
 
       <NewContactDialog open={newStage !== undefined} onOpenChange={(v) => !v && setNewStage(undefined)} defaultStageId={newStage ?? undefined} onCreated={openContact} />
       <EditStagesDialog open={editStages} onOpenChange={setEditStages} />
+      {isAdmin && <LeadReviewDialog open={review} onOpenChange={setReview} />}
     </div>
   );
 }

@@ -33,7 +33,7 @@ function describe(r: HistoryRow): { text: React.ReactNode; detail?: string | nul
   const failed = d.status === "failed" || d.status === "unconfirmed";
   switch (r.action) {
     case "instagram.dm_sent":
-      return { text: <>Respondeu Direct de {at(d.to)}{failed ? " — não confirmado" : ""}</>, detail: d.preview ? `“${d.preview}”` : null, tone: failed ? "danger" : undefined };
+      return { text: <>{d.story ? "Respondeu ao story de " : "Respondeu Direct de "}{at(d.to)}{failed ? " — não confirmado" : ""}</>, detail: d.preview ? `“${d.preview}”` : null, tone: failed ? "danger" : undefined };
     case "instagram.dm_resolved":
       return { text: <>Marcou o Direct de {at(d.to)} como resolvido</> };
     case "instagram.dm_reopened":
@@ -55,7 +55,16 @@ function describe(r: HistoryRow): { text: React.ReactNode; detail?: string | nul
     case "instagram.post_commented":
       return { text: <>Comentou na publicação{failed ? " — falhou" : ""}</>, detail: [post, d.preview ? `“${d.preview}”` : null].filter(Boolean).join(" · "), tone: failed ? "danger" : undefined };
     case "instagram.lead_created":
-      return { text: <>Criou lead {d.username ? at(d.username) : <b>{String(d.name ?? "")}</b>} a partir {d.from === "comment" ? "de um comentário" : "do Direct"}</> };
+      return {
+        text: <>Transformou {d.username ? at(d.username) : <b>{String(d.name ?? "")}</b>} em Lead {d.from === "comment" ? "(comentário)" : "(Direct)"}</>,
+        detail: [d.stage && `Etapa: ${d.stage}`, d.owner && `Responsável: ${d.owner}`, d.product && `Produto: ${d.product}`].filter(Boolean).join(" · ") || null,
+      };
+    case "instagram.lead_forwarded":
+      return { text: <>Encaminhou o Lead {d.username ? at(d.username) : <b>{String(d.name ?? "")}</b>} para o Closer{d.closer ? ` ${d.closer}` : ""}</> };
+    case "instagram.lead_review_kept":
+      return { text: <>Confirmou {d.username ? at(d.username) : <b>{String(d.name ?? "")}</b>} como Lead (revisão de entradas automáticas)</>, detail: d.stage ? `Etapa: ${d.stage}` : null };
+    case "instagram.lead_review_removed":
+      return { text: <>Removeu {d.username ? at(d.username) : <b>{String(d.name ?? "")}</b>} do Kanban (revisão de entradas automáticas)</>, detail: "Contato e conversa continuam no Instagram." };
     default:
       return { text: r.action.replace("instagram.", "") };
   }
@@ -76,7 +85,7 @@ function HistoryView() {
           <option value="all">Todas as ações</option>
           <option value="directs">Directs</option>
           <option value="comments">Comentários</option>
-          <option value="leads">Leads criados</option>
+          <option value="leads">Leads</option>
         </Select>
         <Select aria-label="Pessoa" value={userId} onChange={(e) => setUserId(e.target.value)} className="w-auto bg-white">
           <option value="">Toda a equipe</option>
@@ -93,7 +102,7 @@ function HistoryView() {
         <LoadingState rows={5} />
       ) : rows.length === 0 ? (
         <Card>
-          <EmptyState icon={<History />} title="Nada registrado ainda" description="Respostas, resoluções e leads criados pelo Instagram aparecem aqui, com quem fez e quando." />
+          <EmptyState icon={<History />} title="Nada registrado ainda" description="Respostas a Directs, stories e comentários, contatos transformados em Lead e encaminhamentos aparecem aqui, com quem fez e quando." />
         </Card>
       ) : (
         <Card className="px-4 py-2 sm:px-6">
@@ -118,7 +127,7 @@ function HistoryView() {
                     </div>
                     {r.link && (
                       <Link href={r.link} className="shrink-0 self-center text-[13px] font-medium text-brand hover:underline">
-                        {r.action.startsWith("instagram.dm") ? "Ver conversa" : r.action === "instagram.lead_created" ? "Ver lead" : "Ver interação"}
+                        {r.action.startsWith("instagram.dm") ? "Ver conversa" : r.action.startsWith("instagram.lead") ? "Ver contato" : "Ver interação"}
                       </Link>
                     )}
                   </div>

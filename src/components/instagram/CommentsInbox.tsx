@@ -5,6 +5,7 @@ import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { toast } from "sonner";
 import { ArrowLeft, CheckCheck, Image as ImageIcon, CircleCheck, ExternalLink, EyeOff, Heart, ImageOff, Lock, MessageCircle, MessageSquareReply, Plus, Search, Send, Trash2, UserRoundCheck, X } from "lucide-react";
+import { TransformLeadDialog } from "./TransformLeadDialog";
 import { api, fetcher, qs } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useOpenContact, useQueryParam } from "@/lib/nav";
@@ -161,12 +162,19 @@ function CommentRow({ c, account, nested, highlight, onChanged }: { c: Comment; 
       setBusy(false);
     }
   };
-  const createLead = () =>
-    act(async () => {
-      let contactId = c.contactId;
-      if (!contactId) contactId = (await api.post<{ contactId: string }>(`/api/comments/${c.id}/link`, { createContact: true })).contactId;
-      await api.post(`/api/contacts/${contactId}/lead`, { from: "comment" });
-    }, "Lead criado no funil do Social Seller.");
+  const [transformFor, setTransformFor] = useState<{ id: string; name: string; username: string | null; avatarUrl: string | null } | null>(null);
+  // Comentário de quem ainda não é contato: cria o contato do Instagram e só então abre "Transformar em Lead".
+  const openTransform = async () => {
+    setBusy(true);
+    try {
+      const contactId = c.contactId ?? (await api.post<{ contactId: string }>(`/api/comments/${c.id}/link`, { createContact: true })).contactId;
+      setTransformFor({ id: contactId, name: c.contactName ?? (c.authorUsername ? `@${c.authorUsername}` : "Contato do Instagram"), username: c.authorUsername, avatarUrl: c.contactAvatar });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const link = "text-[12.5px] font-medium text-muted hover:text-ink disabled:opacity-50";
   return (
     <div ref={ref} className={cx("flex gap-3", nested ? "pt-3" : "", highlight && "rounded-[14px] bg-selected/50 -mx-2 px-2 py-1")}>
@@ -214,8 +222,8 @@ function CommentRow({ c, account, nested, highlight, onChanged }: { c: Comment; 
             </button>
           )}
           {!c.isOwn && !c.isLead && (
-            <button className={cx(link, "inline-flex items-center gap-0.5")} disabled={busy} onClick={createLead}>
-              <Plus className="size-3" aria-hidden /> Criar Lead
+            <button className={cx(link, "inline-flex items-center gap-0.5")} disabled={busy} onClick={openTransform}>
+              <Plus className="size-3" aria-hidden /> Transformar em Lead
             </button>
           )}
           {c.pending && <span className="rounded-full bg-selected px-2 py-0.5 text-[11.5px] font-semibold text-brand">Sem resposta</span>}
@@ -238,6 +246,7 @@ function CommentRow({ c, account, nested, highlight, onChanged }: { c: Comment; 
         {c.failedReply && <p className="mt-1 text-[12px] text-danger">{c.failedReply.error ?? "Última resposta não confirmada."}</p>}
         {reply && <ReplyBox c={c} kind={reply} onClose={() => setReply(null)} onSent={onChanged} />}
       </div>
+      {transformFor && <TransformLeadDialog open onOpenChange={(v) => !v && setTransformFor(null)} contact={transformFor} from="comment" onDone={onChanged} />}
     </div>
   );
 }

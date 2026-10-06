@@ -50,6 +50,11 @@ function CardBody({ card, menu }: { card: BoardCard; menu?: React.ReactNode }) {
         <div className="min-w-0 flex-1">
           <p className="truncate text-[15px] font-semibold text-ink">{card.name}</p>
           <p className="truncate text-[13px] text-muted">{card.username ? `@${card.username}` : "sem @"}</p>
+          {card.autoCreated && (
+            <span className="mt-1 inline-block rounded-full bg-warning-soft px-2 py-0.5 text-[11px] font-medium text-[#6b4a00]" title="Entrou sozinho por mensagem/comentário (regra antiga). Aguarda revisão.">
+              Entrada automática
+            </span>
+          )}
         </div>
         {menu}
       </div>

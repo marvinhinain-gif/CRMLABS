@@ -198,6 +198,11 @@ export const connectedAccounts = pgTable(
     connectedAt: ts("connected_at"),
     lastCheckedAt: ts("last_checked_at"),
     disconnectedAt: ts("disconnected_at"),
+    /** Sincronização completa do Direct (todas as páginas de /me/conversations), retomável pelo cursor. */
+    dmBackfillCursor: text("dm_backfill_cursor"),
+    dmBackfillStartedAt: ts("dm_backfill_started_at"),
+    dmBackfillDoneAt: ts("dm_backfill_done_at"),
+    dmBackfillPages: integer("dm_backfill_pages").notNull().default(0),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("connected_accounts_uq").on(t.orgId, t.provider, t.externalAccountId)],
@@ -274,9 +279,11 @@ export const channelIdentities = pgTable(
     /** Identificador oficial do provedor (IGSID no Instagram). */
     externalId: text("external_id").notNull(),
     username: text("username"),
+    /** Última consulta de nome/foto oficiais (null = ainda não consultado). */
+    profileCheckedAt: ts("profile_checked_at"),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("channel_identities_uq").on(t.orgId, t.accountId, t.externalId)],
+  (t) => [uniqueIndex("channel_identities_uq").on(t.orgId, t.accountId, t.externalId), index("channel_identities_contact_idx").on(t.contactId), index("channel_identities_ext_idx").on(t.orgId, t.externalId)],
 );
 
 export const tags = pgTable(
@@ -358,6 +365,12 @@ export const relationshipEntries = pgTable(
     stageId: uuid("stage_id").notNull().references(() => pipelineStages.id),
     position: integer("position").notNull().default(0),
     version: integer("version").notNull().default(1),
+    /** Entrou sozinho no quadro (regra antiga: mensagem/comentário recebido). Não conta como Lead até revisão. */
+    autoCreated: boolean("auto_created").notNull().default(false),
+    /** De onde veio o Lead: instagram_direct, instagram_comment, manual… */
+    origin: text("origin"),
+    productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     closedAt: ts("closed_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

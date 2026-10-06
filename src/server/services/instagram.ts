@@ -10,11 +10,14 @@ import {
   leads,
   leadSources,
   memberships,
+  notes,
   opportunities,
   organizations,
   pipelineStages,
   products,
+  relationshipEntries,
   socialComments,
+  stageHistory,
   socialPosts,
   users,
 } from "../db/schema";
@@ -23,7 +26,9 @@ import { can, commentScope, contactScope, conversationScope, ROLE_LABEL } from "
 import { AppError, forbidden, invalid, notFound } from "../errors";
 import { publish } from "../realtime";
 import { audit, cleanText, getPipeline } from "./common";
-import { addToBoard, activeEntryFor } from "./board";
+import { addToBoard, activeEntryFor, isRealLeadSql } from "./board";
+import { assertMember } from "./team";
+import { countAutoEntries } from "./leadReview";
 import { getInstagramApi, ProviderError } from "../integrations/instagram/client";
 import { capabilitiesOf, getAccountToken, getActiveAccount, recordProviderError } from "../integrations/instagram/accounts";
 import { syncAccount, syncSoon, upsertMedia } from "../integrations/instagram/sync";
@@ -43,10 +48,17 @@ export async function inboxSummary(ctx: Ctx) {
     db.select({ n: sql<number>`count(*)::int` }).from(conversations).innerJoin(contacts, eq(contacts.id, conversations.contactId)).where(and(conversationScope(ctx), pendingConversation)),
     db.select({ n: sql<number>`count(*)::int` }).from(socialComments).where(and(commentScope(ctx), pendingComment)),
   ]);
+  const [synced] = account ? await db.select({ n: sql<number>`count(*)::int` }).from(conversations).where(and(eq(conversations.orgId, ctx.orgId), eq(conversations.accountId, account.id))) : [];
   return {
     account: account ? { username: account.username, status: account.status, capabilities: capabilitiesOf(account), lastCheckedAt: account.lastCheckedAt } : null,
     pendingDirects: d?.n ?? 0,
     pendingComments: c?.n ?? 0,
+    /** Importação do histórico do Direct (todas as páginas da API). */
+    directSync: account && !ctx.org.isDemo
+      ? { done: !!account.dmBackfillDoneAt, startedAt: account.dmBackfillStartedAt, doneAt: account.dmBackfillDoneAt, pages: account.dmBackfillPages, conversations: synced?.n ?? 0 }
+      : null,
+    /** Cartões que entraram sozinhos no Kanban (regra antiga) aguardando revisão — só administradores. */
+    autoLeadsToReview: ctx.role === "admin" ? await countAutoEntries(ctx.orgId) : 0,
   };
 }
 
@@ -54,20 +66,43 @@ export async function inboxSummary(ctx: Ctx) {
 export async function syncNow(ctx: Ctx) {
   const account = await getActiveAccount(ctx.orgId);
   if (!account || account.status !== "connected") throw new AppError("channel_unavailable", "Conecte o Instagram em Configurações para sincronizar.");
-  const r = await syncAccount(account, { minIntervalMs: 30_000 });
+  // O botão traz o que é novo e avança um pouco o histórico; o resto continua em segundo plano.
+  const r = await syncAccount(account, { minIntervalMs: 30_000, backfillPages: 2 });
   return r;
 }
 
-// ---------- Lead do contato ----------
-/** Contexto comercial do contato para a conversa: é lead? origem, produto, responsável, etapa, último contato. */
+// ---------- Contato do Instagram × Lead comercial ----------
+/** Contatos da organização que são a mesma pessoa: mesmo identificador oficial (é o próprio contato) ou mesmo @. */
+async function sameUsernameContacts(orgId: string, contactId: string, username: string | null) {
+  if (!username) return [] as { id: string; name: string }[];
+  return db
+    .select({ id: contacts.id, name: contacts.name })
+    .from(contacts)
+    .where(and(eq(contacts.orgId, orgId), sql`lower(${contacts.username}) = ${username.replace(/^@/, "").toLowerCase()}`, sql`${contacts.id} <> ${contactId}`, isNull(contacts.mergedIntoId), isNull(contacts.archivedAt)))
+    .limit(5);
+}
+
+async function realLeadState(contactId: string, orgId: string) {
+  const [entry, [lead], [opp]] = await Promise.all([
+    activeEntryFor(contactId, orgId),
+    db.select({ id: leads.id }).from(leads).where(and(eq(leads.contactId, contactId), eq(leads.orgId, orgId))).limit(1),
+    db.select({ id: opportunities.id }).from(opportunities).where(and(eq(opportunities.contactId, contactId), eq(opportunities.orgId, orgId))).limit(1),
+  ]);
+  return { entry, isLead: (!!entry && !entry.autoCreated) || !!lead || !!opp };
+}
+
+/**
+ * Contexto comercial do contato para a conversa. `isLead` só é verdadeiro para Lead de verdade
+ * (Transformar em Lead, formulário, oportunidade) — conversar não basta.
+ */
 export async function leadSummary(ctx: Ctx, contactId: string) {
   const [c] = await db
     .select({ id: contacts.id, name: contacts.name, username: contacts.username, avatarUrl: contacts.avatarUrl, ownerId: contacts.ownerId, lastInteractionAt: contacts.lastInteractionAt, firstSourceId: contacts.firstSourceId, summary: contacts.summary })
     .from(contacts)
     .where(and(eq(contacts.id, contactId), contactScope(ctx)));
   if (!c) return null;
-  const [entry, [lead], [opp], [owner], [source]] = await Promise.all([
-    activeEntryFor(c.id, ctx.orgId),
+  const [state, [lead], [opp], [owner], [source]] = await Promise.all([
+    realLeadState(c.id, ctx.orgId),
     db.select({ productName: products.name, createdAt: leads.createdAt }).from(leads).leftJoin(products, eq(products.id, leads.productId)).where(and(eq(leads.contactId, c.id), eq(leads.orgId, ctx.orgId))).orderBy(desc(leads.createdAt)).limit(1),
     db
       .select({ id: opportunities.id, status: opportunities.status, product: opportunities.product, stageName: pipelineStages.name, closerName: users.name })
@@ -80,43 +115,112 @@ export async function leadSummary(ctx: Ctx, contactId: string) {
     c.ownerId ? db.select({ name: users.name }).from(users).where(eq(users.id, c.ownerId)) : Promise.resolve([] as { name: string }[]),
     c.firstSourceId ? db.select({ name: leadSources.name, color: leadSources.color }).from(leadSources).where(eq(leadSources.id, c.firstSourceId)) : Promise.resolve([] as { name: string; color: string }[]),
   ]);
-  let stage: { name: string; color: string } | null = null;
-  if (entry) {
-    const [s] = await db.select({ name: pipelineStages.name, color: pipelineStages.color }).from(pipelineStages).where(eq(pipelineStages.id, entry.stageId));
-    stage = s ?? null;
+  const entry = state.entry;
+  const [entryProduct] = entry?.productId ? await db.select({ name: products.name }).from(products).where(eq(products.id, entry.productId)) : [];
+  // Mesma pessoa já cadastrada como Lead em outro contato (mesmo @): evita duplicar.
+  let duplicateOf: { id: string; name: string } | null = null;
+  if (!state.isLead) {
+    for (const other of await sameUsernameContacts(ctx.orgId, c.id, c.username)) {
+      if ((await realLeadState(other.id, ctx.orgId)).isLead) {
+        duplicateOf = other;
+        break;
+      }
+    }
   }
+  const ORIGIN: Record<string, string> = { instagram_direct: "Instagram Direct", instagram_comment: "Comentário do Instagram", form: "Formulário", manual: "Cadastro manual" };
   return {
     contact: c,
-    isLead: !!entry || !!lead || !!opp,
-    origin: source ?? null,
-    product: opp?.product ?? lead?.productName ?? null,
+    isLead: state.isLead,
+    /** Cartão que entrou sozinho no Kanban pela regra antiga (aguarda revisão; não é Lead). */
+    autoEntry: !!entry && entry.autoCreated,
+    duplicateOf,
+    origin: source ?? (entry?.origin && ORIGIN[entry.origin] ? { name: ORIGIN[entry.origin], color: "pink" } : null),
+    product: entryProduct?.name ?? opp?.product ?? lead?.productName ?? null,
     ownerName: owner?.name ?? null,
-    stage,
-    entry: entry ? { id: entry.id, version: entry.version, stageId: entry.stageId } : null,
+    stage: entry && !entry.autoCreated ? { name: entry.stageName, color: entry.stageColor } : null,
+    entry: entry && !entry.autoCreated ? { id: entry.id, version: entry.version, stageId: entry.stageId } : null,
     opportunity: opp ? { id: opp.id, status: opp.status, stageName: opp.stageName, closerName: opp.closerName } : null,
     lastContactAt: c.lastInteractionAt,
   };
 }
 
-/** "Criar Lead": coloca o contato no funil do Social Seller (etapa de entrada) e assume quem criou. */
-export async function createLeadFromInstagram(ctx: Ctx, contactId: string, from: "direct" | "comment") {
+export const transformLeadSchema = z.object({
+  from: z.enum(["direct", "comment"]).default("direct"),
+  stageId: z.string().uuid().optional(),
+  ownerId: z.string().uuid().nullable().optional(),
+  productId: z.string().uuid().nullable().optional(),
+  note: z.string().trim().max(2000).optional(),
+});
+
+/** Opções do formulário "Transformar em Lead": etapas do Social Seller, produtos e etapa sugerida. */
+export async function transformLeadOptions(ctx: Ctx) {
+  const rel = await getPipeline(ctx.orgId, "relationship");
+  const [stages, prods, [org]] = await Promise.all([
+    db.select({ id: pipelineStages.id, name: pipelineStages.name, color: pipelineStages.color }).from(pipelineStages).where(and(eq(pipelineStages.pipelineId, rel.id), isNull(pipelineStages.archivedAt))).orderBy(asc(pipelineStages.position)),
+    db.select({ id: products.id, name: products.name }).from(products).where(and(eq(products.orgId, ctx.orgId), isNull(products.archivedAt))).orderBy(asc(products.name)),
+    db.select({ autoEntryStageId: organizations.autoEntryStageId }).from(organizations).where(eq(organizations.id, ctx.orgId)),
+  ]);
+  const suggested = stages.find((s) => s.id === org?.autoEntryStageId)?.id ?? stages[0]?.id ?? null;
+  return { stages, products: prods, defaultStageId: suggested, canAssignOthers: can(ctx, "contacts.assign") };
+}
+
+/**
+ * "Transformar em Lead": a pessoa só entra no Kanban do Social Seller depois desta confirmação.
+ * Sem duplicar: se o contato (ou outro com o mesmo @) já é Lead, recusa e aponta para ele.
+ * Um cartão automático antigo do mesmo contato é aproveitado (vira Lead de verdade, na etapa escolhida).
+ */
+export async function transformToLead(ctx: Ctx, contactId: string, input: z.infer<typeof transformLeadSchema>) {
   const [c] = await db.select().from(contacts).where(and(eq(contacts.id, contactId), contactScope(ctx)));
   if (!c) throw notFound("Contato não encontrado.");
-  const entry = await activeEntryFor(c.id, ctx.orgId);
-  if (!entry) {
-    const [org] = await db.select().from(organizations).where(eq(organizations.id, ctx.orgId));
-    const rel = await getPipeline(ctx.orgId, "relationship");
-    const [stage] = org.autoEntryStageId
-      ? await db.select().from(pipelineStages).where(and(eq(pipelineStages.id, org.autoEntryStageId), isNull(pipelineStages.archivedAt)))
-      : await db.select().from(pipelineStages).where(and(eq(pipelineStages.pipelineId, rel.id), isNull(pipelineStages.archivedAt))).orderBy(asc(pipelineStages.position)).limit(1);
-    if (stage) await addToBoard(ctx, c.id, stage.id, db, from === "direct" ? "Lead criado pelo Direct" : "Lead criado por comentário");
+  const target = c.mergedIntoId ?? c.id;
+  if ((await realLeadState(target, ctx.orgId)).isLead) throw new AppError("conflict", "Este contato já é um Lead.", { leadContactId: target });
+  for (const other of await sameUsernameContacts(ctx.orgId, target, c.username)) {
+    if ((await realLeadState(other.id, ctx.orgId)).isLead) throw new AppError("conflict", `Este contato já é um Lead (${other.name}).`, { leadContactId: other.id });
   }
-  if (!c.ownerId) await db.update(contacts).set({ ownerId: ctx.userId }).where(eq(contacts.id, c.id));
-  await audit(db, ctx, "instagram.lead_created", "contact", c.id, { username: c.username, name: c.name, from });
-  await publish({ orgId: ctx.orgId, topic: "board", entityId: c.id, ownerIds: [ctx.userId] });
+  const opts = await transformLeadOptions(ctx);
+  const stageId = input.stageId ?? opts.defaultStageId;
+  const stage = opts.stages.find((s) => s.id === stageId);
+  if (!stage) throw invalid("Escolha a etapa inicial do Lead.");
+  let ownerId = input.ownerId === undefined ? (c.ownerId ?? ctx.userId) : input.ownerId;
+  if (ownerId && ownerId !== ctx.userId) {
+    if (!can(ctx, "contacts.assign") && ownerId !== c.ownerId) throw forbidden("Somente gestores e administradores escolhem outro responsável.");
+    await assertMember(ctx.orgId, ownerId, { activeOnly: true });
+  }
+  ownerId ??= null;
+  const productId = input.productId && opts.products.some((p) => p.id === input.productId) ? input.productId : null;
+  if (input.productId && !productId) throw invalid("Produto inválido.");
+  const origin = input.from === "comment" ? "instagram_comment" : "instagram_direct";
+  const reason = "Transformado em Lead";
+
+  await db.transaction(async (tx) => {
+    const [auto] = await tx
+      .select()
+      .from(relationshipEntries)
+      .where(and(eq(relationshipEntries.contactId, target), eq(relationshipEntries.orgId, ctx.orgId), isNull(relationshipEntries.closedAt)))
+      .for("update");
+    if (auto) {
+      // Cartão automático antigo: vira o Lead (mesma linha, histórico preservado).
+      const [from] = await tx.select({ name: pipelineStages.name }).from(pipelineStages).where(eq(pipelineStages.id, auto.stageId));
+      await tx
+        .update(relationshipEntries)
+        .set({ autoCreated: false, origin, productId, createdBy: ctx.userId, stageId: stage.id, version: auto.version + 1, updatedAt: new Date() })
+        .where(eq(relationshipEntries.id, auto.id));
+      await tx.insert(stageHistory).values({ orgId: ctx.orgId, entityType: "relationship", entityId: auto.id, contactId: target, fromStageId: auto.stageId, fromStageName: from?.name ?? null, toStageId: stage.id, toStageName: stage.name, actorId: ctx.userId, reason });
+    } else {
+      await addToBoard(ctx, target, stage.id, tx, reason, { origin, productId, createdBy: ctx.userId });
+    }
+    await tx.update(contacts).set({ ownerId }).where(eq(contacts.id, target));
+    // A conversa sem responsável passa para quem cuida do Lead.
+    if (ownerId) await tx.update(conversations).set({ ownerId }).where(and(eq(conversations.contactId, target), isNull(conversations.ownerId)));
+    if (input.note) await tx.insert(notes).values({ orgId: ctx.orgId, contactId: target, authorId: ctx.userId, body: cleanText(input.note, 2000)! });
+  });
+  const [owner] = ownerId ? await db.select({ name: users.name }).from(users).where(eq(users.id, ownerId)) : [];
+  const productName = productId ? opts.products.find((p) => p.id === productId)?.name : null;
+  await audit(db, ctx, "instagram.lead_created", "contact", target, { username: c.username, name: c.name, from: input.from, stage: stage.name, owner: owner?.name ?? null, product: productName ?? null });
+  await publish({ orgId: ctx.orgId, topic: "board", entityId: target, ownerIds: [ctx.userId, ownerId, c.ownerId] });
   await publish({ orgId: ctx.orgId, topic: "conversations" });
   await publish({ orgId: ctx.orgId, topic: "comments" });
-  return leadSummary(ctx, c.id);
+  return leadSummary(ctx, target);
 }
 
 // ---------- Comentários por publicação ----------
@@ -212,7 +316,7 @@ export async function getPostThread(ctx: Ctx, postId: string) {
       contactName: contacts.name,
       contactAvatar: contacts.avatarUrl,
       resolvedByName: users.name,
-      isLead: sql<boolean>`(${socialComments.contactId} is not null and (exists (select 1 from relationship_entries re where re.contact_id = ${socialComments.contactId} and re.closed_at is null) or exists (select 1 from leads l where l.contact_id = ${socialComments.contactId}) or exists (select 1 from opportunities o where o.contact_id = ${socialComments.contactId})))`,
+      isLead: sql<boolean>`(${socialComments.contactId} is not null and ${isRealLeadSql(socialComments.contactId)})`,
     })
     .from(socialComments)
     .leftJoin(contacts, eq(contacts.id, socialComments.contactId))
@@ -389,7 +493,7 @@ export async function instagramHistory(ctx: Ctx, f: z.infer<typeof historySchema
   const conds: SQL[] = [eq(auditEvents.orgId, ctx.orgId), like(auditEvents.action, "instagram.%")];
   if (f.kind === "directs") conds.push(like(auditEvents.action, "instagram.dm_%"));
   if (f.kind === "comments") conds.push(or(like(auditEvents.action, "instagram.comment%"), like(auditEvents.action, "instagram.post_%"))!);
-  if (f.kind === "leads") conds.push(like(auditEvents.action, "instagram.lead_%"));
+  if (f.kind === "leads") conds.push(like(auditEvents.action, "instagram.lead%"));
   if (f.userId) conds.push(eq(auditEvents.actorId, f.userId));
   if (f.before) conds.push(lt(auditEvents.createdAt, new Date(f.before)));
   const rows = await db

@@ -7,7 +7,9 @@
  *  - Mensagens: POST /me/messages  { recipient: { id } | { comment_id }, message: { text } }
  *  - Resposta pública a comentário: POST /{comment-id}/replies?message=
  *  - Webhooks: POST /me/subscribed_apps?subscribed_fields=messages,comments
- *  - Conversas: GET /me/conversations?platform=instagram&fields=participants,updated_time,messages{…} (20 mensagens mais recentes por conversa)
+ *  - Conversas: GET /me/conversations?platform=instagram&fields=participants,updated_time,messages{…}&after={cursor}
+ *    (paginação por cursor; 20 mensagens mais recentes por conversa; conversas de "Pedidos" inativas há 30 dias não voltam;
+ *    a API não informa a pasta — Principal/Geral/Pedidos — de cada conversa)
  *  - Mídias e comentários: GET /me/media?fields=…,comments{…,replies{…}} · GET /{media-id}?fields=…
  *  - Comentar: POST /{media-id}/comments · Ocultar: POST /{comment-id}?hide=true · Excluir: DELETE /{comment-id}
  * Nada aqui faz scraping, iframe ou automação de sessão.
@@ -48,6 +50,7 @@ export type CommentItem = { id: string; text?: string; timestamp: string; userna
 export type Attachment = { type: string; url?: string; previewUrl?: string; title?: string };
 export type ConversationMessage = { id: string; createdTime: string; fromId?: string; fromUsername?: string; text?: string; attachments: Attachment[]; unsupported?: boolean };
 export type ConversationItem = { id: string; updatedTime?: string; participants: { id: string; username?: string }[]; messages: ConversationMessage[] };
+export type ConversationPage = { items: ConversationItem[]; next: string | null };
 export type MediaDetails = MediaItem & { likeCount?: number; commentsCount?: number; comments?: CommentItem[] };
 
 export interface InstagramApi {
@@ -64,7 +67,8 @@ export interface InstagramApi {
   findConversationMessages(token: string, igsid: string): Promise<ProviderMessage[]>;
   listMedia(token: string, limit: number): Promise<MediaItem[]>;
   listComments(token: string, mediaId: string, limit: number): Promise<CommentItem[]>;
-  listConversations(token: string, limit: number): Promise<ConversationItem[]>;
+  /** Uma página de conversas (mais recentes primeiro). `after` = cursor da página anterior. */
+  listConversations(token: string, opts: { limit: number; after?: string | null; messages?: number }): Promise<ConversationPage>;
   listMediaWithComments(token: string, limit: number): Promise<MediaDetails[]>;
   getMedia(token: string, mediaId: string): Promise<MediaDetails>;
   commentOnMedia(token: string, mediaId: string, text: string): Promise<{ id: string }>;
@@ -104,6 +108,7 @@ export function parseMessageAttachments(m: Record<string, unknown>): Attachment[
 }
 
 const TIMEOUT_MS = 15_000;
+const MESSAGE_FIELDS = "id,created_time,from,to,message,attachments,shares,story,is_unsupported";
 
 function classify(status: number, err: { code?: number; error_subcode?: number; message?: string; type?: string } | undefined): ProviderError {
   const code = err?.code;
@@ -271,13 +276,8 @@ export class GraphInstagramApi implements InstagramApi {
     return (r.data ?? []).map((c) => ({ id: c.id, text: c.text, timestamp: c.timestamp, username: c.username ?? c.from?.username, fromId: c.from?.id, parentId: c.parent_id }));
   }
 
-  async listConversations(token: string, limit: number): Promise<ConversationItem[]> {
-    const fields = "participants,updated_time,messages.limit(20){id,created_time,from,to,message,attachments,shares,story,is_unsupported}";
-    const r = await this.request<{ data?: { id: string; updated_time?: string; participants?: { data?: { id: string; username?: string }[] }; messages?: { data?: Record<string, unknown>[] } }[] }>(
-      `${this.graph}/me/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=${limit}`,
-      { token },
-    );
-    return (r.data ?? []).map((c) => ({
+  private toConversation(c: { id: string; updated_time?: string; participants?: { data?: { id: string; username?: string }[] }; messages?: { data?: Record<string, unknown>[] } }): ConversationItem {
+    return {
       id: c.id,
       updatedTime: c.updated_time,
       participants: c.participants?.data ?? [],
@@ -285,7 +285,16 @@ export class GraphInstagramApi implements InstagramApi {
         const from = m.from as { id?: string; username?: string } | undefined;
         return { id: String(m.id), createdTime: String(m.created_time), fromId: from?.id, fromUsername: from?.username, text: (m.message as string) || undefined, attachments: parseMessageAttachments(m), unsupported: !!m.is_unsupported };
       }),
-    }));
+    };
+  }
+
+  async listConversations(token: string, opts: { limit: number; after?: string | null; messages?: number }): Promise<ConversationPage> {
+    const fields = `participants,updated_time,messages.limit(${Math.min(opts.messages ?? 20, 20)}){${MESSAGE_FIELDS}}`;
+    const q = new URLSearchParams({ platform: "instagram", fields, limit: String(opts.limit) });
+    if (opts.after) q.set("after", opts.after);
+    const r = await this.request<{ data?: Parameters<GraphInstagramApi["toConversation"]>[0][]; paging?: { cursors?: { after?: string }; next?: string } }>(`${this.graph}/me/conversations?${q}`, { token });
+    // Paginação por cursor: só existe próxima página quando a API devolve `paging.next`.
+    return { items: (r.data ?? []).map((c) => this.toConversation(c)), next: r.paging?.next ? (r.paging.cursors?.after ?? null) : null };
   }
 
   async listMediaWithComments(token: string, limit: number): Promise<MediaDetails[]> {

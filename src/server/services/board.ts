@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, ilike, inArray, isNull, lt, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, inArray, isNull, lt, lte, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbOrTx } from "../db";
 import {
@@ -66,6 +66,7 @@ async function loadCards(ctx: Ctx, stageIds: string[], f: BoardFilters, offset: 
       stageId: relationshipEntries.stageId,
       version: relationshipEntries.version,
       position: relationshipEntries.position,
+      autoCreated: relationshipEntries.autoCreated,
       contactId: sql<string>`${contacts.id}`.as("contact_id"),
       name: contacts.name,
       username: contacts.username,
@@ -151,6 +152,7 @@ export async function addToBoard(
   stageId: string,
   tx: DbOrTx = db,
   reason?: string,
+  extra: { origin?: string | null; productId?: string | null; createdBy?: string | null } = {},
 ) {
   const p = await getPipeline(ctx.orgId, "relationship", tx);
   const [stage] = await tx
@@ -164,7 +166,7 @@ export async function addToBoard(
     .where(and(eq(relationshipEntries.stageId, stageId), isNull(relationshipEntries.closedAt)));
   const inserted = await tx
     .insert(relationshipEntries)
-    .values({ orgId: ctx.orgId, pipelineId: p.id, contactId, stageId, position: (min?.m ?? 0) - 1 })
+    .values({ orgId: ctx.orgId, pipelineId: p.id, contactId, stageId, position: (min?.m ?? 0) - 1, origin: extra.origin ?? null, productId: extra.productId ?? null, createdBy: extra.createdBy ?? ctx.userId })
     .onConflictDoNothing()
     .returning();
   if (!inserted.length) return null; // já possui entrada ativa
@@ -294,12 +296,23 @@ export async function closeEntry(ctx: Ctx, entryId: string) {
   await publish({ orgId: ctx.orgId, topic: "board", entityId: contact.id, ownerIds: [contact.ownerId] });
 }
 
+/**
+ * O contato é Lead comercial? Cartão no funil criado por alguém (não automático), lead de formulário
+ * ou oportunidade. Conversa ou comentário sozinhos nunca fazem de alguém um Lead.
+ * `contactId` precisa ser uma referência qualificada (coluna de tabela com join, ou sql.raw).
+ */
+export const isRealLeadSql = (contactId: SQL | AnyColumn) =>
+  sql<boolean>`(exists (select 1 from relationship_entries re where re.contact_id = ${contactId} and re.closed_at is null and not re.auto_created) or exists (select 1 from leads l where l.contact_id = ${contactId}) or exists (select 1 from opportunities o where o.contact_id = ${contactId}))`;
+
 export async function activeEntryFor(contactId: string, orgId: string, tx: DbOrTx = db) {
   const [row] = await tx
     .select({
       id: relationshipEntries.id,
       stageId: relationshipEntries.stageId,
       version: relationshipEntries.version,
+      autoCreated: relationshipEntries.autoCreated,
+      origin: relationshipEntries.origin,
+      productId: relationshipEntries.productId,
       stageName: pipelineStages.name,
       stageColor: pipelineStages.color,
     })

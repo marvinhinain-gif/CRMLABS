@@ -88,7 +88,7 @@ describe("Webhooks: assinatura, fila e deduplicação", () => {
     expect(verifySignature(body, null)).toBe(false);
   });
 
-  it("evento duplicado não cria contato, cartão, conversa ou mensagem duplicados", async () => {
+  it("evento duplicado não cria contato, conversa ou mensagem duplicados (e conversa não vira Lead)", async () => {
     const { ctx } = await setupOrg();
     await connect(ctx.admin);
     const body = dm("mid.1", "igsid-ana", "Quero entender a consultoria.");
@@ -98,7 +98,7 @@ describe("Webhooks: assinatura, fila e deduplicação", () => {
     await processPendingEvents();
     expect(await db.select().from(contacts)).toHaveLength(1);
     expect(await db.select().from(channelIdentities)).toHaveLength(1);
-    expect(await db.select().from(relationshipEntries)).toHaveLength(1);
+    expect(await db.select().from(relationshipEntries)).toHaveLength(0); // contato do Instagram ≠ Lead
     expect(await db.select().from(messages)).toHaveLength(1);
     const [c] = await db.select().from(contacts);
     expect(c).toMatchObject({ name: "Ana Souza", username: "anasouza", source: "instagram_dm" }); // perfil oficial

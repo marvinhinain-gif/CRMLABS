@@ -38,6 +38,8 @@ export type BoardCard = {
   ownerName: string | null;
   unread: number;
   hasOfficialIdentity: boolean;
+  /** Entrou sozinho pela regra antiga (aguarda revisão do administrador). */
+  autoCreated?: boolean;
   tags: { id: string; name: string; color: string }[];
 };
 

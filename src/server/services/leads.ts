@@ -318,7 +318,9 @@ export async function ingestLead(form: Integration, input: LeadInput) {
         }
       }
     } else if (locked.stageId) {
-      const [onBoard] = await tx.select({ id: relationshipEntries.id }).from(relationshipEntries).where(and(eq(relationshipEntries.contactId, contact.id), isNull(relationshipEntries.closedAt)));
+      const [onBoard] = await tx.select({ id: relationshipEntries.id, autoCreated: relationshipEntries.autoCreated }).from(relationshipEntries).where(and(eq(relationshipEntries.contactId, contact.id), isNull(relationshipEntries.closedAt)));
+      // Um cartão automático antigo vira Lead de verdade quando o formulário chega.
+      if (onBoard?.autoCreated) await tx.update(relationshipEntries).set({ autoCreated: false, origin: "form" }).where(eq(relationshipEntries.id, onBoard.id));
       if (!onBoard) {
         try {
           await addToBoard({ orgId: form.orgId, userId: null }, contact.id, locked.stageId, tx, `Lead · ${locked.name}`);

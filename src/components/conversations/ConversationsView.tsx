@@ -6,7 +6,6 @@ import useSWRInfinite from "swr/infinite";
 import { toast } from "sonner";
 import {
   ArrowLeft,
-  AtSign,
   Check,
   CheckCheck,
   CircleAlert,
@@ -16,6 +15,7 @@ import {
   FileText,
   Image as ImageIcon,
   Inbox,
+  Info,
   ListTodo,
   MessageSquareQuote,
   NotebookPen,
@@ -34,10 +34,11 @@ import { api, ApiError, fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useOpenContact, useQueryParam } from "@/lib/nav";
 import { dayLabel, formatDateTime, relativeTime, shortAgo } from "@/lib/format";
-import { Avatar, Button, cx, EmptyState, ErrorState, IconButton, LoadingState, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Sheet, StageChip, Textarea } from "@/components/ui";
+import { Avatar, Button, cx, EmptyState, ErrorState, IconButton, LoadingState, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger, Sheet, Spinner, StageChip, Textarea } from "@/components/ui";
 import { ChannelBadge, InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { NewTaskDialog } from "@/components/tasks/TaskParts";
 import { ForwardDialog } from "@/components/commercial/ForwardDialog";
+import { TransformLeadDialog } from "@/components/instagram/TransformLeadDialog";
 import type { Stage } from "@/lib/types";
 
 type ConvRow = {
@@ -57,6 +58,7 @@ type ConvRow = {
   contactUsername: string | null;
   avatarUrl: string | null;
   matchedText: string | null;
+  isLead: boolean;
 };
 type ConvList = { rows: ConvRow[]; nextCursor: string | null };
 type Att = { type: string; url?: string; previewUrl?: string; title?: string };
@@ -72,6 +74,10 @@ type ConvDetail = {
 export type LeadInfo = {
   contact: { id: string; name: string; username: string | null; avatarUrl: string | null; summary: string | null };
   isLead: boolean;
+  /** Cartão que entrou sozinho no Kanban pela regra antiga (aguarda revisão; não é Lead). */
+  autoEntry: boolean;
+  /** Mesma pessoa já é Lead em outro contato (mesmo @). */
+  duplicateOf: { id: string; name: string } | null;
   origin: { name: string; color: string } | null;
   product: string | null;
   ownerName: string | null;
@@ -142,6 +148,29 @@ function MessageStatus({ m, onReconcile, onResend }: { m: Msg; onReconcile: () =
   }
 }
 
+/** Story respondido/mencionado: a API entrega um link temporário da mídia (some quando o story expira). */
+function StoryCard({ url, label, out }: { url?: string; label: string; out: boolean }) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <div className={cx("mb-1.5 flex items-center gap-2.5 rounded-[12px] p-1.5 pr-3", out ? "bg-white/15" : "bg-page")}>
+      {url && !broken ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="block h-16 w-10 shrink-0 overflow-hidden rounded-[8px] bg-black/10">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={url} alt="Story" className="size-full object-cover" loading="lazy" onError={() => setBroken(true)} />
+        </a>
+      ) : (
+        <span className={cx("flex h-16 w-10 shrink-0 items-center justify-center rounded-[8px]", out ? "bg-white/20" : "bg-white")} aria-hidden>
+          <Sparkles className="size-4 opacity-70" />
+        </span>
+      )}
+      <span className={cx("text-[12px] font-medium leading-snug", out ? "text-white" : "text-muted")}>
+        {label}
+        {(broken || !url) && <span className="block font-normal opacity-80">Story indisponível (expira em 24 h)</span>}
+      </span>
+    </div>
+  );
+}
+
 /** Conteúdo da mensagem conforme o que a API entrega: texto, foto, vídeo, áudio, compartilhamento, story. */
 function MessageContent({ m }: { m: Msg }) {
   const out = m.direction === "out";
@@ -154,7 +183,7 @@ function MessageContent({ m }: { m: Msg }) {
   );
   return (
     <>
-      {storyReply && <div>{chip(<Sparkles className="size-3.5" />, "Respondeu ao seu story", storyReply.url)}</div>}
+      {storyReply && <StoryCard url={storyReply.url} label={out ? "Você respondeu ao story" : "Respondeu ao seu story"} out={out} />}
       {atts
         .filter((a) => a.type !== "story_reply")
         .map((a, i) =>
@@ -170,7 +199,7 @@ function MessageContent({ m }: { m: Msg }) {
           ) : a.type === "share" || a.type === "ig_post" || a.type === "ig_reel" ? (
             <div key={i}>{chip(<ImageIcon className="size-3.5" />, a.title ? `Compartilhou: ${a.title.slice(0, 40)}` : "Compartilhou uma publicação", a.url)}</div>
           ) : a.type === "story_mention" ? (
-            <div key={i}>{chip(<AtSign className="size-3.5" />, "Mencionou você no story", a.url)}</div>
+            <StoryCard key={i} url={a.url} label="Mencionou você no story" out={out} />
           ) : (
             <div key={i}>{chip(<FileText className="size-3.5" />, "Anexo", a.url)}</div>
           ),
@@ -190,21 +219,9 @@ export function LeadPanel({ contactId, compact }: { contactId: string; compact?:
   const [noting, setNoting] = useState(false);
   const [task, setTask] = useState(false);
   const [forward, setForward] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [transform, setTransform] = useState(false);
   if (!data) return <LoadingState rows={3} className="p-5" />;
   const c = data.contact;
-  const createLead = async () => {
-    setBusy(true);
-    try {
-      mutate(await api.post<LeadInfo>(`/api/contacts/${c.id}/lead`, { from: "direct" }), { revalidate: false });
-      toast.success("Lead criado no funil do Social Seller.");
-      gm((k) => typeof k === "string" && (k.startsWith("/api/board") || k.startsWith("/api/conversations")));
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
   const move = async (stageId: string) => {
     if (!data.entry) return;
     try {
@@ -263,15 +280,28 @@ export function LeadPanel({ contactId, compact }: { contactId: string; compact?:
         </>
       ) : (
         <div className="rounded-[16px] border border-dashed border-[#bfd6cf] p-3.5 text-[13px] text-muted">
-          Ainda não é lead. Crie o lead para acompanhar no funil, com responsável e histórico.
-          <Button className="mt-3 w-full" icon={<Plus className="size-4" />} loading={busy} onClick={createLead}>
-            Criar Lead
-          </Button>
+          <p className="font-semibold text-ink">Não está no CRM</p>
+          {data.duplicateOf ? (
+            <>
+              <p className="mt-1">Este contato já é um Lead ({data.duplicateOf.name}).</p>
+              <Button className="mt-3 w-full" variant="secondary" icon={<UserRoundCheck className="size-4" />} onClick={() => openContact(data.duplicateOf!.id)}>
+                Ver Lead
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="mt-1">Contato do Instagram. Só entra no Kanban do Social Seller quando alguém da equipe transformar em Lead.</p>
+              {data.autoEntry && <p className="mt-2 rounded-[10px] bg-warning-soft px-2.5 py-1.5 text-[12px] text-[#6b4a00]">Entrou sozinho no Kanban pela regra antiga. Confirme transformando em Lead ou peça ao administrador para revisar.</p>}
+              <Button className="mt-3 w-full" icon={<Plus className="size-4" />} onClick={() => setTransform(true)}>
+                Transformar em Lead
+              </Button>
+            </>
+          )}
         </div>
       )}
       <div className="grid grid-cols-2 gap-2">
         <Button size="sm" variant="secondary" icon={<UserRound className="size-4" />} onClick={() => openContact(c.id)}>
-          Ver Lead
+          {data.isLead ? "Ver Lead" : "Ver contato"}
         </Button>
         <Button size="sm" variant="secondary" icon={<ListTodo className="size-4" />} onClick={() => setTask(true)}>
           Criar tarefa
@@ -317,6 +347,48 @@ export function LeadPanel({ contactId, compact }: { contactId: string; compact?:
       {c.summary && <p className="rounded-[14px] bg-page/70 px-3 py-2 text-[13px] text-muted">{c.summary}</p>}
       <NewTaskDialog open={task} onOpenChange={setTask} contact={{ id: c.id, name: c.name }} />
       <ForwardDialog open={forward} onOpenChange={setForward} contactId={c.id} contactName={c.name} onDone={() => mutate()} />
+      <TransformLeadDialog open={transform} onOpenChange={setTransform} contact={c} from="direct" onDone={() => { mutate(); gm((k) => typeof k === "string" && k.startsWith("/api/board")); }} />
+    </div>
+  );
+}
+
+/** Faixa abaixo do cabeçalho da conversa: é Lead (etapa, responsável) ou ainda não está no CRM. */
+function CrmStatusBar({ lead, onTransform }: { lead: LeadInfo; onTransform: () => void }) {
+  const openContact = useOpenContact();
+  const stage = lead.opportunity?.status === "open" ? `${lead.opportunity.stageName} (Comercial)` : lead.stage?.name;
+  const owner = lead.ownerName ?? lead.opportunity?.closerName;
+  const link = (id: string) => (
+    <button onClick={() => openContact(id)} className="ml-auto shrink-0 font-semibold text-brand hover:underline">
+      Ver Lead
+    </button>
+  );
+  return (
+    <div className="flex min-w-0 items-center gap-2 border-b border-line bg-page/50 px-3 py-2 text-[12.5px] sm:px-4">
+      {lead.isLead ? (
+        <>
+          <UserRoundCheck className="size-4 shrink-0 text-brand" aria-hidden />
+          <span className="min-w-0 truncate">
+            <b className="font-semibold text-brand-dark">Lead no CRM</b>
+            {stage && <span className="text-muted"> · Etapa: <span className="text-ink">{stage}</span></span>}
+            {owner && <span className="text-muted"> · Responsável: <span className="text-ink">{owner}</span></span>}
+          </span>
+          {link(lead.contact.id)}
+        </>
+      ) : lead.duplicateOf ? (
+        <>
+          <UserRoundCheck className="size-4 shrink-0 text-brand" aria-hidden />
+          <span className="min-w-0 truncate text-muted">Este contato já é um Lead ({lead.duplicateOf.name}).</span>
+          {link(lead.duplicateOf.id)}
+        </>
+      ) : (
+        <>
+          <span className="size-2 shrink-0 rounded-full bg-[#b9c6cc]" aria-hidden />
+          <span className="min-w-0 truncate text-muted">Não está no CRM</span>
+          <button onClick={onTransform} className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-brand px-2.5 py-1 text-[12px] font-semibold text-brand hover:bg-selected">
+            <Plus className="size-3.5" aria-hidden /> Transformar em Lead
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -333,6 +405,7 @@ function ConversationPane({ id, onBack, panelOpen, onTogglePanel }: { id: string
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [mobileLead, setMobileLead] = useState(false);
+  const [transform, setTransform] = useState(false);
   const pendingId = useRef<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const { data: saved } = useSWR<{ id: string; title: string; body: string }[]>("/api/saved-replies", fetcher);
@@ -423,14 +496,6 @@ function ConversationPane({ id, onBack, panelOpen, onTogglePanel }: { id: string
       toast.error((e as Error).message);
     }
   };
-  const createLead = async () => {
-    try {
-      mutateLead(await api.post<LeadInfo>(`/api/contacts/${data.contact.id}/lead`, { from: "direct" }), { revalidate: false });
-      toast.success("Lead criado no funil do Social Seller.");
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
-  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -446,19 +511,7 @@ function ConversationPane({ id, onBack, panelOpen, onTogglePanel }: { id: string
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-[15.5px] font-semibold leading-tight">{data.contact.name}</p>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-            {data.contact.username && <span className="truncate text-[12.5px] text-muted">@{data.contact.username}</span>}
-            {lead &&
-              (lead.isLead ? (
-                <button onClick={() => (window.innerWidth >= 1536 ? !panelOpen && onTogglePanel() : setMobileLead(true))} className="inline-flex items-center gap-1 rounded-full bg-selected px-2 py-0.5 text-[11.5px] font-semibold text-brand-dark hover:brightness-95">
-                  <UserRoundCheck className="size-3" aria-hidden /> Lead no CRM
-                </button>
-              ) : (
-                <button onClick={createLead} className="inline-flex items-center gap-1 rounded-full border border-dashed border-brand px-2 py-0.5 text-[11.5px] font-semibold text-brand hover:bg-selected">
-                  <Plus className="size-3" aria-hidden /> Criar Lead
-                </button>
-              ))}
-          </div>
+          {data.contact.username && <p className="mt-0.5 truncate text-[12.5px] text-muted">@{data.contact.username}</p>}
         </div>
         {pending ? (
           <span className="hidden sm:block">
@@ -510,6 +563,7 @@ function ConversationPane({ id, onBack, panelOpen, onTogglePanel }: { id: string
           </IconButton>
         </span>
       </header>
+      {lead && <CrmStatusBar lead={lead} onTransform={() => setTransform(true)} />}
       <div className="flex-1 min-h-0 overflow-y-auto scroll-thin bg-[#f7faf9] px-3 py-4 sm:px-5" aria-live="polite">
         {hasMore ? (
           <div className="mb-4 flex justify-center">
@@ -613,78 +667,135 @@ function ConversationPane({ id, onBack, panelOpen, onTogglePanel }: { id: string
         </div>
         <div className="overflow-y-auto">{mobileLead && <LeadPanel contactId={data.contact.id} compact />}</div>
       </Sheet>
+      <TransformLeadDialog open={transform} onOpenChange={setTransform} contact={data.contact} from="direct" onDone={() => mutateLead()} />
     </div>
   );
 }
 
 // ---------- Caixa de entrada ----------
+type InboxSummary = { directSync: { done: boolean; conversations: number; pages: number } | null };
+
+const FILTERS = [
+  ["pending", "Sem resposta"],
+  ["all", "Todas"],
+  ["stories", "Stories"],
+] as const;
+
 export function ConversationsView({ embedded }: { channel?: "instagram"; embedded?: boolean }) {
   const me = useMe();
   const [selected, setSelected] = useQueryParam("c", "");
   const [filter, setFilter] = useQueryParam("filtro", "pending");
   const [owner, setOwner] = useQueryParam("dono", "all");
   const [panelOpen, setPanelOpen] = useState(true);
+  const [folderInfo, setFolderInfo] = useState(false);
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(q.trim()), 250);
+    const t = setTimeout(() => setDebounced(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
-  const realFilter = filter === "pending" ? "pending" : "all";
+  const realFilter = FILTERS.some(([v]) => v === filter) ? (filter as (typeof FILTERS)[number][0]) : "pending";
+  // Pesquisa vale para todas as conversas sincronizadas (não só a aba atual).
+  const effectiveFilter = debounced ? "all" : realFilter;
   const getKey = (i: number, prev: ConvList | null) => {
     if (prev && !prev.nextCursor) return null;
-    return `/api/conversations${qs({ filter: realFilter, owner: owner === "all" ? "" : owner, channel: "instagram", q: debounced, cursor: i === 0 ? undefined : prev?.nextCursor })}`;
+    return `/api/conversations${qs({ filter: effectiveFilter, owner: owner === "all" ? "" : owner, channel: "instagram", q: debounced, cursor: i === 0 ? undefined : prev?.nextCursor })}`;
   };
-  const { data, error, isLoading, size, setSize, mutate } = useSWRInfinite<ConvList>(getKey, fetcher, { revalidateFirstPage: true, keepPreviousData: true });
+  const { data, error, isLoading, isValidating, size, setSize, mutate } = useSWRInfinite<ConvList>(getKey, fetcher, { revalidateFirstPage: true, keepPreviousData: true });
+  const { data: summary } = useSWR<InboxSummary>("/api/instagram", fetcher, { refreshInterval: 60_000 });
+  const syncing = summary?.directSync && !summary.directSync.done ? summary.directSync : null;
   const rows = data?.flatMap((p) => p.rows) ?? [];
   const hasNext = !!data?.[data.length - 1]?.nextCursor;
   const pendingTotal = me.counts.pendingDirects ?? 0;
   const selectedRow = rows.find((r) => r.id === selected);
+  const searching = !!q.trim() && (q.trim() !== debounced || (isValidating && size <= 1));
+  const loadingMore = isValidating && size > 1 && data?.length !== size;
+
+  // Rolagem infinita: carrega a próxima página quando o fim da lista aparece.
+  const scroller = useRef<HTMLDivElement>(null);
+  const sentinel = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !hasNext) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting) && !loadingMore) setSize((n) => n + 1);
+    }, { root: scroller.current, rootMargin: "240px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasNext, loadingMore, setSize, rows.length]);
 
   return (
     <div className={cx("grid overflow-hidden rounded-[24px] border border-line bg-white shadow-[var(--shadow-soft)] lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)]", panelOpen && "2xl:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_320px]", embedded ? "h-[calc(100dvh-300px)] min-h-[520px]" : "h-[calc(100dvh-250px)] min-h-[540px]")}>
       <aside className={cx("flex min-h-0 flex-col border-r border-line", selected && "hidden lg:flex")}>
         <div className="flex flex-col gap-3 border-b border-line px-4 pb-3 pt-4">
-          <p className="text-[14px]">
-            <b className="text-[16px] font-bold text-ink">{pendingTotal}</b> <span className="text-muted">conversa{pendingTotal === 1 ? "" : "s"} esperando resposta</span>
-          </p>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted" aria-hidden />
-            <input value={q} onChange={(e) => setQ(e.target.value)} type="search" placeholder="Pesquisar nome, @ ou mensagem" aria-label="Pesquisar conversas" className="h-11 w-full rounded-[14px] border border-line bg-page/60 pl-11 pr-3 text-[14px] focus:border-brand focus:bg-white focus:outline-none" />
-          </div>
           <div className="flex items-center gap-2">
-            <div className="inline-flex rounded-[12px] bg-page p-1" role="tablist" aria-label="Filtro">
-              {(
-                [
-                  ["pending", "Sem resposta"],
-                  ["all", "Todas"],
-                ] as const
-              ).map(([v, l]) => (
-                <button key={v} role="tab" aria-selected={realFilter === v} onClick={() => setFilter(v)} className={cx("whitespace-nowrap rounded-[9px] px-3 py-1.5 text-[13px] font-medium transition-colors", realFilter === v ? "bg-white text-brand shadow-sm" : "text-muted hover:text-ink")}>
-                  {l}
-                </button>
-              ))}
-            </div>
-            <select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="ml-auto h-9 min-w-0 max-w-[140px] rounded-[10px] border border-line bg-white px-2 text-[12.5px] text-muted focus:border-brand focus:outline-none">
+            <p className="min-w-0 flex-1 text-[14px]">
+              <b className="text-[16px] font-bold text-ink">{pendingTotal}</b> <span className="text-muted">esperando resposta</span>
+            </p>
+            <select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="h-9 shrink-0 rounded-[10px] border border-line bg-white px-2 text-[12.5px] text-muted focus:border-brand focus:outline-none">
               <option value="all">Todos</option>
               <option value="mine">Minhas</option>
               <option value="none">Sem responsável</option>
             </select>
           </div>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted" aria-hidden />
+            <input value={q} onChange={(e) => setQ(e.target.value)} type="search" placeholder="Buscar nome, @ ou mensagem" aria-label="Pesquisar conversas" className="h-11 w-full rounded-[14px] border border-line bg-page/60 pl-11 pr-10 text-[14px] focus:border-brand focus:bg-white focus:outline-none" />
+            {searching && <Spinner className="absolute right-3.5 top-1/2 size-4 -translate-y-1/2 text-brand" />}
+          </div>
+          <div className="flex items-center gap-2">
+            <div className={cx("inline-flex rounded-[12px] bg-page p-1", debounced && "opacity-50")} role="tablist" aria-label="Atendimento">
+              {FILTERS.map(([v, l]) => (
+                <button key={v} role="tab" aria-selected={realFilter === v} onClick={() => setFilter(v)} className={cx("whitespace-nowrap rounded-[9px] px-2.5 py-1.5 text-[13px] font-medium transition-colors", realFilter === v ? "bg-white text-brand shadow-sm" : "text-muted hover:text-ink")}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setFolderInfo((v) => !v)} aria-expanded={folderInfo} aria-label="Por que não há Principal, Geral e Pedidos?" title="Principal, Geral e Pedidos" className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-page hover:text-ink">
+              <Info className="size-4" aria-hidden />
+            </button>
+          </div>
+          {folderInfo && (
+            <p className="rounded-[12px] bg-page px-3 py-2.5 text-[12.5px] leading-relaxed text-muted">
+              <b className="font-semibold text-ink">Principal, Geral e Pedidos:</b> a API oficial do Instagram não informa em qual pasta cada conversa está, então todas as conversas que ela entrega aparecem juntas aqui. Pedidos ocultos não estão disponíveis através da API utilizada.
+            </p>
+          )}
+          {debounced && <p className="text-[12px] text-muted">Pesquisando em todas as conversas sincronizadas.</p>}
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto scroll-thin">
+        {syncing && (
+          <div role="status" className="flex items-center gap-2 border-b border-line bg-info-soft/60 px-4 py-2 text-[12.5px] text-info">
+            <Spinner className="size-3.5" />
+            <span>
+              Sincronizando conversas… <b className="font-semibold">{syncing.conversations}</b> importadas. As mais antigas continuam chegando em segundo plano.
+            </span>
+          </div>
+        )}
+        <div ref={scroller} className="flex-1 min-h-0 overflow-y-auto scroll-thin">
           {error ? (
             <ErrorState error={error} onRetry={() => mutate()} />
-          ) : isLoading && !data ? (
-            <LoadingState rows={6} className="p-4" />
+          ) : (isLoading && !data) || (searching && rows.length === 0) ? (
+            <div>
+              {searching && <p className="px-4 pt-3 text-[13px] text-muted">Pesquisando…</p>}
+              <LoadingState rows={6} className="p-4" />
+            </div>
           ) : rows.length === 0 ? (
             <EmptyState
               icon={realFilter === "pending" && !debounced ? <CheckCheck /> : <Inbox />}
-              title={realFilter === "pending" && !debounced ? "Tudo respondido" : "Nenhuma conversa"}
-              description={realFilter === "pending" && !debounced ? "Nenhum Direct esperando resposta agora." : debounced ? "Nada encontrado com esta pesquisa." : "Quando alguém enviar mensagem para a conta conectada, a conversa aparece aqui."}
+              title={debounced ? "Nenhuma conversa encontrada" : realFilter === "pending" ? "Tudo respondido" : realFilter === "stories" ? "Nenhuma interação com Stories" : "Nenhuma conversa"}
+              description={
+                debounced
+                  ? syncing
+                    ? "Ainda estamos importando conversas antigas. Tente de novo em alguns minutos."
+                    : "Confira o nome, o @ ou o trecho da mensagem."
+                  : realFilter === "pending"
+                    ? "Nenhum Direct esperando resposta agora."
+                    : realFilter === "stories"
+                      ? "Respostas aos seus stories e menções em stories aparecem aqui."
+                      : "Quando alguém enviar mensagem para a conta conectada, a conversa aparece aqui."
+              }
             />
           ) : (
-            <ul>
+            <ul className={cx(searching && "opacity-60 transition-opacity")}>
               {rows.map((c, i) => {
                 const p = isPending(c);
                 return (
@@ -705,17 +816,20 @@ export function ConversationsView({ embedded }: { channel?: "instagram"; embedde
                           </span>
                           {p && c.pendingCount > 0 && <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand px-1.5 text-[11px] font-semibold text-white">{c.pendingCount}</span>}
                         </span>
-                        {c.ownerName && <span className="mt-0.5 block truncate text-[11.5px] text-muted">{c.ownerName}</span>}
+                        {(c.ownerName || c.isLead) && (
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-muted">
+                            {c.isLead && <span className="rounded-full bg-selected px-1.5 py-px text-[10.5px] font-semibold text-brand-dark">Lead</span>}
+                            {c.ownerName && <span className="truncate">{c.ownerName}</span>}
+                          </span>
+                        )}
                       </span>
                     </button>
                   </li>
                 );
               })}
               {hasNext && (
-                <li className="p-3">
-                  <Button variant="secondary" size="sm" className="w-full" onClick={() => setSize(size + 1)}>
-                    Carregar mais
-                  </Button>
+                <li ref={sentinel} className="flex items-center justify-center gap-2 p-4 text-[12.5px] text-muted">
+                  <Spinner className="size-4" /> Carregando mais conversas…
                 </li>
               )}
             </ul>

@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbOrTx } from "../db";
-import { appointments, contactTags, contacts, leadForms, leads, memberships, notes, opportunities, pipelineStages, products, stageHistory, tags, users } from "../db/schema";
+import { appointments, channelIdentities, contactTags, contacts, relationshipEntries, leadForms, leads, memberships, notes, opportunities, pipelineStages, products, stageHistory, tags, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { appointmentScope, assertCan, can, contactScope, opportunityScope, ROLE_LABEL } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
@@ -117,7 +117,15 @@ async function latestLeadProduct(orgId: string, contactId: string) {
     .where(and(eq(leads.orgId, orgId), eq(leads.contactId, contactId)))
     .orderBy(desc(leads.createdAt))
     .limit(1);
-  return l ?? null;
+  if (l?.productId) return l;
+  // Produto de interesse escolhido em "Transformar em Lead".
+  const [e] = await db
+    .select({ productId: relationshipEntries.productId, productName: products.name })
+    .from(relationshipEntries)
+    .innerJoin(products, eq(products.id, relationshipEntries.productId))
+    .where(and(eq(relationshipEntries.orgId, orgId), eq(relationshipEntries.contactId, contactId), isNull(relationshipEntries.closedAt)))
+    .limit(1);
+  return e ?? l ?? null;
 }
 
 export async function createOpportunity(ctx: Ctx, input: z.infer<typeof opportunityInputSchema>, opts: { reason?: string; silent?: boolean; forwarded?: boolean } = {}) {
@@ -451,6 +459,9 @@ export async function forwardToCloser(ctx: Ctx, contactId: string, input: z.infe
     );
   }
   await recordForward(ctx, opp);
+  // Histórico do Instagram (administrador): lead que veio do Instagram foi encaminhado.
+  const [ig] = await db.select({ id: channelIdentities.id }).from(channelIdentities).where(eq(channelIdentities.contactId, contact.id)).limit(1);
+  if (ig) await audit(db, ctx, "instagram.lead_forwarded", "contact", contact.id, { username: contact.username, name: contact.name, closer: closer?.name ?? null });
   if (input.note?.trim()) {
     await db.insert(notes).values({ orgId: ctx.orgId, contactId: contact.id, authorId: ctx.userId, body: `Ao encaminhar para ${closer?.name ?? "o closer"}: ${input.note.trim()}` });
   }
@@ -462,6 +473,8 @@ export async function forwardToCloser(ctx: Ctx, contactId: string, input: z.infe
     .from(pipelineStages)
     .where(and(eq(pipelineStages.pipelineId, rel.id), eq(pipelineStages.key, "encaminhado-closer"), isNull(pipelineStages.archivedAt)));
   const entry = await activeEntryFor(contact.id, ctx.orgId);
+  // Encaminhar é decisão de alguém da equipe: um cartão automático antigo passa a ser Lead.
+  if (entry?.autoCreated) await db.update(relationshipEntries).set({ autoCreated: false, createdBy: ctx.userId }).where(eq(relationshipEntries.id, entry.id));
   if (target && entry && entry.stageId !== target.id) {
     const { moveEntry } = await import("./board");
     await moveEntry(ctx, entry.id, { toStageId: target.id, expectedVersion: entry.version }).catch((e) => logger.warn("Falha ao mover o cartão do social seller", e));

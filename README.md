@@ -110,7 +110,9 @@ Cada item abaixo foi mapeado para um recurso oficial da *Instagram API com Insta
 
 | Funcionalidade | Como funciona | Recurso oficial |
 |---|---|---|
-| Lista de Directs, pesquisa por nome/@/conteúdo, "Sem resposta" | Webhook `messages` + sincronização a cada 5 min e ao abrir a tela | `GET /me/conversations?platform=instagram&fields=participants,messages{…}` (20 mensagens mais recentes por conversa) |
+| Lista de Directs | Instagram → sincronização → banco do CRMLABS → tela. Webhook `messages` em tempo real + sincronização a cada 5 min: **incremental** (páginas mais recentes até encontrar conversas já em dia) e **histórico completo** (todas as páginas, retomando pelo cursor salvo, 6 páginas de 25 por vez para respeitar a cota). Nome e foto oficiais chegam aos poucos (30 perfis por vez). | `GET /me/conversations?platform=instagram&fields=participants,updated_time,messages{…}&after={cursor}` (20 mensagens mais recentes por conversa) · `GET /{igsid}?fields=name,username,profile_pic` |
+| Pesquisa e rolagem | Pesquisa no banco (todas as conversas sincronizadas, não só as carregadas): nome, @, ID oficial do Instagram ou trecho da mensagem, com espera de 300 ms; índices trigram (`pg_trgm`) em nome, @ e texto. Rolagem infinita com cursor estável (data + id). Estados "Pesquisando…", "Nenhuma conversa encontrada" e "Sincronizando conversas…" | — |
+| "Sem resposta / Todas / Stories" | Filtro operacional do CRM (2º nível). "Stories" lista conversas com resposta aos stories da conta ou menção em story | Campo `story` da mensagem e `reply_to.story` do webhook |
 | Tipos de mensagem | Texto, foto, vídeo, áudio, arquivo, compartilhamento, resposta e menção de story | Campos `attachments`, `shares`, `story` e eventos de webhook |
 | Responder Direct | Dentro da janela de 24 h (7 dias com Human Agent) | `POST /me/messages` |
 | Comentários por publicação, curtidas, oculto | Webhook `comments` + sincronização das 12 publicações mais recentes | `GET /me/media?fields=…,like_count,comments_count,comments{…,replies{…}}` |
@@ -119,15 +121,25 @@ Cada item abaixo foi mapeado para um recurso oficial da *Instagram API com Insta
 | Pendente / Resolvido | Regra do CRMLABS: responder (pelo CRM ou pelo próprio app do Instagram) resolve; nova mensagem/comentário volta a pendente; "Marcar como resolvido" manual | — |
 | Histórico (só administrador) | Toda ação registrada com pessoa, horário, destinatário, ação e status | — |
 
-**Não disponível pela API oficial (não simulado):** as pastas *Principal / Geral / Pedidos / Parcerias* do Direct (a API não informa em qual pasta a conversa está), curtir comentários pela conta, histórico completo de conversas anteriores à conexão (só as 20 mensagens mais recentes de cada conversa) e confirmação de entrega. As URLs de mídia expiram e são renovadas ao abrir a publicação.
+**Não disponível pela API oficial (não simulado):**
+- **Pastas Principal / Geral / Pedidos / Parcerias:** a API devolve as conversas sem informar a pasta e não tem filtro por pasta; por isso não há abas nem contador de "Pedidos" (seriam falsos). Conversas que estão em Pedidos chegam normalmente pela API e aparecem na lista; as inativas há mais de 30 dias em Pedidos não são devolvidas pela API. **Pedidos ocultos não estão disponíveis através da API utilizada.** Aceitar/recusar pedidos também não existe na API.
+- **Stories de terceiros:** a API não lista stories de seguidores ou de outras contas, não dá acesso às mídias deles e não tem endpoint de "responder a um story". O que existe e foi implementado: quando alguém **responde a um story da conta** ou **menciona a conta em um story**, isso chega como mensagem no Direct (com link temporário da mídia, que expira) e pode ser respondido pelo Direct dentro da janela de 24 h — registrado no histórico como "Respondeu ao story". Não há tela de visualizador de stories, scraping, automação de navegador nem login/senha do Instagram.
+- Curtir comentários pela conta, mensagens além das 20 mais recentes de cada conversa antiga e confirmação de entrega. As URLs de mídia expiram e são renovadas ao abrir a publicação.
+
+### Contato do Instagram × Lead comercial
+Três camadas separadas: **Instagram** (relacionamento: conversas e comentários) → **Kanban do Social Seller** (oportunidade) → **Kanban do Closer** (qualificado).
+- Mensagem ou comentário cria apenas o **contato do Instagram** (deduplicado pelo identificador oficial). **Ninguém vira Lead nem entra no Kanban só por conversar.**
+- **Transformar em Lead** (no Direct, no painel do contato e no comentário): Contato, Origem (Instagram Direct / Comentário), Produto de interesse, Etapa inicial, Responsável e Observação → "Adicionar ao Kanban". Sem duplicar: se o contato — ou outro contato com o mesmo @ — já é Lead, aparece "Este contato já é um Lead" com "Ver Lead".
+- No Direct, a faixa abaixo do nome mostra "Não está no CRM · Transformar em Lead" ou "Lead no CRM · Etapa · Responsável · Ver Lead".
+- **Entradas automáticas antigas:** os cartões criados pela regra anterior foram marcados (`relationship_entries.auto_created`) e **não foram apagados**. Eles não contam como Lead e aparecem com o selo "Entrada automática". O administrador vê o aviso no Social Seller → **Revisar**, com sinais de que a equipe já trabalhou o contato (respondeu, moveu, tem tarefa/anotação), e decide um a um (ou selecionando): *Manter como Lead* ou *Remover do Kanban* (fecha o cartão; contato, conversa e histórico continuam). Formulário, encaminhamento ao closer ou "Transformar em Lead" também confirmam o cartão.
 
 ### Fora do escopo (não implementado de propósito)
-Assistir ou interagir com stories de terceiros, importar todos os seguidores, histórico integral de conversas anteriores à conexão e prospecção irrestrita por DM. Não há iframe, scraping, sessão automatizada nem botão de fachada para isso. Anexos no Direct exigem armazenamento de arquivos com URL pública e ficaram fora do MVP (o adaptador já conhece o formato da API).
+Assistir ou listar stories de terceiros, importar todos os seguidores, histórico integral de conversas anteriores à conexão e prospecção irrestrita por DM. Não há iframe, scraping, sessão automatizada nem botão de fachada para isso. Anexos no Direct exigem armazenamento de arquivos com URL pública e ficaram fora do MVP (o adaptador já conhece o formato da API).
 
 ## Testes e QA
 
 ```bash
-npm test          # 55 testes em banco real (TEST_DATABASE_URL), limpa o banco a cada teste
+npm test          # 103 testes em banco real (TEST_DATABASE_URL), limpa o banco a cada teste
 npm run lint      # verificação de tipos
 ```
 
@@ -137,6 +149,7 @@ npm run lint      # verificação de tipos
 | `tests/permissions.test.ts` | isolamento entre organizações, seller × seller, closer via oportunidade, edição de funil, conexão só por admin, filtro do tempo real, caixa compartilhada |
 | `tests/board.test.ts` | mover com histórico, conflito sem sobrescrever, histórico imutável no banco, uma entrada ativa por funil, editar/reordenar/arquivar etapas com destino, CSV com duplicidades, mesclagem |
 | `tests/dashboard.test.ts` | zeros sem dados, métricas batendo com registros conhecidos, escopo e filtro por responsável, reabrir venda recalcula |
+| `tests/instagram-leads.test.ts` | sincronização completa por cursor (400 conversas), busca por @/nome/ID/texto fora da lista carregada, rolagem sem pular nem repetir, Direct pessoal fora do Kanban, Transformar em Lead, sem duplicar (mesmo contato e mesmo @), revisão do administrador, Stories |
 | `tests/instagram.test.ts` | **contrato** com adaptador falso: OAuth/state, status só após verificação, permissões, desconexão/revogação, assinatura, dedup, fora de ordem, idempotência, timeout/reconciliação, eco, janela de 24 h, contato sem identidade, respostas a comentários, modo demo |
 | `tests/http.test.ts` | verificação do webhook, assinatura, sessão obrigatória, CSRF por Origin, nenhum segredo na API |
 

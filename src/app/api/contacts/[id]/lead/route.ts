@@ -1,6 +1,5 @@
-import { z } from "zod";
 import { authed, json, parseBody } from "@/server/http";
-import { createLeadFromInstagram, leadSummary } from "@/server/services/instagram";
+import { leadSummary, transformLeadSchema, transformToLead } from "@/server/services/instagram";
 import { notFound } from "@/server/errors";
 
 export const GET = authed(async (_req, ctx, p) => {
@@ -8,7 +7,5 @@ export const GET = authed(async (_req, ctx, p) => {
   if (!s) throw notFound("Contato não encontrado.");
   return json(s);
 });
-export const POST = authed(async (req, ctx, p) => {
-  const { from } = await parseBody(req, z.object({ from: z.enum(["direct", "comment"]).default("direct") }));
-  return json(await createLeadFromInstagram(ctx, p.id, from));
-});
+/** "Transformar em Lead": só depois desta confirmação a pessoa entra no Kanban do Social Seller. */
+export const POST = authed(async (req, ctx, p) => json(await transformToLead(ctx, p.id, await parseBody(req, transformLeadSchema))));

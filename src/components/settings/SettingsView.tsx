@@ -163,12 +163,12 @@ function OrgTab() {
       <Section title="Atendimento e entrada de contatos">
         <div className="divide-y divide-line">
           <Switch checked={data.sharedInbox} onChange={(v) => save({ sharedInbox: v })} disabled={!me.permissions.pipelineEdit} label="Caixa compartilhada" description="Sellers também veem conversas e comentários sem responsável. Por padrão, cada seller vê apenas os próprios registros." />
-          <Switch checked={data.autoCreateFromMessages} onChange={(v) => save({ autoCreateFromMessages: v })} disabled={!admin} label="Criar contato ao receber mensagem" description="Remetente novo no Direct vira contato, deduplicado pelo identificador oficial do Instagram." />
+          <Switch checked={data.autoCreateFromMessages} onChange={(v) => save({ autoCreateFromMessages: v })} disabled={!admin} label="Criar contato ao receber mensagem" description="Remetente novo no Direct vira contato do Instagram (deduplicado pelo identificador oficial). Contato não é Lead: só entra no Kanban por “Transformar em Lead”." />
           <Switch checked={data.autoCreateFromComments} onChange={(v) => save({ autoCreateFromComments: v })} disabled={!admin} label="Criar contato ao receber comentário" description="Desligado: comentários ficam na aba Comentários até alguém associar a um contato." />
           <div className="py-3">
-            <Field label="Etapa de entrada automática" htmlFor="org-auto" hint="Onde o cartão é criado para contatos novos vindos do Instagram.">
+            <Field label="Etapa inicial sugerida para novos Leads" htmlFor="org-auto" hint="Vem selecionada em “Transformar em Lead”. Conversas e comentários nunca criam Leads sozinhos.">
               <Select id="org-auto" value={data.autoEntryStageId ?? ""} onChange={(e) => save({ autoEntryStageId: e.target.value || null })} disabled={!admin}>
-                <option value="">Não criar cartão automaticamente</option>
+                <option value="">Primeira etapa do funil</option>
                 {stages?.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
