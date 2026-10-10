@@ -20,6 +20,7 @@ import {
   primaryKey,
   customType,
 } from "drizzle-orm/pg-core";
+import type { Answers, QuizDefinition } from "@/lib/quiz/types";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
@@ -1036,4 +1037,294 @@ export const salesGoals = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex("sales_goals_org_month_uq").on(t.orgId, t.month)],
+);
+
+// ---------- Formulários & Quizzes ----------
+
+/**
+ * Formulário (rascunho editável). O que o público vê é sempre uma versão publicada e congelada
+ * (quiz_form_versions). Cada formulário tem uma integração de apoio (lead_forms, provider crmlabs_quiz)
+ * que alimenta o núcleo comum de entrada de leads (contato, funil, distribuição, jornada).
+ */
+export const quizForms = pgTable(
+  "quiz_forms",
+  {
+    id: id(),
+    orgId: orgRef(),
+    name: text("name").notNull(),
+    /** Endereço público: /forms/{slug}. */
+    slug: text("slug").notNull(),
+    /** draft | published | archived */
+    status: text("status").$type<"draft" | "published" | "archived">().notNull().default("draft"),
+    draft: jsonb("draft").$type<QuizDefinition>().notNull(),
+    draftUpdatedAt: ts("draft_updated_at").notNull().defaultNow(),
+    /** Versão que está no ar (null = nunca publicado ou despublicado). */
+    liveVersionId: uuid("live_version_id"),
+    /** Última versão publicada (continua sendo a referência das regras ao despublicar). */
+    latestVersionId: uuid("latest_version_id"),
+    publishedAt: ts("published_at"),
+    /** Integração de apoio que leva os leads ao CRM. */
+    leadFormId: uuid("lead_form_id").references(() => leadForms.id, { onDelete: "set null" }),
+    /** Domínios autorizados a incorporar (vazio = qualquer site). */
+    allowedDomains: text("allowed_domains").array().notNull().default(sql`'{}'::text[]`),
+    templateKey: text("template_key"),
+    archivedAt: ts("archived_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("quiz_forms_slug_uq").on(t.slug), index("quiz_forms_org_idx").on(t.orgId, t.createdAt)],
+);
+
+/** Versão publicada: definição completa congelada (protegida por trigger contra alteração). */
+export const quizFormVersions = pgTable(
+  "quiz_form_versions",
+  {
+    id: id(),
+    orgId: orgRef(),
+    formId: uuid("form_id").notNull().references(() => quizForms.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    definition: jsonb("definition").$type<QuizDefinition>().notNull(),
+    /** Pontuação máxima calculada na publicação. */
+    maxPoints: integer("max_points").notNull().default(0),
+    publishedBy: uuid("published_by").references(() => users.id, { onDelete: "set null" }),
+    publishedAt: ts("published_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("quiz_form_versions_uq").on(t.formId, t.version)],
+);
+
+/** Seções, perguntas e alternativas de cada versão (somente leitura; espelham a definição publicada). */
+export const quizSections = pgTable(
+  "quiz_sections",
+  {
+    id: id(),
+    orgId: orgRef(),
+    versionId: uuid("version_id").notNull().references(() => quizFormVersions.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    title: text("title").notNull(),
+    position: integer("position").notNull(),
+  },
+  (t) => [uniqueIndex("quiz_sections_uq").on(t.versionId, t.key)],
+);
+
+export const quizQuestions = pgTable(
+  "quiz_questions",
+  {
+    id: id(),
+    orgId: orgRef(),
+    versionId: uuid("version_id").notNull().references(() => quizFormVersions.id, { onDelete: "cascade" }),
+    sectionId: uuid("section_id").notNull().references(() => quizSections.id, { onDelete: "cascade" }),
+    /** Identificador estável entre versões. */
+    key: text("key").notNull(),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    required: boolean("required").notNull(),
+    scored: boolean("scored").notNull(),
+    crmField: text("crm_field").notNull(),
+    /** Condição de exibição (cópia da definição). */
+    showIf: jsonb("show_if"),
+    position: integer("position").notNull(),
+  },
+  (t) => [uniqueIndex("quiz_questions_uq").on(t.versionId, t.key)],
+);
+
+export const quizOptions = pgTable(
+  "quiz_options",
+  {
+    id: id(),
+    orgId: orgRef(),
+    questionId: uuid("question_id").notNull().references(() => quizQuestions.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    points: integer("points").notNull().default(0),
+    position: integer("position").notNull(),
+  },
+  (t) => [uniqueIndex("quiz_options_uq").on(t.questionId, t.key)],
+);
+
+/** Regras de pontuação de cada versão: faixas, travas e destinos (cópia da definição, para consulta). */
+export const quizScoringRules = pgTable(
+  "quiz_scoring_rules",
+  {
+    id: id(),
+    orgId: orgRef(),
+    versionId: uuid("version_id").notNull().references(() => quizFormVersions.id, { onDelete: "cascade" }),
+    tierKey: text("tier_key").notNull(),
+    label: text("label").notNull(),
+    minScore: integer("min_score").notNull(),
+    requirements: jsonb("requirements").notNull(),
+    route: jsonb("route").notNull(),
+    position: integer("position").notNull(),
+  },
+  (t) => [uniqueIndex("quiz_scoring_rules_uq").on(t.versionId, t.tierKey)],
+);
+
+/** Publicações, despublicações e trocas de endereço. */
+export const quizPublications = pgTable(
+  "quiz_publications",
+  {
+    id: id(),
+    orgId: orgRef(),
+    formId: uuid("form_id").notNull().references(() => quizForms.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id"),
+    action: text("action").notNull(),
+    slug: text("slug").notNull(),
+    actorId: uuid("actor_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("quiz_publications_form_idx").on(t.formId, t.createdAt)],
+);
+
+/** Envio de um respondente. Score e classificação ficam só no servidor. */
+export const quizSubmissions = pgTable(
+  "quiz_submissions",
+  {
+    id: id(),
+    orgId: orgRef(),
+    formId: uuid("form_id").notNull().references(() => quizForms.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id").notNull().references(() => quizFormVersions.id),
+    /** Sessão do navegador (idempotência: o mesmo envio repetido não duplica). */
+    sessionId: uuid("session_id").notNull(),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    name: text("name"),
+    email: text("email"),
+    phone: text("phone"),
+    instagram: text("instagram"),
+    company: text("company"),
+    /** Respostas como enviadas (ids de alternativas), já validadas. */
+    answers: jsonb("answers").$type<Answers>().notNull(),
+    rawPoints: integer("raw_points").notNull().default(0),
+    maxPoints: integer("max_points").notNull().default(0),
+    score: integer("score"),
+    tierId: text("tier_id"),
+    tierLabel: text("tier_label"),
+    classification: jsonb("classification"),
+    /** Versão cujas regras deram o score atual (muda só em recálculo explícito). */
+    scoredWithVersionId: uuid("scored_with_version_id"),
+    /** link (página pública) ou embed (incorporado). */
+    channel: text("channel").notNull().default("link"),
+    utm: jsonb("utm").$type<Record<string, string>>().notNull().default({}),
+    referrer: text("referrer"),
+    route: jsonb("route"),
+    ipHash: text("ip_hash"),
+    userAgent: text("user_agent"),
+    /** Envio repetido da mesma pessoa em pouco tempo: guardado, mas sem novo lead. */
+    duplicateOf: uuid("duplicate_of"),
+    anonymizedAt: ts("anonymized_at"),
+    startedAt: ts("started_at"),
+    completedAt: ts("completed_at").notNull().defaultNow(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("quiz_submissions_session_uq").on(t.formId, t.sessionId),
+    index("quiz_submissions_form_idx").on(t.formId, t.completedAt),
+    index("quiz_submissions_contact_idx").on(t.contactId, t.completedAt),
+    index("quiz_submissions_org_idx").on(t.orgId, t.completedAt),
+  ],
+);
+
+/** Respostas individuais (uma linha por pergunta respondida). */
+export const quizAnswers = pgTable(
+  "quiz_answers",
+  {
+    id: id(),
+    orgId: orgRef(),
+    submissionId: uuid("submission_id").notNull().references(() => quizSubmissions.id, { onDelete: "cascade" }),
+    questionKey: text("question_key").notNull(),
+    questionTitle: text("question_title").notNull(),
+    type: text("type").notNull(),
+    value: jsonb("value"),
+    displayValue: text("display_value"),
+    optionKeys: text("option_keys").array().notNull().default(sql`'{}'::text[]`),
+    points: integer("points").notNull().default(0),
+  },
+  (t) => [index("quiz_answers_submission_idx").on(t.submissionId), index("quiz_answers_question_idx").on(t.orgId, t.questionKey)],
+);
+
+/** Aviso de tratamento e consentimentos, com a versão do texto aceito. */
+export const quizConsents = pgTable(
+  "quiz_consents",
+  {
+    id: id(),
+    orgId: orgRef(),
+    submissionId: uuid("submission_id").notNull().references(() => quizSubmissions.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    /** processing_notice | marketing | question */
+    kind: text("kind").notNull(),
+    granted: boolean("granted").notNull(),
+    textVersion: text("text_version").notNull(),
+    text: text("text").notNull(),
+    policyUrl: text("policy_url"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("quiz_consents_contact_idx").on(t.contactId, t.createdAt)],
+);
+
+/** Visualizações e inícios (uma vez por sessão e tipo). */
+export const quizEvents = pgTable(
+  "quiz_events",
+  {
+    id: id(),
+    orgId: orgRef(),
+    formId: uuid("form_id").notNull().references(() => quizForms.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id"),
+    sessionId: uuid("session_id").notNull(),
+    kind: text("kind").$type<"view" | "start" | "complete">().notNull(),
+    channel: text("channel").notNull().default("link"),
+    utmSource: text("utm_source"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("quiz_events_uq").on(t.formId, t.sessionId, t.kind), index("quiz_events_form_idx").on(t.formId, t.kind, t.createdAt)],
+);
+
+/** Histórico de score: cálculo original e cada recálculo explícito. */
+export const quizScoreHistory = pgTable(
+  "quiz_score_history",
+  {
+    id: id(),
+    orgId: orgRef(),
+    submissionId: uuid("submission_id").notNull().references(() => quizSubmissions.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id").notNull(),
+    rawPoints: integer("raw_points").notNull(),
+    maxPoints: integer("max_points").notNull(),
+    score: integer("score"),
+    tierId: text("tier_id"),
+    tierLabel: text("tier_label"),
+    reason: text("reason").notNull(),
+    actorId: uuid("actor_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("quiz_score_history_submission_idx").on(t.submissionId, t.createdAt)],
+);
+
+/** Imagens dos formulários (logo, capa, perguntas). Ficam no banco: o servidor não tem disco persistente. */
+export const quizAssets = pgTable("quiz_assets", {
+  id: id(),
+  orgId: orgRef(),
+  data: bytea("data").notNull(),
+  mime: text("mime").notNull(),
+  width: integer("width"),
+  height: integer("height"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
+});
+
+/** Pedidos de titulares (LGPD) recebidos pela página de privacidade. */
+export const dataSubjectRequests = pgTable(
+  "data_subject_requests",
+  {
+    id: id(),
+    orgId: orgRef(),
+    kind: text("kind").notNull(),
+    name: text("name"),
+    email: text("email"),
+    phone: text("phone"),
+    message: text("message"),
+    status: text("status").notNull().default("open"),
+    resolvedBy: uuid("resolved_by"),
+    resolvedAt: ts("resolved_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("data_subject_requests_org_idx").on(t.orgId, t.status, t.createdAt)],
 );

@@ -15,7 +15,8 @@ export type Action =
   | "contacts.merge"
   | "savedReplies.manage"
   | "opportunity.decide"
-  | "leads.manage";
+  | "leads.manage"
+  | "forms.manage";
 
 const MATRIX: Record<Action, Role[]> = {
   "data.all": ["admin", "manager"],
@@ -29,6 +30,8 @@ const MATRIX: Record<Action, Role[]> = {
   "savedReplies.manage": ["admin", "manager"],
   "opportunity.decide": ["admin", "manager", "closer"],
   "leads.manage": ["admin", "manager"],
+  /** Formulários & Quizzes: criar, editar, publicar, ver respostas, exportar e regras de score. */
+  "forms.manage": ["admin", "manager"],
 };
 
 export function can(ctx: Pick<Ctx, "role">, action: Action) {
