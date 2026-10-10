@@ -68,7 +68,7 @@ export async function getPublicForm(slug: string) {
     .select({ f: leadForms, orgName: organizations.name })
     .from(leadForms)
     .innerJoin(organizations, eq(organizations.id, leadForms.orgId))
-    .where(and(eq(leadForms.slug, slug.toLowerCase()), eq(leadForms.active, true)));
+    .where(and(eq(leadForms.slug, slug.toLowerCase()), eq(leadForms.active, true), sql`${leadForms.provider} <> ${QUIZ_PROVIDER}`));
   if (!row) return null;
   const f = row.f;
   return {
@@ -101,7 +101,7 @@ export const publicSubmitSchema = z.object({
 const PUBLIC_LIMIT_PER_HOUR = 8;
 
 export async function submitPublicForm(slug: string, raw: unknown, ip: string | null) {
-  const [form] = await db.select().from(leadForms).where(and(eq(leadForms.slug, slug.toLowerCase()), eq(leadForms.active, true)));
+  const [form] = await db.select().from(leadForms).where(and(eq(leadForms.slug, slug.toLowerCase()), eq(leadForms.active, true), sql`${leadForms.provider} <> ${QUIZ_PROVIDER}`));
   if (!form) throw notFound("Este formulário não está mais disponível.");
   const input = publicSubmitSchema.parse(raw);
   const thanks = { ok: true, message: form.thankYou || "Recebemos seus dados! Em breve alguém da equipe vai falar com você." };
@@ -186,6 +186,20 @@ export type LeadInput = {
 
 type Integration = typeof leadForms.$inferSelect;
 
+/** Formulários & Quizzes usam uma integração de apoio própria (fica fora da Central de Integrações e de /f/[slug]). */
+export const QUIZ_PROVIDER = "crmlabs_quiz";
+
+/**
+ * Ajustes por envio (Formulários & Quizzes): o destino depende da classificação do lead.
+ * `afterInsert` roda dentro da mesma transação, depois de o lead existir.
+ */
+export type IngestOptions = {
+  route?: Partial<Pick<Integration, "pipelineKind" | "stageId" | "salesStageId" | "assignMode" | "fixedAssigneeId" | "assigneeIds">> & { noAssign?: boolean };
+  notify?: boolean;
+  touchpointNote?: string;
+  afterInsert?: (tx: DbOrTx, r: { lead: typeof leads.$inferSelect; contactId: string; returning: boolean }) => Promise<void>;
+};
+
 /** Quem pode receber o lead: responsável fixo ou rodízio (selecionados; senão todos os sellers/closers ativos). */
 async function candidates(tx: DbOrTx, form: Integration) {
   const active = and(eq(memberships.orgId, form.orgId), eq(memberships.status, "active"));
@@ -225,11 +239,13 @@ export async function logIntegration(tx: DbOrTx, form: Pick<Integration, "id" | 
  * cria ou atualiza o contato, registra o ponto de contato na jornada, coloca no funil
  * escolhido, distribui e avisa somente quem recebeu.
  */
-export async function ingestLead(form: Integration, input: LeadInput) {
+export async function ingestLead(form: Integration, input: LeadInput, opts: IngestOptions = {}) {
   const now = new Date();
+  const { noAssign, ...routeOverride } = opts.route ?? {};
   const { lead, contactCreated, returning, sourceName, productName } = await db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(leadForms).where(eq(leadForms.id, form.id)).for("update");
-    const { pool, fixed } = await candidates(tx, locked);
+    const [row] = await tx.select().from(leadForms).where(eq(leadForms.id, form.id)).for("update");
+    const locked: Integration = { ...row, ...routeOverride };
+    const { pool, fixed } = noAssign ? { pool: [] as string[], fixed: true } : await candidates(tx, locked);
     let contact = await findContact(tx, form.orgId, input);
     const returning = !!contact;
 
@@ -244,13 +260,13 @@ export async function ingestLead(form: Integration, input: LeadInput) {
 
     // Distribuição: cliente que volta fica com o mesmo responsável (se ativo e no funil social seller).
     let assignedTo: string | null = null;
-    if (!fixed && contact?.ownerId && locked.pipelineKind !== "sales") {
+    if (!noAssign && !fixed && contact?.ownerId && locked.pipelineKind !== "sales") {
       const [m] = await tx.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.orgId, form.orgId), eq(memberships.userId, contact.ownerId), eq(memberships.status, "active")));
       if (m) assignedTo = contact.ownerId;
     }
     if (!assignedTo && pool.length) {
-      assignedTo = pool[locked.rotation % pool.length];
-      if (!fixed) await tx.update(leadForms).set({ rotation: locked.rotation + 1 }).where(eq(leadForms.id, form.id));
+      assignedTo = pool[row.rotation % pool.length];
+      if (!fixed) await tx.update(leadForms).set({ rotation: row.rotation + 1 }).where(eq(leadForms.id, form.id));
     }
     const contactOwner = locked.pipelineKind === "sales" ? null : assignedTo;
 
@@ -369,7 +385,7 @@ export async function ingestLead(form: Integration, input: LeadInput) {
       integrationName: locked.name,
       leadId: lead.id,
       utm: input.utm,
-      note: returning ? `Preencheu novamente “${locked.name}”.` : `Preencheu “${locked.name}”.`,
+      note: opts.touchpointNote ?? (returning ? `Preencheu novamente “${locked.name}”.` : `Preencheu “${locked.name}”.`),
       occurredAt: now,
     });
     await tx.update(leadForms).set({ lastLeadAt: now, lastError: null, lastErrorAt: null }).where(eq(leadForms.id, form.id));
@@ -381,12 +397,15 @@ export async function ingestLead(form: Integration, input: LeadInput) {
       detected: { nome: !!input.name, telefone: !!input.phone, email: !!input.email, instagram: !!input.instagram, origem: !!locked.sourceId, utm: Object.keys(input.utm).length > 0 },
     });
     await audit(tx, { orgId: form.orgId, userId: null }, "lead.received", "lead", lead.id, { formId: form.id, channel: input.channel, assignedTo, returning });
+    if (opts.afterInsert) await opts.afterInsert(tx, { lead, contactId: contact.id, returning });
     return { lead, contactCreated, returning, sourceName: src?.name ?? null, productName: prod?.name ?? null };
   });
 
   // Notificação somente para quem recebeu o lead.
   const body = [sourceName, form.name, productName, input.preferredAt ? `prefere ${fmtWhen(input.preferredAt)}` : null].filter(Boolean).join(" · ");
-  if (lead.assignedTo) {
+  if (opts.notify === false) {
+    // Destino sem prioridade comercial: ninguém é avisado.
+  } else if (lead.assignedTo) {
     await notifyUser({ orgId: form.orgId, userId: lead.assignedTo, type: "lead.new", title: returning ? `Lead voltou: ${lead.name}` : `Novo lead: ${lead.name}`, body, link: `/leads?lead=${lead.id}` }).catch((e) => logger.warn("Falha ao avisar o responsável", e));
   } else {
     // Ninguém para receber: avisa os administradores para o lead não se perder.
@@ -396,8 +415,9 @@ export async function ingestLead(form: Integration, input: LeadInput) {
     }
   }
   await publish({ orgId: form.orgId, topic: "leads", entityId: lead.id, ownerIds: [lead.assignedTo] });
-  if (contactCreated || form.stageId || lead.opportunityId) {
-    await publish({ orgId: form.orgId, topic: form.pipelineKind === "sales" ? "opportunities" : "board", entityId: lead.contactId, ownerIds: [lead.assignedTo] });
+  const kind = routeOverride.pipelineKind ?? form.pipelineKind;
+  if (contactCreated || (routeOverride.stageId !== undefined ? routeOverride.stageId : form.stageId) || lead.opportunityId) {
+    await publish({ orgId: form.orgId, topic: kind === "sales" ? "opportunities" : "board", entityId: lead.contactId, ownerIds: [lead.assignedTo] });
   }
   return lead;
 }

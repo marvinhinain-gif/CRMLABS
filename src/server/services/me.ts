@@ -22,6 +22,7 @@ export async function buildMe(ctx: Ctx) {
       merge: can(ctx, "contacts.merge"),
       savedReplies: can(ctx, "savedReplies.manage"),
       decide: can(ctx, "opportunity.decide"),
+      forms: can(ctx, "forms.manage"),
     },
   };
 }

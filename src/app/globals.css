@@ -307,3 +307,24 @@ body {
 @media (pointer: coarse) {
   a, button, [role="button"] { -webkit-tap-highlight-color: transparent; }
 }
+
+/* ------------------------------------------------------------------
+   Formulários & Quizzes — página pública
+------------------------------------------------------------------- */
+@keyframes quiz-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes quiz-back-in {
+  from { opacity: 0; transform: translateY(-14px); }
+  to { opacity: 1; transform: none; }
+}
+.quiz-anim .quiz-step { animation: quiz-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.quiz-anim .quiz-step[data-dir="back"] { animation-name: quiz-back-in; }
+.quiz-anim .quiz-option { animation: quiz-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(var(--i, 0) * 45ms + 80ms); }
+@keyframes quiz-confetti {
+  0% { opacity: 0; transform: translateY(0) scale(0.4) rotate(0); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(var(--dy, -120px)) translateX(var(--dx, 0)) scale(1) rotate(260deg); }
+}
+.quiz-confetti { animation: quiz-confetti 1.4s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(var(--i, 0) * 40ms + 150ms); }
