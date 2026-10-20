@@ -298,7 +298,10 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
   const cappedSums = TRACKED_KINDS.map((k) => sql`sum(${sql.raw(`c_${k}`)})::int as ${sql.raw(`c_${k}`)}`);
   const like = f.q ? `%${f.q.replace(/^@/, "").replace(/[\\%_]/g, (m) => `\\${m}`)}%` : null;
 
-  const res = await db.execute(sql`
+  // Teto de tempo: uma consulta lenta nunca fica presa no banco nem se acumula com as atualizações da tela.
+  const res = await db.transaction(async (tx) => {
+    await tx.execute(sql`set local statement_timeout = '20s'`);
+    return tx.execute(sql`
     with ev as (
       select e.actor_key, e.kind, e.occurred_at, e.username,
         row_number() over (partition by e.actor_key, e.kind, (e.occurred_at at time zone ${tz})::date order by e.occurred_at) as rn
@@ -316,17 +319,19 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
       from ev group by actor_key
     ),
     mapped as (
-      select a.*, coalesce(p.contact_id::text, a.actor_key) as person_key, p.contact_id
+      -- Identidade oficial → contato (pelo índice de channel_identities); conversa sem identidade → "contact:<id>".
+      select a.*, coalesce(ct.root_id::text, a.actor_key) as person_key, ct.root_id as contact_id
       from per_actor a
       left join lateral (
-        select coalesce(c.merged_into_id, c.id) as contact_id
-        from contacts c
-        where c.org_id = ${ctx.orgId} and (
-          (a.actor_key like 'contact:%' and c.id::text = substr(a.actor_key, 9))
-          or c.id = (select ci.contact_id from channel_identities ci where ci.org_id = ${ctx.orgId} and ci.external_id = a.actor_key order by ci.created_at limit 1)
-        )
-        limit 1
-      ) p on true
+        select ci.contact_id from channel_identities ci
+        where ci.org_id = ${ctx.orgId} and ci.external_id = a.actor_key
+        order by ci.created_at limit 1
+      ) ci on true
+      left join lateral (
+        select coalesce(c.merged_into_id, c.id) as root_id from contacts c
+        where c.org_id = ${ctx.orgId}
+          and c.id = coalesce(ci.contact_id, case when a.actor_key like 'contact:%' then substr(a.actor_key, 9)::uuid end)
+      ) ct on true
     ),
     people as (
       select person_key, max(contact_id::text)::uuid as contact_id, max(last_at) as last_at,
@@ -341,25 +346,30 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
       from people p
       where (${fScore}) > 0
     ),
-    top as (
-      select r.*, c.name, c.username as contact_username, c.avatar_url, c.owner_id, u.name as owner_name,
-        case
-          when r.contact_id is null then 'none'
-          when exists (select 1 from opportunities o where o.contact_id = r.contact_id and o.status = 'won') then 'client'
-          when exists (select 1 from opportunities o where o.contact_id = r.contact_id and o.status = 'open') then 'closer'
-          when exists (select 1 from relationship_entries re where re.contact_id = r.contact_id and re.closed_at is null and not re.auto_created)
-            or exists (select 1 from leads l where l.contact_id = r.contact_id)
-            or exists (select 1 from opportunities o where o.contact_id = r.contact_id) then 'lead'
-          else 'none'
-        end as status
+    lim as (
+      select r.*, c.name, c.username as contact_username, c.avatar_url, c.owner_id
       from ranked r
       left join contacts c on c.id = r.contact_id
-      left join users u on u.id = c.owner_id
       where true
         ${f.personKey ? sql`and r.person_key = ${f.personKey}` : sql``}
         ${like ? sql`and (coalesce(c.name, '') ilike ${like} or coalesce(c.username, r.username, '') ilike ${like})` : sql``}
       order by r.pos
       limit ${f.limit}
+    ),
+    -- Status no CRM só para as linhas exibidas (depois do limite).
+    top as (
+      select l.*, u.name as owner_name,
+        case
+          when l.contact_id is null then 'none'
+          when exists (select 1 from opportunities o where o.contact_id = l.contact_id and o.status = 'won') then 'client'
+          when exists (select 1 from opportunities o where o.contact_id = l.contact_id and o.status = 'open') then 'closer'
+          when exists (select 1 from relationship_entries re where re.contact_id = l.contact_id and re.closed_at is null and not re.auto_created)
+            or exists (select 1 from leads le where le.contact_id = l.contact_id)
+            or exists (select 1 from opportunities o where o.contact_id = l.contact_id) then 'lead'
+          else 'none'
+        end as status
+      from lim l
+      left join users u on u.id = l.owner_id
     )
     select
       (select json_build_object(
@@ -369,6 +379,10 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
         'directs', coalesce(sum(n_dm + n_dm_share + n_story_reply + n_story_mention), 0)
       ) from people) as totals,
       (select coalesce(json_agg(t order by t.pos), '[]'::json) from top t) as rows`);
+  }).catch((e) => {
+    if (/statement timeout|canceling statement/i.test(String((e as Error)?.message ?? e))) throw new AppError("rate_limited", "O ranking demorou demais para calcular. Tente de novo em instantes.");
+    throw e;
+  });
   const [row] = res as unknown as { totals: Totals; rows: Record<string, unknown>[] }[];
   const people: (RankedPerson & { actorKeys: string[] })[] = row.rows.map((r) => ({
     key: String(r.person_key),
