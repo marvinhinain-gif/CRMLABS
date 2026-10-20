@@ -23,14 +23,17 @@ import {
 /** Etapas resolvidas para a organização (os modelos não conhecem ids). */
 export type StageRefs = { relationship: (key: string) => string | null };
 
-export const APPEARANCE_PRESETS: Record<"clean" | "dark" | "axion", Omit<Appearance, "logoAssetId" | "coverAssetId" | "layout" | "review" | "counter">> = {
-  clean: { preset: "clean", primary: "#008a65", secondary: "#e5f6ef", background: "#ffffff", text: "#172b35", font: "poppins", radius: 16, buttonStyle: "solid", progressBar: true, animations: true, finalStyle: "celebration" },
-  dark: { preset: "dark", primary: "#2fd39b", secondary: "#173a30", background: "#0d1714", text: "#eef6f3", font: "poppins", radius: 16, buttonStyle: "solid", progressBar: true, animations: true, finalStyle: "celebration" },
+export type PresetKey = "clean" | "dark" | "axion" | "axion_card";
+export const APPEARANCE_PRESETS: Record<PresetKey, Omit<Appearance, "logoAssetId" | "coverAssetId" | "layout" | "review" | "counter">> = {
+  clean: { preset: "clean", primary: "#008a65", secondary: "#e5f6ef", background: "#ffffff", text: "#172b35", font: "poppins", radius: 16, buttonStyle: "solid", progressBar: true, animations: true, finalStyle: "celebration", frame: "page" },
+  dark: { preset: "dark", primary: "#2fd39b", secondary: "#173a30", background: "#0d1714", text: "#eef6f3", font: "poppins", radius: 16, buttonStyle: "solid", progressBar: true, animations: true, finalStyle: "celebration", frame: "page" },
   /** Preto/grafite com dourado (identidade AXION). */
-  axion: { preset: "axion", primary: "#d4af37", secondary: "#1c1a14", background: "#0b0b0b", text: "#f5f3ee", font: "poppins", radius: 18, buttonStyle: "pill", progressBar: true, animations: true, finalStyle: "simple" },
+  axion: { preset: "axion", primary: "#d4af37", secondary: "#1c1a14", background: "#0b0b0b", text: "#f5f3ee", font: "poppins", radius: 18, buttonStyle: "pill", progressBar: true, animations: true, finalStyle: "simple", frame: "page" },
+  /** Cartão branco sobre cinza-claro, marca "A." com ponto dourado e botão com contorno dourado (padrão). */
+  axion_card: { preset: "axion_card", primary: "#d39b38", secondary: "#fbf4e6", background: "#f7f7f7", surface: "#ffffff", text: "#111111", font: "poppins", radius: 18, buttonStyle: "outline", progressBar: true, animations: true, finalStyle: "simple", frame: "card" },
 };
 
-export const DEFAULT_APPEARANCE: Appearance = { ...APPEARANCE_PRESETS.clean, logoAssetId: null, coverAssetId: null, layout: "one_per_screen", review: true };
+export const DEFAULT_APPEARANCE: Appearance = { ...APPEARANCE_PRESETS.axion_card, logoAssetId: null, coverAssetId: null, layout: "one_per_screen", review: true, counter: "question" };
 
 export const DEFAULT_COMPLETION =
   "Obrigado por compartilhar essas informações! Nossa equipe vai analisar o momento da sua operação para identificar qual solução da AXION faz mais sentido para seus objetivos.";
@@ -431,12 +434,12 @@ export function axionApplicationDefinition(refs: StageRefs): QuizDefinition {
   return {
     ...base,
     sections: [{ id: "aplicacao", title: "Aplicação", description: null, questions }],
-    appearance: { ...APPEARANCE_PRESETS.axion, logoAssetId: null, coverAssetId: null, layout: "one_per_screen", review: false, counter: "question" },
+    appearance: { ...DEFAULT_APPEARANCE, review: false },
     settings: {
       ...base.settings,
       title: "Descubra o próximo passo para escalar seu negócio.",
       description: "Responda algumas perguntas para que nossa equipe entenda sua operação e avalie qual caminho estratégico faz mais sentido.",
-      welcome: "Leva aproximadamente 2 a 3 minutos.",
+      welcome: "11 perguntas · leva de 2 a 3 minutos",
       completion:
         "Recebemos suas informações. Nossa equipe vai avaliar o momento do seu negócio e, caso identifique uma possibilidade de trabalho em conjunto, entrará em contato para conversar sobre os próximos passos.",
       tags: ["Aplicação AXION"],

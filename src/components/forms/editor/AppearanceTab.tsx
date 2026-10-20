@@ -1,13 +1,14 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { APPEARANCE_PRESETS } from "@/lib/quiz/templates";
+import { APPEARANCE_PRESETS, type PresetKey } from "@/lib/quiz/templates";
 import type { Appearance } from "@/lib/quiz/types";
 import { cx, Field, Input, Select, Switch, Textarea } from "@/components/ui";
 import { ImagePicker, Panel, type EditorProps } from "./common";
 
 const PRESET_CARDS = [
-  { key: "clean", label: "Branco minimalista", hint: "Padrão: Poppins, fundo branco e verde CRMLABS." },
+  { key: "axion_card", label: "Cartão AXION", hint: "Padrão: cartão branco, marca com ponto dourado e botão com contorno." },
+  { key: "clean", label: "Branco minimalista", hint: "Poppins, fundo branco e verde CRMLABS." },
   { key: "dark", label: "Escuro", hint: "Fundo escuro com destaque em verde." },
   { key: "axion", label: "Preto e dourado", hint: "Identidade AXION: grafite, dourado e Poppins." },
   { key: "custom", label: "Personalizado", hint: "Suas cores e tipografia." },
@@ -39,9 +40,9 @@ export function AppearanceTab({ draft, update }: EditorProps) {
   const set = <K extends keyof Appearance>(k: K, v: Appearance[K], custom = true) =>
     update((d) => {
       d.appearance[k] = v;
-      if (custom && ["primary", "secondary", "background", "text", "font"].includes(k)) d.appearance.preset = "custom";
+      if (custom && ["primary", "secondary", "background", "text", "font", "surface"].includes(k)) d.appearance.preset = "custom";
     });
-  const applyPreset = (p: "clean" | "dark" | "axion" | "custom") =>
+  const applyPreset = (p: PresetKey | "custom") =>
     update((d) => {
       if (p === "custom") d.appearance.preset = "custom";
       else Object.assign(d.appearance, APPEARANCE_PRESETS[p]);
@@ -50,7 +51,7 @@ export function AppearanceTab({ draft, update }: EditorProps) {
   return (
     <div className="flex flex-col gap-4">
       <Panel title="Tema" description="Comece por um modelo e ajuste o que quiser.">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" role="radiogroup" aria-label="Tema">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" role="radiogroup" aria-label="Tema">
           {PRESET_CARDS.map((p) => {
             const active = a.preset === p.key;
             const sw = p.key === "custom" ? a : APPEARANCE_PRESETS[p.key];
@@ -63,9 +64,11 @@ export function AppearanceTab({ draft, update }: EditorProps) {
                 onClick={() => applyPreset(p.key)}
                 className={cx("relative flex flex-col gap-2 rounded-[18px] border p-3 text-left transition-colors", active ? "border-brand ring-4 ring-[#008a65]/10" : "border-line hover:bg-page")}
               >
-                <span className="flex h-14 items-end gap-1.5 rounded-[12px] border border-line/60 p-2" style={{ background: sw.background }}>
-                  <span className="h-2 w-12 rounded-full" style={{ background: sw.text, opacity: 0.8 }} />
-                  <span className="ml-auto h-6 w-12 rounded-[8px]" style={{ background: sw.primary }} />
+                <span className="flex h-14 items-end rounded-[12px] border border-line/60 p-2" style={{ background: sw.background }}>
+                  <span className="flex min-w-0 flex-1 items-end gap-1.5 self-stretch rounded-[8px] p-1" style={sw.frame === "card" ? { background: sw.surface ?? sw.background, boxShadow: "0 2px 6px rgba(0,0,0,.08)" } : undefined}>
+                    <span className="h-2 w-10 min-w-0 shrink rounded-full" style={{ background: sw.text, opacity: 0.8 }} />
+                    <span className="ml-auto h-6 w-10 shrink-0 rounded-[8px]" style={sw.buttonStyle === "outline" ? { border: `2px solid ${sw.primary}` } : { background: sw.primary }} />
+                  </span>
                 </span>
                 <span className="text-[14px] font-semibold">{p.label}</span>
                 <span className="text-[12.5px] text-muted">{p.hint}</span>
@@ -86,6 +89,13 @@ export function AppearanceTab({ draft, update }: EditorProps) {
           <ColorField label="Cor de destaque (seleção)" value={a.secondary} onChange={(v) => set("secondary", v)} />
           <ColorField label="Fundo" value={a.background} onChange={(v) => set("background", v)} />
           <ColorField label="Texto" value={a.text} onChange={(v) => set("text", v)} />
+          <Field label="Moldura" htmlFor="ap-frame">
+            <Select id="ap-frame" value={a.frame ?? "page"} onChange={(e) => set("frame", e.target.value as Appearance["frame"], false)}>
+              <option value="card">Cartão centralizado com a marca</option>
+              <option value="page">Página inteira</option>
+            </Select>
+          </Field>
+          {a.frame === "card" && <ColorField label="Cor do cartão" value={a.surface ?? "#ffffff"} onChange={(v) => set("surface", v)} />}
           <Field label="Tipografia" htmlFor="ap-font">
             <Select id="ap-font" value={a.font} onChange={(e) => set("font", e.target.value as Appearance["font"])}>
               <option value="poppins">Poppins (padrão)</option>
@@ -109,7 +119,7 @@ export function AppearanceTab({ draft, update }: EditorProps) {
 
       <Panel title="Imagens">
         <div className="grid gap-5 sm:grid-cols-2">
-          <ImagePicker kind="logo" label="Logo" value={a.logoAssetId} onChange={(id) => set("logoAssetId", id, false)} hint="Sem logo, mostramos o nome da empresa." />
+          <ImagePicker kind="logo" label="Logo" value={a.logoAssetId} onChange={(id) => set("logoAssetId", id, false)} hint="Sem logo, mostramos a inicial e o nome da empresa." />
           <ImagePicker kind="cover" label="Capa" value={a.coverAssetId} onChange={(id) => set("coverAssetId", id, false)} hint="Aparece na tela de boas-vindas." />
         </div>
       </Panel>

@@ -30,14 +30,19 @@ function mix(a: string, b: string, t: number) {
 }
 
 export function themeVars(a: Appearance): CSSProperties {
+  // No modo cartão, as cores derivadas partem da cor do cartão, não do fundo da página.
+  const base = a.frame === "card" ? (a.surface ?? a.background) : a.background;
   return {
     "--q-primary": a.primary,
+    // Texto pequeno na cor principal: no cartão claro, um tom mais escuro para ter contraste.
+    "--q-accent": a.frame === "card" ? mix(a.primary, a.text, 0.38) : a.primary,
     "--q-secondary": a.secondary,
     "--q-bg": a.background,
+    "--q-surface": base,
     "--q-text": a.text,
-    "--q-muted": mix(a.text, a.background, 0.42),
-    "--q-line": mix(a.text, a.background, 0.84),
-    "--q-card": mix(a.background, a.text, 0.025),
+    "--q-muted": mix(a.text, base, 0.42),
+    "--q-line": mix(a.text, base, 0.86),
+    "--q-card": a.frame === "card" ? base : mix(a.background, a.text, 0.025),
     "--q-radius": `${a.radius}px`,
     "--q-btn-radius": a.buttonStyle === "pill" ? "999px" : `${a.radius}px`,
     fontFamily: FONT[a.font],
@@ -310,18 +315,36 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
 
   const logo = assetSrc(a.logoAssetId);
   const cover = assetSrc(a.coverAssetId);
-  const btn = (variant: "primary" | "ghost") =>
+  const card = a.frame === "card";
+  const brand = (size: "lg" | "sm") => <Brand orgName={orgName} logo={logo} size={size} />;
+  const introMeta = def.settings.welcome || `${visibleList.length} pergunta${visibleList.length === 1 ? "" : "s"} · leva poucos minutos`;
+  const btn = (variant: "primary" | "ghost"): CSSProperties =>
     variant === "primary"
       ? a.buttonStyle === "outline"
-        ? { background: "transparent", color: "var(--q-primary)", border: "2px solid var(--q-primary)" }
+        ? card
+          ? { background: "var(--q-surface)", color: "var(--q-text)", border: "3px solid color-mix(in srgb, var(--q-primary) 62%, var(--q-surface))", boxShadow: "0 10px 26px -12px color-mix(in srgb, var(--q-primary) 70%, transparent)", fontWeight: 500 }
+          : { background: "transparent", color: "var(--q-text)", border: "2px solid var(--q-primary)" }
         : { background: "var(--q-primary)", color: readableOn(a.primary), border: "2px solid var(--q-primary)" }
       : { background: "transparent", color: "var(--q-muted)", border: "2px solid transparent" };
 
   return (
     <div ref={rootRef} className={a.animations ? "quiz-anim" : undefined} style={themeVars(a)}>
-      <div className={compact ? "px-4 py-5 sm:px-6" : "mx-auto flex min-h-dvh w-full max-w-[640px] flex-col px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-6 sm:pt-8"}>
-        <header className="mb-5 flex items-center justify-between gap-3">
-          {logo ? (
+      <div
+        className={
+          card
+            ? compact
+              ? "px-2 py-3 sm:px-4 sm:py-5"
+              : "mx-auto flex min-h-dvh w-full max-w-[780px] flex-col px-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:justify-center sm:px-6 sm:py-12"
+            : compact
+              ? "px-4 py-5 sm:px-6"
+              : "mx-auto flex min-h-dvh w-full max-w-[640px] flex-col px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-6 sm:pt-8"
+        }
+      >
+       <div className={card ? "flex w-full flex-col rounded-[28px] px-5 py-7 sm:rounded-[32px] sm:px-14 sm:py-12" : "contents"} style={card ? { background: "var(--q-surface)", border: "1px solid var(--q-line)", boxShadow: "0 30px 60px -36px rgba(15, 15, 15, 0.22)" } : undefined}>
+        <header className={card && (done || step?.kind === "intro") ? "mb-6 flex flex-col items-center gap-3 sm:mb-8" : "mb-5 flex items-center justify-between gap-3"}>
+          {card ? (
+            brand(done || step?.kind === "intro" ? "lg" : "sm")
+          ) : logo ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={logo} alt={orgName} className="h-9 w-auto max-w-[180px] object-contain" />
           ) : (
@@ -344,7 +367,20 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
 
         <main className="flex-1">
           {done ? (
-            <Done title={labels.doneTitle || "Respostas enviadas!"} message={done.message} celebrate={a.finalStyle === "celebration" && a.animations} redirecting={!!done.redirectUrl} />
+            <Done title={labels.doneTitle || "Respostas enviadas!"} message={done.message} celebrate={a.finalStyle === "celebration" && a.animations} tight={card} redirecting={!!done.redirectUrl} />
+          ) : step?.kind === "intro" && card ? (
+            <div key="intro" className="quiz-step flex flex-col items-center text-center" data-dir={dir}>
+              {cover && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={cover} alt="" className="mb-6 aspect-[16/7] w-full object-cover" style={{ borderRadius: "var(--q-radius)" }} />
+              )}
+              <h1 className="text-[30px] font-bold leading-[1.12] tracking-[-0.02em] sm:text-[44px]">{def.settings.title}</h1>
+              {def.settings.description && <p className="mt-4 max-w-[560px] text-[16px] leading-relaxed sm:text-[18px]" style={{ color: "color-mix(in srgb, var(--q-text) 78%, var(--q-surface))" }}>{def.settings.description}</p>}
+              <QButton style={btn("primary")} onClick={() => go(1)} className="mt-8 h-[60px] min-w-[220px] px-9 text-[17px]">
+                {labels.start || "Começar"} <ArrowRight className="size-5" aria-hidden />
+              </QButton>
+              <p className="mt-4 text-[14px]" style={{ color: "var(--q-muted)" }}>{introMeta}</p>
+            </div>
           ) : step?.kind === "intro" ? (
             <div key="intro" className="quiz-step" data-dir={dir}>
               {cover && (
@@ -363,14 +399,14 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
           ) : step?.kind === "questions" ? (
             <div key={`s${stepIndex}`} className="quiz-step" data-dir={dir}>
               {counter === "question" && a.layout === "one_per_screen" && questionNumber > 0 && (
-                <p className="mb-4 text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-primary)" }} aria-live="polite">
+                <p className="mb-4 text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-accent)" }} aria-live="polite">
                   Pergunta {questionNumber} de {visibleList.length}
                 </p>
               )}
               {counter !== "question" && (a.layout === "by_section" || step.questions[0] === def.sections[step.sectionIndex].questions.find((q) => visible.has(q.id))) && (
                 <div className="mb-5">
                   {totalSections > 1 && counter === "section" && (
-                    <p className="text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-primary)" }}>
+                    <p className="text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-accent)" }}>
                       Etapa {def.sections.slice(0, step.sectionIndex + 1).filter((s) => s.questions.some((q) => visible.has(q.id))).length} de {totalSections}
                     </p>
                   )}
@@ -425,7 +461,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
                 <div className="mb-5 flex flex-col gap-3 text-[13.5px] leading-snug">
                   <Tick checked={notice} onChange={setNotice} id="q-notice">
                     {def.settings.consent.noticeText}{" "}
-                    <a href={def.settings.consent.policyUrl || `/privacidade?form=${slug}#formularios`} target="_blank" rel="noopener" className="underline" style={{ color: "var(--q-primary)" }}>
+                    <a href={def.settings.consent.policyUrl || `/privacidade?form=${slug}#formularios`} target="_blank" rel="noopener" className="underline" style={{ color: "var(--q-accent)" }}>
                       Política de privacidade
                     </a>
                   </Tick>
@@ -459,9 +495,10 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
             </div>
           )}
         </main>
+       </div>
 
         {!compact && (
-          <footer className="mt-10 text-center text-[12px]" style={{ color: "var(--q-muted)" }}>
+          <footer className={card ? "mt-6 text-center text-[12px]" : "mt-10 text-center text-[12px]"} style={{ color: card ? mix(a.text, a.background, 0.45) : "var(--q-muted)" }}>
             Seus dados são tratados conforme a LGPD.{" "}
             <a href={def.settings.consent.policyUrl || `/privacidade?form=${slug}#formularios`} target="_blank" rel="noopener" className="underline">
               Privacidade
@@ -489,6 +526,27 @@ function utm() {
     if (v) out[k] = v.slice(0, 300);
   }
   return out;
+}
+
+/** Marca no topo do cartão: a logo enviada ou a inicial com o ponto dourado e o nome espaçado. */
+function Brand({ orgName, logo, size }: { orgName: string; logo: string | null; size: "lg" | "sm" }) {
+  const lg = size === "lg";
+  if (logo) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={logo} alt={orgName} className={lg ? "h-16 w-auto max-w-[220px] object-contain sm:h-20" : "h-8 w-auto max-w-[160px] object-contain"} />;
+  }
+  const initial = (orgName.trim()[0] ?? "").toUpperCase();
+  return (
+    <span className={lg ? "flex flex-col items-center gap-2" : "flex items-center gap-2.5"} aria-label={orgName} role="img">
+      <span aria-hidden className={`relative font-extrabold leading-none tracking-[-0.06em] ${lg ? "text-[64px] sm:text-[76px]" : "text-[26px]"}`}>
+        {initial}
+        <span className={`absolute rounded-full ${lg ? "-right-3 bottom-[0.06em] size-3.5 sm:size-4" : "-right-1.5 bottom-[0.06em] size-1.5"}`} style={{ background: "var(--q-primary)" }} />
+      </span>
+      <span aria-hidden className={`font-bold ${lg ? "pl-[0.34em] text-[22px] tracking-[0.34em] sm:text-[26px]" : "ml-1 text-[13px] tracking-[0.3em]"}`}>
+        {orgName.toUpperCase()}
+      </span>
+    </span>
+  );
 }
 
 /** Texto branco ou escuro, o que tiver mais contraste com a cor do botão. */
@@ -679,7 +737,7 @@ function QuestionField({ q, value, error, big, onPrimary, onChange, onEnter, onA
       <legend id={`${inputId}-label`} className="mb-1 w-full">
         <label htmlFor={["single_choice", "multi_choice", "yes_no", "scale"].includes(q.type) ? undefined : inputId} className={big ? "block text-[22px] font-semibold leading-snug sm:text-[26px]" : "block text-[17px] font-semibold leading-snug"}>
           {q.title}
-          {q.required && <span style={{ color: "var(--q-primary)" }}> *</span>}
+          {q.required && <span style={{ color: "var(--q-accent)" }}> *</span>}
         </label>
       </legend>
       {q.description && q.type !== "consent" && <p className="mb-3 text-[14.5px]" style={{ color: "var(--q-muted)" }}>{q.description}</p>}
@@ -697,9 +755,9 @@ function QuestionField({ q, value, error, big, onPrimary, onChange, onEnter, onA
   );
 }
 
-function Done({ title, message, celebrate, redirecting }: { title: string; message: string; celebrate: boolean; redirecting: boolean }) {
+function Done({ title, message, celebrate, redirecting, tight }: { title: string; message: string; celebrate: boolean; redirecting: boolean; tight?: boolean }) {
   return (
-    <div className="quiz-step relative flex flex-col items-center py-10 text-center">
+    <div className={`quiz-step relative flex flex-col items-center text-center ${tight ? "pb-2 pt-2" : "py-10"}`}>
       {celebrate && (
         <div aria-hidden className="pointer-events-none absolute left-1/2 top-16">
           {Array.from({ length: 14 }).map((_, i) => (
