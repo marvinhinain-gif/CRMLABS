@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import { db } from "@/server/db";
 import { accountSecrets, channelIdentities, connectedAccounts, contacts, conversations, messages, relationshipEntries, socialComments, webhookEvents } from "@/server/db/schema";
 import { setInstagramApiForTests } from "@/server/integrations/instagram/client";
@@ -104,6 +104,17 @@ describe("Webhooks: assinatura, fila e deduplicação", () => {
     expect(c).toMatchObject({ name: "Ana Souza", username: "anasouza", source: "instagram_dm" }); // perfil oficial
     const [conv] = await db.select().from(conversations);
     expect(conv.unreadCount).toBe(1);
+  });
+
+  it("rajada de webhooks não esgota as conexões do banco", async () => {
+    const { ctx } = await setupOrg();
+    await connect(ctx.admin);
+    for (let i = 0; i < 15; i++) await ingestWebhook(dm(`mid.burst.${i}`, `igsid-${i}`, `oi ${i}`));
+    // Cada webhook recebido dispara o processamento; antes, cada chamada prendia uma conexão numa transação.
+    await Promise.all(Array.from({ length: 15 }, () => processPendingEvents(20)));
+    expect(await db.select().from(messages)).toHaveLength(15);
+    const pending = await db.select().from(webhookEvents).where(ne(webhookEvents.status, "processed"));
+    expect(pending).toHaveLength(0);
   });
 
   it("deduplica pelo identificador oficial, nunca pelo nome", async () => {
