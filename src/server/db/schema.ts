@@ -521,6 +521,8 @@ export const messages = pgTable(
     uniqueIndex("messages_external_uq").on(t.orgId, t.externalId),
     uniqueIndex("messages_client_req_uq").on(t.orgId, t.clientRequestId),
     index("messages_conversation_idx").on(t.conversationId, t.sentAt),
+    /** Cursor da coleta do Top Engajados (ordem de gravação). */
+    index("messages_created_idx").on(t.createdAt, t.id),
   ],
 );
 
@@ -583,6 +585,8 @@ export const socialComments = pgTable(
   (t) => [
     uniqueIndex("social_comments_uq").on(t.accountId, t.externalId),
     index("social_comments_org_idx").on(t.orgId, t.commentedAt),
+    /** Cursor da coleta do Top Engajados (ordem de gravação). */
+    index("social_comments_created_idx").on(t.createdAt, t.id),
   ],
 );
 
@@ -1349,3 +1353,56 @@ export const dataSubjectRequests = pgTable(
   },
   (t) => [index("data_subject_requests_org_idx").on(t.orgId, t.status, t.createdAt)],
 );
+
+// ---------- Top Engajados ----------
+/**
+ * Interações individuais que a API oficial atribui a uma pessoa (uma linha por mensagem ou comentário de origem).
+ * Coletadas em segundo plano a partir de messages e social_comments — nunca na fila de webhooks.
+ * As FKs em cascata seguem a política de retenção: apagou a origem, some a interação.
+ */
+export const engagementEvents = pgTable(
+  "engagement_events",
+  {
+    id: id(),
+    orgId: orgRef(),
+    accountId: uuid("account_id").references(() => connectedAccounts.id, { onDelete: "cascade" }),
+    /** Quem interagiu: IGSID oficial; "contact:<id>" só quando a conversa não tem identidade oficial. */
+    actorKey: text("actor_key").notNull(),
+    /** comment | dm | dm_share | story_reply | story_mention */
+    kind: text("kind").notNull(),
+    occurredAt: ts("occurred_at").notNull(),
+    messageId: uuid("message_id").references(() => messages.id, { onDelete: "cascade" }),
+    commentId: uuid("comment_id").references(() => socialComments.id, { onDelete: "cascade" }),
+    /** @ informado pela API no momento da interação (autor do comentário ou identidade do Direct). */
+    username: text("username"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("engagement_events_message_uq").on(t.messageId),
+    uniqueIndex("engagement_events_comment_uq").on(t.commentId),
+    index("engagement_events_org_idx").on(t.orgId, t.occurredAt),
+    index("engagement_events_actor_idx").on(t.orgId, t.actorKey, t.occurredAt),
+  ],
+);
+
+/** Até onde a coleta já leu cada origem (created_at + id, comparados no próprio banco). */
+export const engagementCursors = pgTable("engagement_cursors", {
+  source: text("source").primaryKey(),
+  lastAt: ts("last_at"),
+  lastId: uuid("last_id"),
+  updatedAt: updatedAt(),
+});
+
+/** Pesos do Score de Engajamento e regras (editáveis pelo administrador). */
+export const engagementSettings = pgTable("engagement_settings", {
+  orgId: uuid("org_id")
+    .primaryKey()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  weights: jsonb("weights").$type<Record<string, number>>().notNull().default({}),
+  /** Anti-spam: cada tipo de ação pontua no máximo N vezes por pessoa por dia. */
+  dailyCap: integer("daily_cap").notNull().default(5),
+  /** Closers só veem o ranking com autorização explícita do administrador. */
+  closersCanView: boolean("closers_can_view").notNull().default(false),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: updatedAt(),
+});

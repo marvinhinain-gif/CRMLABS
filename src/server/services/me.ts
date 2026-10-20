@@ -3,9 +3,10 @@ import { listUserOrgs } from "../auth/service";
 import { navCounts } from "./settings";
 import { can } from "../permissions";
 import { avatarUrl, myAvatarUpdatedAt } from "./avatars";
+import { canViewEngagement } from "./engagement";
 
 export async function buildMe(ctx: Ctx) {
-  const [orgs, counts, avatarAt] = await Promise.all([listUserOrgs(ctx.userId), navCounts(ctx), myAvatarUpdatedAt(ctx.userId)]);
+  const [orgs, counts, avatarAt, engagement] = await Promise.all([listUserOrgs(ctx.userId), navCounts(ctx), myAvatarUpdatedAt(ctx.userId), canViewEngagement(ctx)]);
   return {
     user: { id: ctx.userId, name: ctx.userName, email: ctx.userEmail, role: ctx.role, avatarUrl: avatarUrl(ctx.userId, avatarAt) },
     org: { id: ctx.orgId, ...ctx.org },
@@ -23,6 +24,8 @@ export async function buildMe(ctx: Ctx) {
       savedReplies: can(ctx, "savedReplies.manage"),
       decide: can(ctx, "opportunity.decide"),
       forms: can(ctx, "forms.manage"),
+      /** Top Engajados (closers só com autorização do administrador). */
+      engagement,
     },
   };
 }

@@ -5,7 +5,7 @@ import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { toast } from "sonner";
-import { CircleAlert, History, MessageCircle, RefreshCw, Send } from "lucide-react";
+import { CircleAlert, History, MessageCircle, RefreshCw, Send, Trophy } from "lucide-react";
 import { api, fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useQueryParam } from "@/lib/nav";
@@ -14,6 +14,7 @@ import { Button, Card, cx, DemoBadge, EmptyState, ErrorState, LoadingState, Page
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { ConversationsView } from "@/components/conversations/ConversationsView";
 import { CommentsInbox } from "./CommentsInbox";
+import { TopEngagedView } from "./TopEngagedView";
 
 type Summary = {
   account: { username: string | null; status: string; capabilities: { connected: boolean; sendMessages: boolean; readComments: boolean }; lastCheckedAt: string | null } | null;
@@ -172,12 +173,14 @@ export function InstagramView() {
   const items = [
     { value: "directs", label: "Directs", icon: <Send />, count: data?.pendingDirects },
     { value: "comentarios", label: "Comentários", icon: <MessageCircle />, count: data?.pendingComments },
+    ...(me.permissions.engagement ? [{ value: "engajados", label: "Top Engajados", icon: <Trophy /> }] : []),
     ...(me.user.role === "admin" ? [{ value: "historico", label: "Histórico", icon: <History /> }] : []),
   ];
   return (
     <div className="mx-auto flex max-w-[1700px] flex-col gap-4">
       <PageHeader
-        title={tab === "comentarios" ? "Comentários" : tab === "historico" ? "Histórico" : "Directs"}
+        title={tab === "comentarios" ? "Comentários" : tab === "historico" ? "Histórico" : tab === "engajados" ? "Top 15 Engajados" : "Directs"}
+        subtitle={tab === "engajados" ? "Descubra quem mais interage com seu Instagram e identifique novas oportunidades comerciais." : undefined}
         badge={me.org.isDemo ? <DemoBadge /> : undefined}
         actions={
           <div className="flex items-center gap-2">
@@ -203,7 +206,15 @@ export function InstagramView() {
         }
       />
       <Tabs value={tab} onChange={setTab} className="self-start max-w-full overflow-x-auto" items={items} />
-      {tab === "comentarios" ? <CommentsInbox /> : tab === "historico" && me.user.role === "admin" ? <HistoryView /> : <ConversationsView />}
+      {tab === "comentarios" ? (
+        <CommentsInbox />
+      ) : tab === "historico" && me.user.role === "admin" ? (
+        <HistoryView />
+      ) : tab === "engajados" && me.permissions.engagement ? (
+        <TopEngagedView connected={data ? connected : null} />
+      ) : (
+        <ConversationsView />
+      )}
     </div>
   );
 }
