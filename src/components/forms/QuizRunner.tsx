@@ -327,185 +327,177 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
         : { background: "var(--q-primary)", color: readableOn(a.primary), border: "2px solid var(--q-primary)" }
       : { background: "transparent", color: "var(--q-muted)", border: "2px solid transparent" };
 
+  const footer = compact ? null : (
+    <footer className={card ? "mt-6 text-center text-[12px]" : "mt-10 text-center text-[12px]"} style={{ color: card ? mix(a.text, a.background, 0.45) : "var(--q-muted)" }}>
+      Seus dados são tratados conforme a LGPD.{" "}
+      <a href={def.settings.consent.policyUrl || `/privacidade?form=${slug}#formularios`} target="_blank" rel="noopener" className="underline">
+        Privacidade
+      </a>
+    </footer>
+  );
+
   return (
     <div ref={rootRef} className={a.animations ? "quiz-anim" : undefined} style={themeVars(a)}>
-      <div
-        className={
-          card
-            ? compact
-              ? "px-2 py-3 sm:px-4 sm:py-5"
-              : "mx-auto flex min-h-dvh w-full max-w-[780px] flex-col px-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:justify-center sm:px-6 sm:py-12"
-            : compact
-              ? "px-4 py-5 sm:px-6"
-              : "mx-auto flex min-h-dvh w-full max-w-[640px] flex-col px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-6 sm:pt-8"
-        }
-      >
-       <div className={card ? "flex w-full flex-col rounded-[28px] px-5 py-7 sm:rounded-[32px] sm:px-14 sm:py-12" : "contents"} style={card ? { background: "var(--q-surface)", border: "1px solid var(--q-line)", boxShadow: "0 30px 60px -36px rgba(15, 15, 15, 0.22)" } : undefined}>
-        <header className={card && (done || step?.kind === "intro") ? "mb-6 flex flex-col items-center gap-3 sm:mb-8" : "mb-5 flex items-center justify-between gap-3"}>
-          {card ? (
-            brand(done || step?.kind === "intro" ? "lg" : "sm")
-          ) : logo ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={logo} alt={orgName} className="h-9 w-auto max-w-[180px] object-contain" />
-          ) : (
-            <span className="text-[19px] font-bold tracking-[0.18em]" style={{ color: "var(--q-primary)" }}>
-              {orgName.toUpperCase()}
-            </span>
-          )}
-          {compact && publicUrl && (
-            <a href={publicUrl} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 text-[12.5px] font-medium" style={{ color: "var(--q-muted)" }}>
-              <Maximize2 className="size-3.5" aria-hidden /> Tela cheia
-            </a>
-          )}
-        </header>
+      <Page card={card} compact={compact}>
+        <Shell card={card} below={footer}>
+          <header className={card && (done || step?.kind === "intro") ? "mb-6 flex flex-col items-center gap-3 sm:mb-8" : "mb-5 flex items-center justify-between gap-3"}>
+            {card ? (
+              brand(done || step?.kind === "intro" ? "lg" : "sm")
+            ) : logo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logo} alt={orgName} className="h-9 w-auto max-w-[180px] object-contain" />
+            ) : (
+              <span className="text-[19px] font-bold tracking-[0.18em]" style={{ color: "var(--q-primary)" }}>
+                {orgName.toUpperCase()}
+              </span>
+            )}
+            {compact && publicUrl && (
+              <a href={publicUrl} target="_blank" rel="noopener" className={`inline-flex items-center gap-1.5 text-[12.5px] font-medium ${card ? "absolute right-5 top-5 sm:right-6 sm:top-6" : ""}`} style={{ color: "var(--q-muted)" }}>
+                <Maximize2 className="size-3.5" aria-hidden /> Tela cheia
+              </a>
+            )}
+          </header>
 
-        {a.progressBar && !done && step?.kind !== "intro" && (
-          <div className="mb-6 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--q-line)" }} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="Progresso">
-            <div className="h-full rounded-full transition-[width] duration-500 ease-out" style={{ width: `${Math.max(4, progress * 100)}%`, background: "var(--q-primary)" }} />
-          </div>
-        )}
-
-        <main className="flex-1">
-          {done ? (
-            <Done title={labels.doneTitle || "Respostas enviadas!"} message={done.message} celebrate={a.finalStyle === "celebration" && a.animations} tight={card} redirecting={!!done.redirectUrl} />
-          ) : step?.kind === "intro" && card ? (
-            <div key="intro" className="quiz-step flex flex-col items-center text-center" data-dir={dir}>
-              {cover && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={cover} alt="" className="mb-6 aspect-[16/7] w-full object-cover" style={{ borderRadius: "var(--q-radius)" }} />
-              )}
-              <h1 className="text-[30px] font-bold leading-[1.12] tracking-[-0.02em] sm:text-[44px]">{def.settings.title}</h1>
-              {def.settings.description && <p className="mt-4 max-w-[560px] text-[16px] leading-relaxed sm:text-[18px]" style={{ color: "color-mix(in srgb, var(--q-text) 78%, var(--q-surface))" }}>{def.settings.description}</p>}
-              <QButton style={btn("primary")} onClick={() => go(1)} className="mt-8 h-[60px] min-w-[220px] px-9 text-[17px]">
-                {labels.start || "Começar"} <ArrowRight className="size-5" aria-hidden />
-              </QButton>
-              <p className="mt-4 text-[14px]" style={{ color: "var(--q-muted)" }}>{introMeta}</p>
+          {a.progressBar && !done && step?.kind !== "intro" && (
+            <div className="mb-6 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--q-line)" }} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="Progresso">
+              <div className="h-full rounded-full transition-[width] duration-500 ease-out" style={{ width: `${Math.max(4, progress * 100)}%`, background: "var(--q-primary)" }} />
             </div>
-          ) : step?.kind === "intro" ? (
-            <div key="intro" className="quiz-step" data-dir={dir}>
-              {cover && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={cover} alt="" className="mb-6 aspect-[16/7] w-full object-cover" style={{ borderRadius: "var(--q-radius)" }} />
-              )}
-              <h1 className="text-[27px] font-bold leading-tight sm:text-[34px]">{def.settings.title}</h1>
-              {def.settings.description && <p className="mt-3 text-[16px] leading-relaxed sm:text-[17px]" style={{ color: "var(--q-muted)" }}>{def.settings.description}</p>}
-              {def.settings.welcome && <p className="mt-5 rounded-[14px] px-4 py-3 text-[14.5px]" style={{ background: "var(--q-secondary)" }}>{def.settings.welcome}</p>}
-              <div className="mt-8">
-                <QButton style={btn("primary")} onClick={() => go(1)}>
+          )}
+
+          <main className="flex-1">
+            {done ? (
+              <Done title={labels.doneTitle || "Respostas enviadas!"} message={done.message} celebrate={a.finalStyle === "celebration" && a.animations} tight={card} redirecting={!!done.redirectUrl} />
+            ) : step?.kind === "intro" && card ? (
+              <div key="intro" className="quiz-step flex flex-col items-center text-center" data-dir={dir}>
+                {cover && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={cover} alt="" className="mb-6 aspect-[16/7] w-full object-cover" style={{ borderRadius: "var(--q-radius)" }} />
+                )}
+                <h1 className="text-[30px] font-bold leading-[1.12] tracking-[-0.02em] sm:text-[44px]">{def.settings.title}</h1>
+                {def.settings.description && <p className="mt-4 max-w-[560px] text-[16px] leading-relaxed sm:text-[18px]" style={{ color: "color-mix(in srgb, var(--q-text) 78%, var(--q-surface))" }}>{def.settings.description}</p>}
+                <QButton style={btn("primary")} onClick={() => go(1)} className="mt-8 h-[60px] min-w-[220px] px-9 text-[17px]">
                   {labels.start || "Começar"} <ArrowRight className="size-5" aria-hidden />
                 </QButton>
+                <p className="mt-4 text-[14px]" style={{ color: "var(--q-muted)" }}>{introMeta}</p>
               </div>
-            </div>
-          ) : step?.kind === "questions" ? (
-            <div key={`s${stepIndex}`} className="quiz-step" data-dir={dir}>
-              {counter === "question" && a.layout === "one_per_screen" && questionNumber > 0 && (
-                <p className="mb-4 text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-accent)" }} aria-live="polite">
-                  Pergunta {questionNumber} de {visibleList.length}
-                </p>
-              )}
-              {counter !== "question" && (a.layout === "by_section" || step.questions[0] === def.sections[step.sectionIndex].questions.find((q) => visible.has(q.id))) && (
-                <div className="mb-5">
-                  {totalSections > 1 && counter === "section" && (
-                    <p className="text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-accent)" }}>
-                      Etapa {def.sections.slice(0, step.sectionIndex + 1).filter((s) => s.questions.some((q) => visible.has(q.id))).length} de {totalSections}
-                    </p>
-                  )}
-                  {def.sections[step.sectionIndex].title && <h2 className="mt-1 text-[20px] font-semibold">{def.sections[step.sectionIndex].title}</h2>}
-                  {def.sections[step.sectionIndex].description && <p className="mt-1 text-[14.5px]" style={{ color: "var(--q-muted)" }}>{def.sections[step.sectionIndex].description}</p>}
-                </div>
-              )}
-              <div className="flex flex-col gap-8">
-                {step.questions.map((q) => (
-                  <QuestionField
-                    key={q.id}
-                    q={q}
-                    value={answers[q.id]}
-                    error={errors[q.id]}
-                    big={a.layout === "one_per_screen"}
-                    onPrimary={readableOn(a.primary)}
-                    onChange={(v) => setValue(q.id, v)}
-                    onEnter={next}
-                    onAutoAdvance={() => {
-                      if (a.layout === "one_per_screen" && !isLast) setTimeout(() => go(stepIndex + 1), 260);
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : step?.kind === "review" ? (
-            <div key="review" className="quiz-step" data-dir={dir}>
-              <h2 className="text-[24px] font-bold">Revise suas respostas</h2>
-              <p className="mt-1 text-[14.5px]" style={{ color: "var(--q-muted)" }}>Confira antes de enviar. Toque em uma resposta para corrigir.</p>
-              <ul className="mt-5 flex flex-col gap-2.5">
-                {def.sections.flatMap((s) => s.questions.filter((q) => visible.has(q.id))).map((q) => {
-                  const target = steps.findIndex((st) => st.kind === "questions" && st.questions.some((x) => x.id === q.id));
-                  return (
-                    <li key={q.id}>
-                      <button type="button" onClick={() => go(target)} className="group flex w-full items-start gap-3 px-4 py-3 text-left transition-colors" style={{ border: "1px solid var(--q-line)", borderRadius: "var(--q-radius)", background: "var(--q-card)" }}>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[13px]" style={{ color: "var(--q-muted)" }}>{q.title}</span>
-                          <span className="mt-0.5 block break-words text-[15px] font-medium">{displayValue(q as never, answers[q.id]) || <em className="font-normal" style={{ color: "var(--q-muted)" }}>Sem resposta</em>}</span>
-                        </span>
-                        <Pencil className="mt-1 size-4 shrink-0 opacity-50 group-hover:opacity-100" aria-label="Editar" />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : null}
-
-          {!done && step && step.kind !== "intro" && (
-            <div className="mt-8">
-              {showConsent && (
-                <div className="mb-5 flex flex-col gap-3 text-[13.5px] leading-snug">
-                  <Tick checked={notice} onChange={setNotice} id="q-notice">
-                    {def.settings.consent.noticeText}{" "}
-                    <a href={def.settings.consent.policyUrl || `/privacidade?form=${slug}#formularios`} target="_blank" rel="noopener" className="underline" style={{ color: "var(--q-accent)" }}>
-                      Política de privacidade
-                    </a>
-                  </Tick>
-                  {def.settings.consent.marketingEnabled && (
-                    <Tick checked={marketing} onChange={setMarketing} id="q-marketing">
-                      {def.settings.consent.marketingText}
-                    </Tick>
-                  )}
-                </div>
-              )}
-              {/* Campo invisível contra robôs */}
-              <input type="text" name="website" tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} className="absolute -left-[9999px] h-0 w-0 opacity-0" aria-hidden />
-              {formError && (
-                <p role="alert" className="mb-4 flex items-center gap-2 rounded-[12px] px-3.5 py-2.5 text-[14px]" style={{ background: "#fbe9eb", color: "#a32a38" }}>
-                  <CircleAlert className="size-4 shrink-0" aria-hidden /> {formError}
-                </p>
-              )}
-              <div className="flex items-center gap-3">
-                {stepIndex > 0 && steps[stepIndex - 1]?.kind !== undefined && (
-                  <QButton style={btn("ghost")} onClick={() => go(stepIndex - 1)} aria-label={labels.back || "Voltar"}>
-                    <ArrowLeft className="size-5" aria-hidden /> <span className="max-sm:sr-only">{labels.back || "Voltar"}</span>
-                  </QButton>
+            ) : step?.kind === "intro" ? (
+              <div key="intro" className="quiz-step" data-dir={dir}>
+                {cover && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={cover} alt="" className="mb-6 aspect-[16/7] w-full object-cover" style={{ borderRadius: "var(--q-radius)" }} />
                 )}
-                <QButton style={btn("primary")} onClick={next} disabled={busy} className="flex-1 sm:flex-none">
-                  {busy ? <LoaderCircle className="size-5 animate-spin" aria-hidden /> : null}
-                  {isLast ? (busy ? "Enviando…" : submitLabel) : nextLabel}
-                  {!busy && !isLast && <ArrowRight className="size-5" aria-hidden />}
-                </QButton>
+                <h1 className="text-[27px] font-bold leading-tight sm:text-[34px]">{def.settings.title}</h1>
+                {def.settings.description && <p className="mt-3 text-[16px] leading-relaxed sm:text-[17px]" style={{ color: "var(--q-muted)" }}>{def.settings.description}</p>}
+                {def.settings.welcome && <p className="mt-5 rounded-[14px] px-4 py-3 text-[14.5px]" style={{ background: "var(--q-secondary)" }}>{def.settings.welcome}</p>}
+                <div className="mt-8">
+                  <QButton style={btn("primary")} onClick={() => go(1)}>
+                    {labels.start || "Começar"} <ArrowRight className="size-5" aria-hidden />
+                  </QButton>
+                </div>
               </div>
-              {a.layout === "one_per_screen" && step.kind === "questions" && !isLast && <p className="mt-3 hidden text-[12px] sm:block" style={{ color: "var(--q-muted)" }}>Pressione Enter ↵ para avançar</p>}
-            </div>
-          )}
-        </main>
-       </div>
+            ) : step?.kind === "questions" ? (
+              <div key={`s${stepIndex}`} className="quiz-step" data-dir={dir}>
+                {counter === "question" && a.layout === "one_per_screen" && questionNumber > 0 && (
+                  <p className="mb-4 text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-accent)" }} aria-live="polite">
+                    Pergunta {questionNumber} de {visibleList.length}
+                  </p>
+                )}
+                {counter !== "question" && (a.layout === "by_section" || step.questions[0] === def.sections[step.sectionIndex].questions.find((q) => visible.has(q.id))) && (
+                  <div className="mb-5">
+                    {totalSections > 1 && counter === "section" && (
+                      <p className="text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-accent)" }}>
+                        Etapa {def.sections.slice(0, step.sectionIndex + 1).filter((s) => s.questions.some((q) => visible.has(q.id))).length} de {totalSections}
+                      </p>
+                    )}
+                    {def.sections[step.sectionIndex].title && <h2 className="mt-1 text-[20px] font-semibold">{def.sections[step.sectionIndex].title}</h2>}
+                    {def.sections[step.sectionIndex].description && <p className="mt-1 text-[14.5px]" style={{ color: "var(--q-muted)" }}>{def.sections[step.sectionIndex].description}</p>}
+                  </div>
+                )}
+                <div className="flex flex-col gap-8">
+                  {step.questions.map((q) => (
+                    <QuestionField
+                      key={q.id}
+                      q={q}
+                      value={answers[q.id]}
+                      error={errors[q.id]}
+                      big={a.layout === "one_per_screen"}
+                      onPrimary={readableOn(a.primary)}
+                      onChange={(v) => setValue(q.id, v)}
+                      onEnter={next}
+                      onAutoAdvance={() => {
+                        if (a.layout === "one_per_screen" && !isLast) setTimeout(() => go(stepIndex + 1), 260);
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : step?.kind === "review" ? (
+              <div key="review" className="quiz-step" data-dir={dir}>
+                <h2 className="text-[24px] font-bold">Revise suas respostas</h2>
+                <p className="mt-1 text-[14.5px]" style={{ color: "var(--q-muted)" }}>Confira antes de enviar. Toque em uma resposta para corrigir.</p>
+                <ul className="mt-5 flex flex-col gap-2.5">
+                  {def.sections.flatMap((s) => s.questions.filter((q) => visible.has(q.id))).map((q) => {
+                    const target = steps.findIndex((st) => st.kind === "questions" && st.questions.some((x) => x.id === q.id));
+                    return (
+                      <li key={q.id}>
+                        <button type="button" onClick={() => go(target)} className="group flex w-full items-start gap-3 px-4 py-3 text-left transition-colors" style={{ border: "1px solid var(--q-line)", borderRadius: "var(--q-radius)", background: "var(--q-card)" }}>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[13px]" style={{ color: "var(--q-muted)" }}>{q.title}</span>
+                            <span className="mt-0.5 block break-words text-[15px] font-medium">{displayValue(q as never, answers[q.id]) || <em className="font-normal" style={{ color: "var(--q-muted)" }}>Sem resposta</em>}</span>
+                          </span>
+                          <Pencil className="mt-1 size-4 shrink-0 opacity-50 group-hover:opacity-100" aria-label="Editar" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
 
-        {!compact && (
-          <footer className={card ? "mt-6 text-center text-[12px]" : "mt-10 text-center text-[12px]"} style={{ color: card ? mix(a.text, a.background, 0.45) : "var(--q-muted)" }}>
-            Seus dados são tratados conforme a LGPD.{" "}
-            <a href={def.settings.consent.policyUrl || `/privacidade?form=${slug}#formularios`} target="_blank" rel="noopener" className="underline">
-              Privacidade
-            </a>
-          </footer>
-        )}
-      </div>
+            {!done && step && step.kind !== "intro" && (
+              <div className="mt-8">
+                {showConsent && (
+                  <div className="mb-5 flex flex-col gap-3 text-[13.5px] leading-snug">
+                    <Tick checked={notice} onChange={setNotice} id="q-notice">
+                      {def.settings.consent.noticeText}{" "}
+                      <a href={def.settings.consent.policyUrl || `/privacidade?form=${slug}#formularios`} target="_blank" rel="noopener" className="underline" style={{ color: "var(--q-accent)" }}>
+                        Política de privacidade
+                      </a>
+                    </Tick>
+                    {def.settings.consent.marketingEnabled && (
+                      <Tick checked={marketing} onChange={setMarketing} id="q-marketing">
+                        {def.settings.consent.marketingText}
+                      </Tick>
+                    )}
+                  </div>
+                )}
+                {/* Campo invisível contra robôs */}
+                <input type="text" name="website" tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} className="absolute -left-[9999px] h-0 w-0 opacity-0" aria-hidden />
+                {formError && (
+                  <p role="alert" className="mb-4 flex items-center gap-2 rounded-[12px] px-3.5 py-2.5 text-[14px]" style={{ background: "#fbe9eb", color: "#a32a38" }}>
+                    <CircleAlert className="size-4 shrink-0" aria-hidden /> {formError}
+                  </p>
+                )}
+                <div className="flex items-center gap-3">
+                  {stepIndex > 0 && steps[stepIndex - 1]?.kind !== undefined && (
+                    <QButton style={btn("ghost")} onClick={() => go(stepIndex - 1)} aria-label={labels.back || "Voltar"}>
+                      <ArrowLeft className="size-5" aria-hidden /> <span className="max-sm:sr-only">{labels.back || "Voltar"}</span>
+                    </QButton>
+                  )}
+                  <QButton style={btn("primary")} onClick={next} disabled={busy} className="flex-1 sm:flex-none">
+                    {busy ? <LoaderCircle className="size-5 animate-spin" aria-hidden /> : null}
+                    {isLast ? (busy ? "Enviando…" : submitLabel) : nextLabel}
+                    {!busy && !isLast && <ArrowRight className="size-5" aria-hidden />}
+                  </QButton>
+                </div>
+                {a.layout === "one_per_screen" && step.kind === "questions" && !isLast && <p className="mt-3 hidden text-[12px] sm:block" style={{ color: "var(--q-muted)" }}>Pressione Enter ↵ para avançar</p>}
+              </div>
+            )}
+          </main>
+        </Shell>
+        {!card && footer}
+
+      </Page>
     </div>
   );
 }
@@ -526,6 +518,38 @@ function utm() {
     if (v) out[k] = v.slice(0, 300);
   }
   return out;
+}
+
+/**
+ * Área da página. No modo cartão, o cartão fica sempre centralizado na horizontal e na vertical
+ * (computador, celular e incorporado); se for mais alto que a tela, a página rola normalmente.
+ */
+function Page({ card, compact, children }: { card: boolean; compact: boolean; children: ReactNode }) {
+  const safe = "pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))]";
+  const cls = card
+    ? compact
+      ? "mx-auto flex w-full max-w-[780px] flex-col justify-center px-3 pb-12 pt-3 sm:px-4 sm:pt-5"
+      : `mx-auto flex min-h-dvh w-full max-w-[780px] flex-col justify-center px-3 py-16 sm:px-6 sm:py-20`
+    : compact
+      ? "px-4 py-5 sm:px-6"
+      : `mx-auto flex min-h-dvh w-full max-w-[640px] flex-col px-4 sm:px-6 sm:pt-8 ${safe}`;
+  return <div className={cls}>{children}</div>;
+}
+
+/**
+ * O cartão em si (no modo página inteira, não acrescenta nada). O rodapé fica pendurado abaixo
+ * do cartão, fora do cálculo da centralização, para o cartão ficar no centro exato da tela.
+ */
+function Shell({ card, below, children }: { card: boolean; below?: ReactNode; children: ReactNode }) {
+  if (!card) return <>{children}</>;
+  return (
+    <div className="relative w-full">
+      <div className="flex w-full flex-col rounded-[28px] px-5 py-7 sm:rounded-[32px] sm:px-14 sm:py-12" style={{ background: "var(--q-surface)", border: "1px solid var(--q-line)", boxShadow: "0 30px 60px -36px rgba(15, 15, 15, 0.22)" }}>
+        {children}
+      </div>
+      {below && <div className="absolute inset-x-0 top-full">{below}</div>}
+    </div>
+  );
 }
 
 /** Marca no topo do cartão: a logo enviada ou a inicial com o ponto dourado e o nome espaçado. */
