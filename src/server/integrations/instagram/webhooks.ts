@@ -102,37 +102,69 @@ export function backoffMs(attempt: number) {
   return Math.min(30_000 * 2 ** (attempt - 1), 60 * 60 * 1000);
 }
 
+/** Tempo que um evento fica reservado para quem o pegou; se o processo cair no meio, volta para a fila depois disso. */
+const LEASE = sql`interval '5 minutes'`;
+const gq = globalThis as unknown as { __igQueue?: { running: Promise<number> | null; again: boolean } };
+
 /**
- * Processa a fila. `FOR UPDATE SKIP LOCKED` permite vários workers sem processamento duplicado.
+ * Processa a fila, uma execução por vez neste processo: chamadas que chegam durante uma execução
+ * (ex.: rajada de webhooks) só pedem mais uma rodada no final, em vez de abrir execuções paralelas.
+ */
+export function processPendingEvents(limit = 50): Promise<number> {
+  const q = (gq.__igQueue ??= { running: null, again: false });
+  if (q.running) {
+    q.again = true;
+    return q.running;
+  }
+  const run = async () => {
+    let total = 0;
+    try {
+      do {
+        q.again = false;
+        total += await drainQueue(limit);
+      } while (q.again);
+    } finally {
+      q.running = null;
+    }
+    return total;
+  };
+  q.running = run();
+  return q.running;
+}
+
+/**
+ * Reserva cada evento num único comando (`FOR UPDATE SKIP LOCKED` permite vários workers sem duplicar)
+ * e processa fora de transação: nenhuma conexão do banco fica presa enquanto o evento é tratado.
  * Eventos fora de ordem são tolerados pelo processador (atualizações usam o horário do provedor).
  */
-export async function processPendingEvents(limit = 50) {
+async function drainQueue(limit: number) {
   await loadInstanceSettings();
   let processed = 0;
   for (let i = 0; i < limit; i++) {
-    const done = await db.transaction(async (tx) => {
-      const [ev] = await tx
-        .select()
-        .from(webhookEvents)
-        .where(and(inArray(webhookEvents.status, ["received", "failed"]), lte(webhookEvents.nextAttemptAt, sql`clock_timestamp()`), sql`${webhookEvents.attempts} < ${MAX_ATTEMPTS}`))
-        .orderBy(webhookEvents.receivedAt)
-        .limit(1)
-        .for("update", { skipLocked: true });
-      if (!ev) return false;
-      try {
-        await processEvent(ev);
-        await tx.update(webhookEvents).set({ status: "processed", processedAt: new Date(), attempts: ev.attempts + 1, lastError: null }).where(eq(webhookEvents.id, ev.id));
-      } catch (e) {
-        const attempts = ev.attempts + 1;
-        logger.warn(`Falha ao processar evento ${ev.id} (tentativa ${attempts})`, e);
-        await tx
-          .update(webhookEvents)
-          .set({ status: "failed", attempts, lastError: (e as Error).message.slice(0, 500), nextAttemptAt: new Date(Date.now() + backoffMs(attempts)) })
-          .where(eq(webhookEvents.id, ev.id));
-      }
-      return true;
-    });
-    if (!done) break;
+    const next = db
+      .select({ id: webhookEvents.id })
+      .from(webhookEvents)
+      .where(and(inArray(webhookEvents.status, ["received", "failed"]), lte(webhookEvents.nextAttemptAt, sql`clock_timestamp()`), sql`${webhookEvents.attempts} < ${MAX_ATTEMPTS}`))
+      .orderBy(webhookEvents.receivedAt)
+      .limit(1)
+      .for("update", { skipLocked: true });
+    const [ev] = await db
+      .update(webhookEvents)
+      .set({ nextAttemptAt: sql`clock_timestamp() + ${LEASE}` })
+      .where(inArray(webhookEvents.id, next))
+      .returning();
+    if (!ev) break;
+    try {
+      await processEvent(ev);
+      await db.update(webhookEvents).set({ status: "processed", processedAt: new Date(), attempts: ev.attempts + 1, lastError: null }).where(eq(webhookEvents.id, ev.id));
+    } catch (e) {
+      const attempts = ev.attempts + 1;
+      logger.warn(`Falha ao processar evento ${ev.id} (tentativa ${attempts})`, e);
+      await db
+        .update(webhookEvents)
+        .set({ status: "failed", attempts, lastError: (e as Error).message.slice(0, 500), nextAttemptAt: new Date(Date.now() + backoffMs(attempts)) })
+        .where(eq(webhookEvents.id, ev.id));
+    }
     processed++;
   }
   return processed;
