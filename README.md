@@ -21,11 +21,12 @@ O modo local usa um PostgreSQL embutido (pasta `dados-locais/`, nada é instalad
 2. [Rodar localmente](#rodar-localmente)
 3. [Usuários, convites e e-mail](#usuários-convites-e-e-mail)
 4. [Configurar o Instagram](#configurar-o-instagram)
-5. [Testes e QA](#testes-e-qa)
-6. [Deploy](#deploy)
-7. [Arquitetura](#arquitetura)
-8. [Segurança, retenção e backups](#segurança-retenção-e-backups)
-9. [O que funciona, o que foi testado e o que falta](#o-que-funciona-o-que-foi-testado-e-o-que-falta)
+5. [Formulários & Quizzes](#formulários--quizzes)
+6. [Testes e QA](#testes-e-qa)
+7. [Deploy](#deploy)
+8. [Arquitetura](#arquitetura)
+9. [Segurança, retenção e backups](#segurança-retenção-e-backups)
+10. [O que funciona, o que foi testado e o que falta](#o-que-funciona-o-que-foi-testado-e-o-que-falta)
 
 ---
 
@@ -135,6 +136,36 @@ Três camadas separadas: **Instagram** (relacionamento: conversas e comentários
 
 ### Fora do escopo (não implementado de propósito)
 Assistir ou listar stories de terceiros, importar todos os seguidores, histórico integral de conversas anteriores à conexão e prospecção irrestrita por DM. Não há iframe, scraping, sessão automatizada nem botão de fachada para isso. Anexos no Direct exigem armazenamento de arquivos com URL pública e ficaram fora do MVP (o adaptador já conhece o formato da API).
+
+## Formulários & Quizzes
+
+Menu lateral **Formulários & Quizzes** (`/formularios`), disponível para administradores e gestores.
+
+- **Painel:** totais de formulários, publicados e rascunhos, visualizações, respostas, taxa de conclusão e leads qualificados. Mostra também a distribuição por classificação, a origem dos leads e as respostas por dia. A lista de formulários permite editar, ver respostas, copiar o link, pegar o código de incorporação, duplicar, arquivar, restaurar e excluir. Formulários com respostas não podem ser excluídos, só arquivados.
+- **Editor** (`/formularios/[id]`):
+  - **Perguntas:** etapas, 12 tipos de campo, arrastar para reordenar, duplicar, obrigatória, descrição, imagem, alternativas com pontos, lógica condicional e campo de destino no CRM.
+  - **Aparência:** temas Branco minimalista (padrão, Poppins), Escuro ou Personalizado, cores, fonte, botões, bordas, logo, capa, barra de progresso, animações, uma pergunta por tela ou por etapa, revisão antes de enviar e tela final.
+  - **Configurações:** nome interno, título, descrição, endereço, boas-vindas, conclusão, redirecionamento, origem, produto, campanha, etiquetas, quem é avisado, Lead Score e faixas, e consentimento LGPD. Cada faixa tem mínimo, requisitos, faixa de rebaixamento, etiquetas, destino, responsável e aviso.
+  - **Publicação:** publicar e despublicar, link, código iframe ou script com altura automática, tela cheia, domínios autorizados, versões, histórico e recálculo de score.
+  - **Prévia ao vivo:** computador ou celular, na largura real do aparelho.
+- **Modelo "Diagnóstico Estratégico — AXION":** 2 etapas e 13 perguntas, com pesos que somam 100. As faixas são ICP A ≥ 80, B ≥ 60, C ≥ 35 e D abaixo disso, com travas de qualificação.
+  - **ICP A exige:** faturamento ≥ R$ 20 mil, ≥ 6 meses de operação e investimento ≥ R$ 20 mil.
+  - **ICP B exige:** investimento ≥ R$ 10 mil e operação em funcionamento.
+  - **Destinos:** A vai para o Comercial em rodízio de closers; B vai para o Social Seller em "Em qualificação"; C vai para "Em relacionamento" com a etiqueta Nutrição; D fica só na base de contatos.
+  - Tudo é editável por formulário.
+- **Envio público** (`/forms/[slug]`):
+  - Não exige login.
+  - **Validação e score:** o servidor valida de novo e calcula o score; a página nunca recebe pontos nem regras.
+  - **Contato e lead:** o contato é criado ou atualizado sem duplicar (e-mail e WhatsApp normalizados). O lead entra pelo mesmo pipeline das integrações, com rodízio, notificação, origem e UTMs.
+  - **O que fica guardado:** respostas, consentimentos (aviso obrigatório e marketing opcional, com a versão do texto) e o histórico do score.
+  - **Proteções:** campo-isca contra robôs, tempo mínimo, limite por IP, idempotência por sessão e reenvio em 10 minutos marcado como "envio repetido", sem criar outro lead.
+- **Versões:** publicar congela uma versão imutável (trava no banco), e cada resposta guarda a versão usada. Alterar pesos não muda respostas antigas. O botão **Recalcular score** aplica a última versão e mantém o cálculo anterior no histórico, sem mover ninguém de funil.
+- **Respostas** (`/formularios/[id]/respostas`): indicadores, filtros (período, score, classificação, origem, responsável, status comercial, busca), lista paginada, resposta individual e exportação CSV/XLSX.
+- **Contato:** aba **Formulários** com as respostas, o score, a classificação e o histórico. Administradores também podem exportar os dados do titular (JSON) ou anonimizar as respostas.
+- **LGPD:** a página `/privacidade#formularios` recebe pedidos de titulares. Os administradores são avisados e veem os pedidos em Formulários → Pedidos LGPD.
+- **Incorporação:** `<div data-crmlabs-form="SLUG"></div><script src="https://SEU-DOMINIO/forms/embed.js" async></script>` ajusta a altura sozinho e repassa as UTMs da página. Com domínios autorizados, o `frame-ancestors` só libera esses sites.
+
+A migração `0012_forms_quizzes` cria as tabelas do módulo e é aplicada pelo `start:prod`.
 
 ## Testes e QA
 

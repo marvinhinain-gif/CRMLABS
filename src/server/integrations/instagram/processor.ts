@@ -115,7 +115,16 @@ export async function enrichProfile(account: Account, contactId: string, igsid: 
         avatarUrl: p.profilePic ?? undefined,
       })
       .where(eq(contacts.id, contactId));
-    if (username) await db.update(channelIdentities).set({ username }).where(and(eq(channelIdentities.accountId, account.id), eq(channelIdentities.externalId, igsid)));
+    // Relacionamento com a conta: segue ou não (a API não diz desde quando; guardamos a primeira vez que vimos).
+    const identity: Partial<typeof channelIdentities.$inferInsert> = {};
+    if (username) identity.username = username;
+    if (typeof p.followsBusiness === "boolean") {
+      identity.followsBusiness = p.followsBusiness;
+      identity.followCheckedAt = new Date();
+      identity.followFirstSeenAt = p.followsBusiness ? sql`coalesce(${channelIdentities.followFirstSeenAt}, now())` as unknown as Date : null;
+    }
+    if (typeof p.followerCount === "number") identity.followerCount = p.followerCount;
+    if (Object.keys(identity).length) await db.update(channelIdentities).set(identity).where(and(eq(channelIdentities.accountId, account.id), eq(channelIdentities.externalId, igsid)));
   } catch (e) {
     logger.info("Perfil do remetente indisponível pela API", { reason: (e as Error).message });
   }

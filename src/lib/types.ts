@@ -16,6 +16,7 @@ export type Me = {
     merge: boolean;
     savedReplies: boolean;
     decide: boolean;
+    forms: boolean;
   };
 };
 

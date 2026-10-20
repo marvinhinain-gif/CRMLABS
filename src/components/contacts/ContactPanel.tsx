@@ -22,8 +22,10 @@ import {
   UserRound,
   X,
   Footprints,
+  ClipboardList,
 } from "lucide-react";
 import { JourneySection } from "@/components/integrations/Journey";
+import { ContactFormsTab } from "@/components/forms/ContactFormsTab";
 import { api, ApiError, fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import type { Stage } from "@/lib/types";
@@ -83,7 +85,7 @@ type Detail = {
 
 const SOURCE_LABEL: Record<string, string> = { manual: "Cadastro manual", instagram_dm: "Direct do Instagram", instagram_comment: "Comentário no Instagram", import: "Importação CSV" };
 
-type Tab = "dados" | "origem" | "tarefas" | "notas" | "historico";
+type Tab = "dados" | "origem" | "formularios" | "tarefas" | "notas" | "historico";
 
 export function ContactPanel({ contactId, onClose }: { contactId: string | null; onClose: () => void }) {
   return (
@@ -210,6 +212,7 @@ function PanelBody({ id, onClose }: { id: string; onClose: () => void }) {
           items={[
             { value: "dados", label: "Dados", icon: <UserRound /> },
             { value: "origem", label: "Origem", icon: <Footprints /> },
+            { value: "formularios", label: "Formulários", icon: <ClipboardList /> },
             { value: "tarefas", label: "Tarefas", icon: <SquareCheck />, count: data.tasks.filter((t) => t.status !== "done").length },
             { value: "notas", label: "Notas", icon: <NotebookPen /> },
             { value: "historico", label: "Histórico", icon: <History /> },
@@ -219,6 +222,7 @@ function PanelBody({ id, onClose }: { id: string; onClose: () => void }) {
       <div className="flex-1 overflow-y-auto scroll-thin px-6 py-5">
         {tab === "dados" && <DataTab data={data} onChanged={refreshAll} />}
         {tab === "origem" && <JourneySection contactId={id} />}
+        {tab === "formularios" && <ContactFormsTab contactId={id} />}
         {tab === "tarefas" && <TasksTab data={data} onChanged={refreshAll} />}
         {tab === "notas" && <NotesTab data={data} onChanged={() => mutate()} />}
         {tab === "historico" && <HistoryTab data={data} />}

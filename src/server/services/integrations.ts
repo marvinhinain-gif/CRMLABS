@@ -14,7 +14,7 @@ import { AppError, invalid, notFound } from "../errors";
 import { assertCan } from "../permissions";
 import { parseLocalDateTime } from "../time";
 import { audit, cleanText, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY } from "./common";
-import { cleanUtm, ingestLead, logIntegration, normalizeEmail, normalizePhone } from "./leads";
+import { cleanUtm, ingestLead, logIntegration, normalizeEmail, normalizePhone, QUIZ_PROVIDER } from "./leads";
 import { applyMapping, normalizeFor, PROVIDERS, suggestTarget, verifySignature, type Pair, type ProviderId } from "../integrations/forms/normalize";
 
 const ADMIN_ONLY = "Somente administradores configuram integrações.";
@@ -279,14 +279,14 @@ function adminView(f: Row) {
 }
 
 async function own(ctx: Ctx, id: string) {
-  const [f] = await db.select().from(leadForms).where(and(eq(leadForms.id, id), eq(leadForms.orgId, ctx.orgId)));
+  const [f] = await db.select().from(leadForms).where(and(eq(leadForms.id, id), eq(leadForms.orgId, ctx.orgId), sql`${leadForms.provider} <> ${QUIZ_PROVIDER}`));
   if (!f) throw notFound("Integração não encontrada.");
   return f;
 }
 
 export async function listIntegrations(ctx: Ctx) {
   assertAdmin(ctx);
-  const rows = await db.select().from(leadForms).where(eq(leadForms.orgId, ctx.orgId)).orderBy(desc(leadForms.createdAt));
+  const rows = await db.select().from(leadForms).where(and(eq(leadForms.orgId, ctx.orgId), sql`${leadForms.provider} <> ${QUIZ_PROVIDER}`)).orderBy(desc(leadForms.createdAt));
   const counts = await db.select({ formId: leads.formId, n: sql<number>`count(*)::int` }).from(leads).where(eq(leads.orgId, ctx.orgId)).groupBy(leads.formId);
   return rows.map((f) => ({ ...adminView(f), leadCount: counts.find((c) => c.formId === f.id)?.n ?? 0 }));
 }
@@ -476,7 +476,8 @@ async function recordError(f: Row, message: string) {
 export async function receiveWebhook(token: string, raw: string, headers: Headers) {
   if (!/^[A-Za-z0-9_-]{16,80}$/.test(token)) throw notFound("Endereço de integração inválido.");
   const [f] = await db.select().from(leadForms).where(eq(leadForms.tokenHash, sha256(token)));
-  if (!f) throw notFound("Endereço de integração inválido.");
+  // Formulários & Quizzes recebem só pela própria página (score calculado no servidor).
+  if (!f || f.provider === QUIZ_PROVIDER) throw notFound("Endereço de integração inválido.");
   if (!f.active) {
     await logIntegration(db, f, { event: "Envio recusado", result: "error", message: "Integração desativada no CRMLABS." });
     throw new AppError("forbidden", "Integração desativada no CRMLABS.");

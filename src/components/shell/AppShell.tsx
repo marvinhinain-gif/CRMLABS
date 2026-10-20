@@ -29,6 +29,7 @@ import {
   CalendarDays,
   Plug,
   CheckCheck,
+  ClipboardList,
 } from "lucide-react";
 import { AnimatedLogo } from "@/components/brand/AnimatedLogo";
 import { api, fetcher, qs } from "@/lib/api";
@@ -41,7 +42,7 @@ import { ContactPanel } from "@/components/contacts/ContactPanel";
 import { PushPrompt } from "./PushPrompt";
 import { InstagramNavIcon } from "@/components/ui/ChannelIcon";
 
-const NAV: { href: string; label: string; icon: typeof House | typeof InstagramNavIcon; badge?: "instagram" | "leads"; adminOnly?: boolean }[] = [
+const NAV: { href: string; label: string; icon: typeof House | typeof InstagramNavIcon; badge?: "instagram" | "leads"; adminOnly?: boolean; permission?: keyof Me["permissions"] }[] = [
   { href: "/dashboard", label: "Visão geral", icon: House },
   { href: "/social-seller", label: "Social Seller", icon: Users },
   { href: "/leads", label: "Leads", icon: Megaphone, badge: "leads" },
@@ -50,6 +51,7 @@ const NAV: { href: string; label: string; icon: typeof House | typeof InstagramN
   { href: "/contatos", label: "Contatos", icon: SquareUser },
   { href: "/comercial", label: "Comercial", icon: ChartNoAxesColumn },
   { href: "/tarefas", label: "Tarefas", icon: SquareCheck },
+  { href: "/formularios", label: "Formulários & Quizzes", icon: ClipboardList, permission: "forms" },
   { href: "/integracoes", label: "Integrações", icon: Plug, adminOnly: true },
 ];
 
@@ -64,6 +66,7 @@ const TITLES: Record<string, string> = {
   "/contatos": "Contatos",
   "/comercial": "Comercial",
   "/tarefas": "Tarefas",
+  "/formularios": "Formulários & Quizzes",
   "/configuracoes": "Configurações",
 };
 
@@ -72,7 +75,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?:
   const me = useMe();
   return (
     <nav aria-label="Menu principal" className="flex flex-col gap-1.5">
-      {NAV.filter((item) => !item.adminOnly || me.user.role === "admin").map((item) => {
+      {NAV.filter((item) => (!item.adminOnly || me.user.role === "admin") && (!item.permission || me.permissions[item.permission])).map((item) => {
         const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
         const Icon = item.icon;
         const count = item.badge === "instagram" ? (me.counts.pendingDirects ?? 0) + (me.counts.pendingComments ?? 0) : item.badge === "leads" ? (me.counts.newLeads ?? 0) : 0;

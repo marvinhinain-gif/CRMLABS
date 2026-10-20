@@ -8,6 +8,7 @@ import { api, fetcher } from "@/lib/api";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { Button, Dialog, Field, Input, LoadingState } from "@/components/ui";
 import { SourceChip, useCatalog } from "./shared";
+import { InstagramRelationship } from "./InstagramRelationship";
 
 export type Journey = {
   first: { id: string; name: string; color: string; at: string | null } | null;
@@ -147,6 +148,7 @@ export function JourneySection({ contactId, initial, compact, closerView }: { co
           <div className="mt-1">{data.last ? <OriginTrail source={data.last} parts={[]} at={data.last.at} /> : <span className="text-[13.5px] text-muted">Não registrada</span>}</div>
         </div>
       </div>
+      <InstagramRelationship contactId={contactId} compact={compact} />
       {!compact && (
         <div>
           <div className="mb-2 flex items-center justify-between">
