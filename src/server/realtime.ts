@@ -4,7 +4,7 @@ import type { Ctx } from "./context";
 import { can } from "./permissions";
 import { logger } from "./logger";
 
-export type Topic = "board" | "contacts" | "conversations" | "comments" | "tasks" | "opportunities" | "notifications" | "settings" | "leads";
+export type Topic = "board" | "contacts" | "conversations" | "comments" | "tasks" | "opportunities" | "notifications" | "settings" | "leads" | "engagement";
 
 /**
  * Evento de invalidação. Não carrega dados de negócio: o cliente recarrega pela API,
@@ -73,6 +73,8 @@ export function canReceive(ctx: Ctx, e: RealtimeEvent) {
   if (e.sharedInbox && ctx.org.sharedInbox && ctx.role === "seller") return true;
   // Comentários são públicos e a caixa de comentários é do social seller (o evento não leva dados, só "atualize").
   if (e.topic === "comments" && ctx.role === "seller") return true;
+  // Top Engajados: o evento só pede "recarregue"; a API decide o que cada papel vê.
+  if (e.topic === "engagement" && ctx.role !== "closer") return true;
   return false;
 }
 

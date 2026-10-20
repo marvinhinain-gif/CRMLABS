@@ -17,6 +17,7 @@ export type Me = {
     savedReplies: boolean;
     decide: boolean;
     forms: boolean;
+    engagement: boolean;
   };
 };
 

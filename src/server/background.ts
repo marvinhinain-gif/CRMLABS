@@ -22,6 +22,9 @@ export function startBackgroundLoop() {
     running = true;
     try {
       await processPendingEvents(100);
+      // Top Engajados: lê o que webhooks e sincronização gravaram (fora da fila; lotes pequenos).
+      const { collectEngagement } = await import("./services/engagement");
+      await collectEngagement().catch((e) => logger.warn("Falha na coleta do Top Engajados", e));
       // Bom dia / boa noite e lembretes de tarefas (antes do push, para já saírem nesta rodada).
       await scheduledNotificationsTick().catch((e) => logger.warn("Falha nas notificações programadas", e));
       await dispatchPendingPush(100);

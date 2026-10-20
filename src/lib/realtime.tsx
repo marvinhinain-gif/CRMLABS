@@ -8,6 +8,7 @@ const TOPIC_KEYS: Record<string, string[]> = {
   contacts: ["/api/contacts", "/api/board", "/api/dashboard", "/api/search"],
   conversations: ["/api/conversations", "/api/me", "/api/dashboard", "/api/board", "/api/contacts/", "/api/instagram"],
   comments: ["/api/comments", "/api/instagram", "/api/me"],
+  engagement: ["/api/instagram/engajados"],
   tasks: ["/api/tasks", "/api/dashboard", "/api/contacts/", "/api/commercial"],
   opportunities: ["/api/opportunities", "/api/commercial", "/api/appointments", "/api/agenda", "/api/dashboard", "/api/contacts/", "/api/leads", "/api/tasks"],
   leads: ["/api/leads", "/api/me", "/api/contacts", "/api/board", "/api/appointments", "/api/agenda", "/api/dashboard"],
