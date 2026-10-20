@@ -14,9 +14,11 @@ import { publish } from "../realtime";
 import { audit } from "./common";
 import { assertForms, originLabel } from "./quizzes";
 import { addTags, removeTags, scoreWith } from "./quizPublic";
+import { cleanText } from "./common";
 import { buildCsv, buildXlsx, type Cell } from "../xlsx";
 import { allQuestions, displayValue } from "@/lib/quiz/engine";
-import { CHOICE_TYPES, type QuizDefinition } from "@/lib/quiz/types";
+import { CHOICE_TYPES, SESSION_INTEREST_LABEL, type QuizDefinition, type SubmissionOverride } from "@/lib/quiz/types";
+import type { RecommendationResult } from "@/lib/quiz/engine";
 
 async function ownForm(ctx: Ctx, id: string) {
   assertForms(ctx);
@@ -35,6 +37,8 @@ export const responseFilterSchema = z.object({
   scoreMin: z.coerce.number().int().min(0).max(1000).optional(),
   scoreMax: z.coerce.number().int().min(0).max(1000).optional(),
   tier: z.string().max(60).optional(),
+  /** Produto final (ajuste manual, senão a sugestão); "none" = sem sugestão. */
+  product: z.string().max(60).optional(),
   origin: z.string().max(120).optional(),
   assignedTo: z.string().uuid().optional(),
   status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified"]).optional(),
@@ -48,7 +52,11 @@ const dayStart = (d: string, tz: string) => {
   return new Date(new TZDate(y, m - 1, dd, 0, 0, 0, tz).getTime());
 };
 
-const originSql = sql<string>`coalesce(nullif(${quizSubmissions.utm}->>'utm_source', ''), case when ${quizSubmissions.channel} = 'embed' then 'Site (incorporado)' else 'Link direto' end)`;
+const originSql = sql<string>`coalesce(nullif(${quizSubmissions.linkLabel}, ''), nullif(${quizSubmissions.utm}->>'utm_source', ''), case when ${quizSubmissions.channel} = 'embed' then 'Site (incorporado)' else 'Link direto' end)`;
+
+/** Produto final: o ajuste manual vale sobre a sugestão automática. */
+const productSql = sql<string | null>`coalesce(${quizSubmissions.override}->>'productId', ${quizSubmissions.productId})`;
+const productLabelSql = sql<string | null>`coalesce(${quizSubmissions.override}->>'productLabel', ${quizSubmissions.productLabel})`;
 
 function filterConds(ctx: Ctx, formId: string, f: ResponseFilter): SQL[] {
   const conds: SQL[] = [eq(quizSubmissions.orgId, ctx.orgId), eq(quizSubmissions.formId, formId)];
@@ -58,6 +66,7 @@ function filterConds(ctx: Ctx, formId: string, f: ResponseFilter): SQL[] {
   if (f.scoreMin !== undefined) conds.push(gte(quizSubmissions.score, f.scoreMin));
   if (f.scoreMax !== undefined) conds.push(lte(quizSubmissions.score, f.scoreMax));
   if (f.tier) conds.push(f.tier === "none" ? isNull(quizSubmissions.tierId) : eq(quizSubmissions.tierId, f.tier));
+  if (f.product) conds.push(f.product === "none" ? sql`${productSql} is null` : sql`${productSql} = ${f.product}`);
   if (f.origin) conds.push(sql`${originSql} = ${f.origin}`);
   if (f.assignedTo) conds.push(eq(leads.assignedTo, f.assignedTo));
   if (f.status) conds.push(eq(leads.status, f.status));
@@ -80,8 +89,15 @@ const baseSelect = {
   maxPoints: quizSubmissions.maxPoints,
   tierId: quizSubmissions.tierId,
   tierLabel: quizSubmissions.tierLabel,
+  productId: productSql,
+  productLabel: productLabelSql,
+  suggestedLabel: quizSubmissions.productLabel,
+  overridden: sql<boolean>`${quizSubmissions.override} is not null`,
+  flags: sql<string[]>`coalesce(${quizSubmissions.recommendation}->'flags', '[]'::jsonb)`,
+  needsReview: sql<boolean>`coalesce((${quizSubmissions.recommendation}->>'needsReview')::boolean, false) and ${quizSubmissions.override} is null`,
   channel: quizSubmissions.channel,
   utm: quizSubmissions.utm,
+  linkLabel: quizSubmissions.linkLabel,
   origin: originSql,
   completedAt: quizSubmissions.completedAt,
   versionId: quizSubmissions.versionId,
@@ -127,10 +143,13 @@ export async function responseFilterOptions(ctx: Ctx, formId: string) {
     .innerJoin(leads, eq(leads.id, quizSubmissions.leadId))
     .innerJoin(users, eq(users.id, leads.assignedTo))
     .where(eq(quizSubmissions.formId, form.id));
+  const seenProducts = await db.selectDistinct({ id: productSql, label: productLabelSql }).from(quizSubmissions).where(and(eq(quizSubmissions.formId, form.id), sql`${productSql} is not null`));
+  const draftProducts = (form.draft.recommendation?.products ?? []).map((p) => ({ id: p.id, label: p.label, color: p.color }));
+  const products = [...new Map([...seenProducts.filter((p): p is { id: string; label: string } => !!p.id).map((p) => ({ id: p.id, label: p.label ?? p.id, color: "gray" })), ...draftProducts].map((p) => [p.id, p])).values()];
   const draftTiers = form.draft.scoring.tiers.map((t) => ({ id: t.id, label: t.label, color: t.color }));
   const seen = tiers.filter((t): t is { id: string; label: string } => !!t.id && !!t.label).map((t) => ({ ...t, color: "gray" }));
   const merged = [...new Map([...seen, ...draftTiers].map((t) => [t.id, t])).values()];
-  return { tiers: merged, origins: origins.map((o) => o.origin).sort(), people };
+  return { tiers: merged, products, origins: origins.map((o) => o.origin).sort(), people };
 }
 
 // ---------- Resposta individual ----------
@@ -167,7 +186,7 @@ export async function getSubmission(ctx: Ctx, submissionId: string) {
     .filter((x) => x.answers.length);
   const consents = await db.select({ kind: quizConsents.kind, granted: quizConsents.granted, textVersion: quizConsents.textVersion, text: quizConsents.text, createdAt: quizConsents.createdAt }).from(quizConsents).where(eq(quizConsents.submissionId, s.s.id));
   const history = await db
-    .select({ id: quizScoreHistory.id, score: quizScoreHistory.score, rawPoints: quizScoreHistory.rawPoints, maxPoints: quizScoreHistory.maxPoints, tierLabel: quizScoreHistory.tierLabel, reason: quizScoreHistory.reason, createdAt: quizScoreHistory.createdAt, actorName: users.name, version: quizFormVersions.version })
+    .select({ id: quizScoreHistory.id, score: quizScoreHistory.score, rawPoints: quizScoreHistory.rawPoints, maxPoints: quizScoreHistory.maxPoints, tierLabel: quizScoreHistory.tierLabel, productLabel: quizScoreHistory.productLabel, reason: quizScoreHistory.reason, createdAt: quizScoreHistory.createdAt, actorName: users.name, version: quizFormVersions.version })
     .from(quizScoreHistory)
     .leftJoin(users, eq(users.id, quizScoreHistory.actorId))
     .leftJoin(quizFormVersions, eq(quizFormVersions.id, quizScoreHistory.versionId))
@@ -196,7 +215,9 @@ export async function getSubmission(ctx: Ctx, submissionId: string) {
     scoreTierLabel: cls?.scoreTierId ? tierName(cls.scoreTierId) : null,
     demotions: (cls?.path ?? []).filter((p) => p.failed.length).map((p) => ({ tier: tierName(p.tierId), failed: p.failed })),
     channel: s.s.channel,
-    origin: originLabel(s.s.channel, s.s.utm.utm_source),
+    origin: originLabel(s.s.channel, s.s.utm.utm_source, s.s.linkLabel),
+    linkLabel: s.s.linkLabel,
+    recommendation: recommendationView(def, s.s.recommendation as RecommendationResult | null, s.s.override),
     utm: s.s.utm,
     referrer: s.s.referrer,
     completedAt: s.s.completedAt,
@@ -212,13 +233,85 @@ export async function getSubmission(ctx: Ctx, submissionId: string) {
   };
 }
 
+/** Sugestão de produto pronta para a tela: produto, cores, motivos, requisitos, alertas e ajuste manual. */
+function recommendationView(def: QuizDefinition, rec: RecommendationResult | null, override: SubmissionOverride | null) {
+  if (!rec) return null;
+  const products = def.recommendation?.products ?? [];
+  const p = products.find((x) => x.id === rec.productId);
+  const finalId = override?.productId ?? rec.productId;
+  const fp = products.find((x) => x.id === finalId);
+  return {
+    productId: rec.productId,
+    productLabel: p?.label ?? rec.productId,
+    productColor: p?.color ?? "gray",
+    productDescription: p?.description ?? null,
+    finalProductId: finalId,
+    finalProductLabel: override?.productLabel ?? p?.label ?? rec.productId,
+    finalProductColor: fp?.color ?? "gray",
+    reasons: rec.reasons,
+    checks: rec.checks,
+    flags: rec.flags,
+    needsReview: rec.needsReview && !override,
+    intent: rec.intent,
+    override: override ? { ...override, sessionInterestLabel: override.sessionInterest ? SESSION_INTEREST_LABEL[override.sessionInterest] : null } : null,
+    options: products.map((x) => ({ id: x.id, label: x.label, color: x.color })),
+  };
+}
+
+// ---------- Ajuste manual da sugestão ----------
+
+export const overrideSchema = z.object({
+  /** null = desfazer o ajuste e voltar para a sugestão automática. */
+  productId: z.string().max(60).nullable(),
+  sessionInterest: z.enum(["TRAFEGO", "EDICAO", "SPRINT_ESTRUTURA", "A_DEFINIR"]).nullable().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+/**
+ * A equipe comercial ajusta o produto sem apagar a sugestão original (que continua no registro e no histórico).
+ * Não move o lead de funil nem troca o responsável.
+ */
+export async function overrideRecommendation(ctx: Ctx, submissionId: string, input: z.infer<typeof overrideSchema>) {
+  const view = await getSubmission(ctx, submissionId);
+  if (!view.recommendation) throw invalid("Este formulário não tem sugestão de produto.");
+  const [s] = await db.select().from(quizSubmissions).where(eq(quizSubmissions.id, view.id));
+  const [v] = await db.select().from(quizFormVersions).where(eq(quizFormVersions.id, s.versionId));
+  const products = v.definition.recommendation?.products ?? [];
+  const before = s.override?.productId ?? s.productId;
+  let next: SubmissionOverride | null = null;
+  if (input.productId) {
+    const p = products.find((x) => x.id === input.productId);
+    if (!p) throw invalid("Produto inválido.");
+    const [me] = await db.select({ name: users.name }).from(users).where(eq(users.id, ctx.userId));
+    next = { productId: p.id, productLabel: p.label, sessionInterest: input.sessionInterest ?? null, note: cleanText(input.note, 500), byId: ctx.userId, byName: me?.name ?? null, at: new Date().toISOString() };
+  }
+  const label = (id: string | null) => products.find((x) => x.id === id)?.label ?? id ?? "sem sugestão";
+  await db.transaction(async (tx) => {
+    await tx.update(quizSubmissions).set({ override: next }).where(eq(quizSubmissions.id, s.id));
+    const reason = next
+      ? `Ajuste manual: ${label(before)} → ${next.productLabel}${next.sessionInterest ? ` (${SESSION_INTEREST_LABEL[next.sessionInterest]})` : ""}${next.note ? ` · ${next.note}` : ""}`
+      : `Ajuste manual desfeito: volta para a sugestão (${label(s.productId)})`;
+    await tx.insert(quizScoreHistory).values({ orgId: ctx.orgId, submissionId: s.id, versionId: s.scoredWithVersionId ?? s.versionId, rawPoints: s.rawPoints, maxPoints: s.maxPoints, score: s.score, tierId: s.tierId, tierLabel: s.tierLabel, productLabel: next?.productLabel ?? s.productLabel, reason, actorId: ctx.userId });
+    const after = next?.productId ?? s.productId;
+    if (s.contactId && !s.duplicateOf && after !== before) {
+      const oldTags = products.find((x) => x.id === before)?.tags ?? [];
+      const newTags = products.find((x) => x.id === after)?.tags ?? [];
+      await removeTags(tx, ctx.orgId, s.contactId, oldTags.filter((t) => !newTags.includes(t)));
+      await addTags(tx, ctx.orgId, s.contactId, newTags);
+    }
+    await audit(tx, ctx, "quiz.recommendation_overridden", "quiz_submission", s.id, { from: before, to: after, sessionInterest: next?.sessionInterest ?? null });
+  });
+  if (s.contactId) await publish({ orgId: ctx.orgId, topic: "contacts", entityId: s.contactId });
+  return getSubmission(ctx, s.id);
+}
+
 // ---------- Indicadores ----------
 
 export async function formAnalytics(ctx: Ctx, formId: string, f: ResponseFilter) {
   const form = await ownForm(ctx, formId);
   const conds = filterConds(ctx, form.id, f);
   const subs = await db
-    .select({ id: quizSubmissions.id, score: quizSubmissions.score, tierId: quizSubmissions.tierId, tierLabel: quizSubmissions.tierLabel, origin: originSql, completedAt: quizSubmissions.completedAt })
+    .select({ id: quizSubmissions.id, score: quizSubmissions.score, tierId: quizSubmissions.tierId, tierLabel: quizSubmissions.tierLabel, productId: productSql, productLabel: productLabelSql, needsReview: baseSelect.needsReview, linkKey: quizSubmissions.linkKey, origin: originSql, completedAt: quizSubmissions.completedAt })
     .from(quizSubmissions)
     .leftJoin(leads, eq(leads.id, quizSubmissions.leadId))
     .where(and(...conds))
@@ -263,6 +356,25 @@ export async function formAnalytics(ctx: Ctx, formId: string, f: ResponseFilter)
   });
   const byOrigin = new Map<string, number>();
   for (const s of subs) byOrigin.set(s.origin, (byOrigin.get(s.origin) ?? 0) + 1);
+  // Funil por link de origem: visitas, inícios e respostas de cada link.
+  const linkEv = await db
+    .select({ key: quizEvents.linkKey, views: sql<number>`count(*) filter (where ${quizEvents.kind} = 'view')::int`, starts: sql<number>`count(*) filter (where ${quizEvents.kind} = 'start')::int` })
+    .from(quizEvents)
+    .where(and(...evConds, sql`${quizEvents.linkKey} is not null`))
+    .groupBy(quizEvents.linkKey);
+  const links = (form.links ?? []).map((l) => {
+    const e = linkEv.find((x) => x.key === l.key);
+    const done = subs.filter((s) => s.linkKey === l.key);
+    return { key: l.key, label: l.label, kind: l.kind, views: e?.views ?? 0, starts: e?.starts ?? 0, completed: done.length, qualified: done.filter((s) => tiers.some((t) => t.id === s.tierId && t.qualified)).length };
+  });
+  const recProducts = def.recommendation?.products ?? [];
+  const byProduct = new Map<string, { label: string; count: number }>();
+  for (const s of subs) {
+    if (!s.productId) continue;
+    const cur = byProduct.get(s.productId) ?? { label: s.productLabel ?? s.productId, count: 0 };
+    cur.count++;
+    byProduct.set(s.productId, cur);
+  }
   const completed = subs.length;
   const views = ev?.views ?? 0;
   const starts = ev?.starts ?? 0;
@@ -280,6 +392,12 @@ export async function formAnalytics(ctx: Ctx, formId: string, f: ResponseFilter)
     qualified: subs.filter((s) => tiers.some((t) => t.id === s.tierId && t.qualified)).length,
     questions,
     origins: [...byOrigin.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
+    links,
+    products: [
+      ...recProducts.map((p) => ({ id: p.id, label: p.label, color: p.color, count: byProduct.get(p.id)?.count ?? 0 })),
+      ...[...byProduct.entries()].filter(([id]) => !recProducts.some((p) => p.id === id)).map(([id, v]) => ({ id, label: v.label, color: "gray", count: v.count })),
+    ],
+    needsReview: subs.filter((s) => s.needsReview).length,
     series,
   };
 }
@@ -305,7 +423,8 @@ export async function exportResponses(ctx: Ctx, formId: string, f: ResponseFilte
   const columns = new Map<string, { title: string }>();
   for (const v of [{ definition: form.draft }, ...ordered]) for (const q of allQuestions(v.definition)) if (!columns.has(q.id)) columns.set(q.id, { title: q.title });
   const fmt = new Intl.DateTimeFormat("pt-BR", { timeZone: ctx.org.timezone, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  const header = ["Data", "Nome", "E-mail", "WhatsApp", "Instagram", "Empresa", "Score", "Classificação", "Origem", "Canal", "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "Responsável", "Status comercial", "Versão", ...[...columns.values()].map((c) => c.title)];
+  const recs = new Map((await db.select({ id: quizSubmissions.id, rec: quizSubmissions.recommendation, override: quizSubmissions.override }).from(quizSubmissions).where(inArray(quizSubmissions.id, rows.length ? rows.map((r) => r.id) : ["00000000-0000-0000-0000-000000000000"]))).map((r) => [r.id, r]));
+  const header = ["Data", "Nome", "E-mail", "WhatsApp", "Instagram", "Empresa", "Score", "Classificação", "Produto sugerido", "Ajuste manual", "Interesse de sessão", "Motivos", "Alertas", "Origem", "Canal", "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "Responsável", "Status comercial", "Versão", ...[...columns.values()].map((c) => c.title)];
   const data: Cell[][] = rows.map((r) => {
     const v = versions.find((x) => x.id === r.versionId);
     const qs = v ? allQuestions(v.definition) : [];
@@ -318,6 +437,14 @@ export async function exportResponses(ctx: Ctx, formId: string, f: ResponseFilte
       r.company,
       r.score,
       r.tierLabel,
+      r.suggestedLabel,
+      r.overridden ? r.productLabel : "",
+      (() => {
+        const si = recs.get(r.id)?.override?.sessionInterest;
+        return si ? SESSION_INTEREST_LABEL[si] : "";
+      })(),
+      ((recs.get(r.id)?.rec as RecommendationResult | null)?.reasons ?? []).join(" | "),
+      (r.flags ?? []).join(" | "),
       r.origin,
       r.channel === "embed" ? "Incorporado" : "Link",
       r.utm.utm_source,
@@ -364,9 +491,21 @@ export async function recalculate(ctx: Ctx, formId: string, input: z.infer<typeo
     for (const s of subs) {
       const r = scoreWith(def, s.answers);
       const tier = r.tier;
-      await tx.insert(quizScoreHistory).values({ orgId: ctx.orgId, submissionId: s.id, versionId: v.id, rawPoints: r.raw, maxPoints: r.max, score: r.score, tierId: tier?.id ?? null, tierLabel: tier?.label ?? null, reason: `Recálculo com as regras da versão ${v.version}`, actorId: ctx.userId });
-      if (r.score !== s.score || (tier?.id ?? null) !== s.tierId) changed++;
-      await tx.update(quizSubmissions).set({ rawPoints: r.raw, maxPoints: r.max, score: r.score, tierId: tier?.id ?? null, tierLabel: tier?.label ?? null, classification: r.classification, scoredWithVersionId: v.id }).where(eq(quizSubmissions.id, s.id));
+      const product = r.product;
+      await tx.insert(quizScoreHistory).values({ orgId: ctx.orgId, submissionId: s.id, versionId: v.id, rawPoints: r.raw, maxPoints: r.max, score: r.score, tierId: tier?.id ?? null, tierLabel: tier?.label ?? null, productLabel: product?.label ?? null, reason: `Recálculo com as regras da versão ${v.version}`, actorId: ctx.userId });
+      if (r.score !== s.score || (tier?.id ?? null) !== s.tierId || (product?.id ?? null) !== s.productId) changed++;
+      await tx
+        .update(quizSubmissions)
+        .set({ rawPoints: r.raw, maxPoints: r.max, score: r.score, tierId: tier?.id ?? null, tierLabel: tier?.label ?? null, classification: r.classification, productId: product?.id ?? null, productLabel: product?.label ?? null, recommendation: r.recommendation, scoredWithVersionId: v.id })
+        .where(eq(quizSubmissions.id, s.id));
+      // Etiqueta do produto acompanha a nova sugestão, a menos que a equipe já tenha ajustado manualmente.
+      if (s.contactId && !s.duplicateOf && !s.override && (product?.id ?? null) !== s.productId) {
+        const oldDef = prevVersions.find((p) => p.id === s.scoredWithVersionId)?.definition ?? def;
+        const oldTags = oldDef.recommendation?.products.find((p) => p.id === s.productId)?.tags ?? [];
+        const newTags = product?.tags ?? [];
+        await removeTags(tx, ctx.orgId, s.contactId, oldTags.filter((t) => !newTags.includes(t)));
+        await addTags(tx, ctx.orgId, s.contactId, newTags);
+      }
       if (s.contactId && !s.duplicateOf && (tier?.id ?? null) !== s.tierId) {
         const oldDef = prevVersions.find((p) => p.id === s.scoredWithVersionId)?.definition ?? def;
         const oldTags = oldDef.scoring.tiers.find((t) => t.id === s.tierId)?.tags ?? [];
@@ -396,6 +535,9 @@ export async function contactSubmissions(ctx: Ctx, contactId: string) {
       tierId: quizSubmissions.tierId,
       tierLabel: quizSubmissions.tierLabel,
       tierColor: sql<string | null>`(select t->>'color' from jsonb_array_elements(${quizFormVersions.definition}->'scoring'->'tiers') t where t->>'id' = ${quizSubmissions.tierId} limit 1)`,
+      productLabel: productLabelSql,
+      productColor: sql<string | null>`(select p->>'color' from jsonb_array_elements(coalesce(${quizFormVersions.definition}->'recommendation'->'products', '[]'::jsonb)) p where p->>'id' = ${productSql} limit 1)`,
+      needsReview: baseSelect.needsReview,
       completedAt: quizSubmissions.completedAt,
       channel: quizSubmissions.channel,
       origin: originSql,

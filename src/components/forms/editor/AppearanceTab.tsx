@@ -9,6 +9,7 @@ import { ImagePicker, Panel, type EditorProps } from "./common";
 const PRESET_CARDS = [
   { key: "clean", label: "Branco minimalista", hint: "Padrão: Poppins, fundo branco e verde CRMLABS." },
   { key: "dark", label: "Escuro", hint: "Fundo escuro com destaque em verde." },
+  { key: "axion", label: "Preto e dourado", hint: "Identidade AXION: grafite, dourado e Poppins." },
   { key: "custom", label: "Personalizado", hint: "Suas cores e tipografia." },
 ] as const;
 
@@ -40,7 +41,7 @@ export function AppearanceTab({ draft, update }: EditorProps) {
       d.appearance[k] = v;
       if (custom && ["primary", "secondary", "background", "text", "font"].includes(k)) d.appearance.preset = "custom";
     });
-  const applyPreset = (p: "clean" | "dark" | "custom") =>
+  const applyPreset = (p: "clean" | "dark" | "axion" | "custom") =>
     update((d) => {
       if (p === "custom") d.appearance.preset = "custom";
       else Object.assign(d.appearance, APPEARANCE_PRESETS[p]);
@@ -49,7 +50,7 @@ export function AppearanceTab({ draft, update }: EditorProps) {
   return (
     <div className="flex flex-col gap-4">
       <Panel title="Tema" description="Comece por um modelo e ajuste o que quiser.">
-        <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Tema">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" role="radiogroup" aria-label="Tema">
           {PRESET_CARDS.map((p) => {
             const active = a.preset === p.key;
             const sw = p.key === "custom" ? a : APPEARANCE_PRESETS[p.key];
@@ -119,6 +120,13 @@ export function AppearanceTab({ draft, update }: EditorProps) {
             <Select id="ap-layout" value={a.layout} onChange={(e) => set("layout", e.target.value as Appearance["layout"], false)}>
               <option value="one_per_screen">Uma pergunta por tela</option>
               <option value="by_section">Agrupadas por etapa</option>
+            </Select>
+          </Field>
+          <Field label="Contador no topo" htmlFor="ap-counter">
+            <Select id="ap-counter" value={a.counter ?? "section"} onChange={(e) => set("counter", e.target.value as Appearance["counter"], false)}>
+              <option value="question">Pergunta X de N</option>
+              <option value="section">Etapa X de N</option>
+              <option value="none">Sem contador</option>
             </Select>
           </Field>
           <Field label="Tela final" htmlFor="ap-final">

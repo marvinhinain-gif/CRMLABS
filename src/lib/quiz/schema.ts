@@ -10,10 +10,13 @@ const optText = (max: number) => z.string().max(max).nullable().optional();
 
 const conditionSchema = z.object({
   questionId: id,
-  op: z.enum(["equals", "not_equals", "includes", "not_includes", "answered", "gte", "lte"]),
+  op: z.enum(["equals", "not_equals", "includes", "not_includes", "answered", "gte", "lte", "in", "not_in"]),
   value: z.union([z.string().max(120), z.number()]).nullable().optional(),
+  values: z.array(z.string().max(60)).max(30).optional(),
 });
-const showIfSchema = z.object({ mode: z.enum(["all", "any"]), conditions: z.array(conditionSchema).max(10) }).nullable().optional();
+const whenSchema = z.object({ mode: z.enum(["all", "any"]), conditions: z.array(conditionSchema).max(10) });
+const showIfSchema = whenSchema.nullable().optional();
+const signal = z.string().trim().regex(/^[A-Z0-9_]{1,40}$/, "Use letras maiúsculas, números e _ no sinal (ex.: MENTORIA).");
 
 const questionSchema = z.object({
   id,
@@ -24,7 +27,7 @@ const questionSchema = z.object({
   required: z.boolean(),
   imageAssetId: uuid.nullable().optional(),
   options: z
-    .array(z.object({ id, label: text(200), points: z.number().int().min(-100).max(100) }))
+    .array(z.object({ id, label: text(200), points: z.number().int().min(-100).max(100), signal: signal.nullable().optional() }))
     .max(30)
     .optional(),
   scale: z
@@ -59,6 +62,53 @@ const tierSchema = z.object({
   route: routeSchema,
 });
 
+const recommendationSchema = z.object({
+  enabled: z.boolean(),
+  products: z
+    .array(
+      z.object({
+        id,
+        label: z.string().trim().min(1, "Dê um nome ao produto.").max(80),
+        description: optText(300),
+        color: z.string().max(20),
+        needsReview: z.boolean(),
+        tags: z.array(z.string().trim().min(1).max(40)).max(10),
+        route: routeSchema,
+      }),
+    )
+    .max(12),
+  rules: z
+    .array(
+      z.object({
+        id,
+        label: z.string().trim().min(1, "Descreva a regra.").max(200),
+        when: whenSchema,
+        product: id,
+        requirements: z.array(z.object({ id, label: z.string().trim().min(1, "Descreva o requisito.").max(200), when: whenSchema, failProduct: id.nullable() })).max(15),
+        otherwise: id.nullable(),
+      }),
+    )
+    .max(30),
+  flags: z.array(z.object({ id, label: z.string().trim().min(1, "Descreva o alerta.").max(200), when: whenSchema })).max(20),
+  fallbackProduct: id.nullable(),
+});
+
+const label = z.string().trim().max(60).nullable().optional();
+
+export const linkSchema = z.object({
+  key: z.string().trim().toLowerCase().regex(/^[a-z0-9-]{1,40}$/, "Use letras minúsculas, números e hífen na chave do link."),
+  label: z.string().trim().min(1, "Dê um nome ao link.").max(80),
+  kind: z.enum(["stories", "whatsapp_group", "traffic", "bio", "direct", "other"]),
+  sourceId: uuid.nullable(),
+  utmSource: z.string().trim().max(120).nullable(),
+  utmMedium: z.string().trim().max(120).nullable(),
+  utmCampaign: z.string().trim().max(160).nullable(),
+});
+export const linksSchema = z
+  .array(linkSchema)
+  .max(40)
+  .refine((l) => new Set(l.map((x) => x.key)).size === l.length, "Há dois links com a mesma chave.");
+
 export const definitionSchema = z.object({
   schemaVersion: z.literal(1),
   sections: z
@@ -66,7 +116,7 @@ export const definitionSchema = z.object({
     .min(1, "Crie ao menos uma seção.")
     .max(20),
   appearance: z.object({
-    preset: z.enum(["clean", "dark", "custom"]),
+    preset: z.enum(["clean", "dark", "axion", "custom"]),
     primary: color,
     secondary: color,
     background: color,
@@ -81,6 +131,7 @@ export const definitionSchema = z.object({
     layout: z.enum(["one_per_screen", "by_section"]),
     review: z.boolean(),
     finalStyle: z.enum(["simple", "celebration"]),
+    counter: z.enum(["section", "question", "none"]).optional(),
   }),
   settings: z.object({
     title: text(160),
@@ -109,6 +160,8 @@ export const definitionSchema = z.object({
         .nullable(),
       version: z.string().trim().min(1).max(40),
     }),
+    labels: z.object({ start: label, next: label, back: label, submit: label, doneTitle: z.string().trim().max(120).nullable().optional() }).optional(),
   }),
   scoring: z.object({ enabled: z.boolean(), normalize: z.boolean(), tiers: z.array(tierSchema).max(8) }),
+  recommendation: recommendationSchema.optional(),
 });

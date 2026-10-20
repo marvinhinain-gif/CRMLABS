@@ -74,10 +74,29 @@ function newSessionId() {
   return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) => (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16));
 }
 
+/** Respostas em andamento (atualizar a página ou voltar no navegador não perde nada). */
+const stateKey = (slug: string) => `crmlabs-form-state:${slug}`;
+type SavedState = { answers: Answers; stepIndex: number; notice: boolean; marketing: boolean; at: number };
+
+function loadState(slug: string): SavedState | null {
+  try {
+    const raw = sessionStorage.getItem(stateKey(slug));
+    if (!raw) return null;
+    const s = JSON.parse(raw) as SavedState;
+    // Depois de algumas horas, recomeça do zero.
+    if (!s || typeof s !== "object" || Date.now() - (s.at ?? 0) > 6 * 3600_000) return null;
+    return s;
+  } catch {
+    return null;
+  }
+}
+
 export function QuizRunner({ definition: def, slug, orgName, mode = "live", embed = false, fullscreen = false, publicUrl }: Props) {
   const compact = embed && !fullscreen;
   const a = def.appearance;
   const live = mode === "live";
+  const labels = def.settings.labels ?? {};
+  const counter = a.counter ?? "section";
   const [answers, setAnswers] = useState<Answers>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [stepIndex, setStepIndex] = useState(0);
@@ -92,6 +111,12 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
   const session = useRef<string>("");
   const started = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const restored = useRef(false);
+  const stepIndexRef = useRef(0);
+  useEffect(() => {
+    stepIndexRef.current = stepIndex;
+    if (live && !compact && restored.current) window.history.replaceState({ ...(window.history.state ?? {}), quizStep: stepIndex }, "");
+  }, [stepIndex, live, compact]);
 
   const visible = useMemo(() => visibleQuestionIds(def, answers), [def, answers]);
   const steps = useMemo<Step[]>(() => {
@@ -120,8 +145,40 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
     } catch {
       session.current = newSessionId();
     }
-    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "view", embed, utmSource: utm().utm_source }) }).catch(() => {});
+    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "view", embed, utmSource: utm().utm_source, origem: origem() }) }).catch(() => {});
+    // Retoma de onde parou (atualizou a página, voltou de outra aba).
+    const saved = loadState(slug);
+    if (saved) {
+      setAnswers(saved.answers ?? {});
+      setStepIndex(Math.max(0, saved.stepIndex ?? 0));
+      setNotice(!!saved.notice);
+      setMarketing(!!saved.marketing);
+      started.current = true;
+    }
+    restored.current = true;
   }, [live, slug, embed]);
+
+  useEffect(() => {
+    if (!live || !restored.current || done) return;
+    try {
+      sessionStorage.setItem(stateKey(slug), JSON.stringify({ answers, stepIndex, notice, marketing, at: Date.now() } satisfies SavedState));
+    } catch {}
+  }, [live, slug, answers, stepIndex, notice, marketing, done]);
+
+  // Botões voltar/avançar do navegador navegam entre as perguntas (fora de iframes).
+  useEffect(() => {
+    if (!live || compact) return;
+    const onPop = (e: PopStateEvent) => {
+      const s = (e.state as { quizStep?: number } | null)?.quizStep;
+      if (typeof s === "number") {
+        setDir(s < stepIndexRef.current ? "back" : "fwd");
+        setStepIndex(s);
+      }
+    };
+    window.history.replaceState({ ...(window.history.state ?? {}), quizStep: stepIndexRef.current }, "");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [live, compact]);
 
   // Incorporado: avisa a página de fora sobre a altura (ajuste automático do iframe).
   useEffect(() => {
@@ -139,7 +196,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
   const markStarted = useCallback(() => {
     if (!live || started.current) return;
     started.current = true;
-    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "start", embed, utmSource: utm().utm_source }) }).catch(() => {});
+    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "start", embed, utmSource: utm().utm_source, origem: origem() }) }).catch(() => {});
   }, [live, slug, embed]);
 
   const setValue = (id: string, v: AnswerValue) => {
@@ -154,10 +211,17 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
   };
 
   const go = (to: number) => {
-    setDir(to < stepIndex ? "back" : "fwd");
-    setStepIndex(Math.max(0, Math.min(steps.length - 1, to)));
+    const target = Math.max(0, Math.min(steps.length - 1, to));
+    setDir(target < stepIndex ? "back" : "fwd");
+    setStepIndex(target);
     setFormError(null);
-    if (!compact) window.scrollTo({ top: 0, behavior: a.animations ? "smooth" : "auto" });
+    if (live && !compact && target !== stepIndex) {
+      // Avançar cria uma entrada no histórico; voltar pelo botão do quiz volta junto.
+      if (target > stepIndex) window.history.pushState({ ...(window.history.state ?? {}), quizStep: target }, "");
+      else window.history.replaceState({ ...(window.history.state ?? {}), quizStep: target }, "");
+    }
+    const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!compact) window.scrollTo({ top: 0, behavior: a.animations && !reduce ? "smooth" : "auto" });
     else rootRef.current?.scrollIntoView({ block: "start" });
   };
 
@@ -204,7 +268,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
       const res = await fetch(`/api/public/quiz/${slug}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: session.current, answers: payload, consent: { notice, marketing }, utm: utm(), referrer: document.referrer || undefined, embed, website, startedAt: startedAt.current }),
+        body: JSON.stringify({ sessionId: session.current, answers: payload, consent: { notice, marketing }, utm: utm(), origem: origem(), referrer: document.referrer || undefined, embed, website, startedAt: startedAt.current }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -217,6 +281,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
       }
       try {
         sessionStorage.removeItem(`crmlabs-form:${slug}`);
+        sessionStorage.removeItem(stateKey(slug));
       } catch {}
       setDone({ message: data.message, redirectUrl: data.redirectUrl ?? null });
       if (data.redirectUrl) {
@@ -238,6 +303,10 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
   const totalSections = def.sections.filter((s) => s.questions.some((q) => visible.has(q.id))).length;
   const nextIsNewSection = step?.kind === "questions" && steps[stepIndex + 1]?.kind === "questions" && (steps[stepIndex + 1] as { sectionIndex: number }).sectionIndex !== step.sectionIndex;
   const showConsent = isLast;
+  const visibleList = def.sections.flatMap((s) => s.questions.filter((q) => visible.has(q.id)));
+  const questionNumber = step?.kind === "questions" ? visibleList.findIndex((q) => q.id === step.questions[0].id) + 1 : 0;
+  const nextLabel = labels.next || (nextIsNewSection ? "Continuar" : "Próximo");
+  const submitLabel = labels.submit || "Enviar respostas";
 
   const logo = assetSrc(a.logoAssetId);
   const cover = assetSrc(a.coverAssetId);
@@ -275,7 +344,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
 
         <main className="flex-1">
           {done ? (
-            <Done message={done.message} celebrate={a.finalStyle === "celebration" && a.animations} redirecting={!!done.redirectUrl} />
+            <Done title={labels.doneTitle || "Respostas enviadas!"} message={done.message} celebrate={a.finalStyle === "celebration" && a.animations} redirecting={!!done.redirectUrl} />
           ) : step?.kind === "intro" ? (
             <div key="intro" className="quiz-step" data-dir={dir}>
               {cover && (
@@ -287,15 +356,20 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
               {def.settings.welcome && <p className="mt-5 rounded-[14px] px-4 py-3 text-[14.5px]" style={{ background: "var(--q-secondary)" }}>{def.settings.welcome}</p>}
               <div className="mt-8">
                 <QButton style={btn("primary")} onClick={() => go(1)}>
-                  Começar <ArrowRight className="size-5" aria-hidden />
+                  {labels.start || "Começar"} <ArrowRight className="size-5" aria-hidden />
                 </QButton>
               </div>
             </div>
           ) : step?.kind === "questions" ? (
             <div key={`s${stepIndex}`} className="quiz-step" data-dir={dir}>
-              {(a.layout === "by_section" || step.questions[0] === def.sections[step.sectionIndex].questions.find((q) => visible.has(q.id))) && (
+              {counter === "question" && a.layout === "one_per_screen" && questionNumber > 0 && (
+                <p className="mb-4 text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-primary)" }} aria-live="polite">
+                  Pergunta {questionNumber} de {visibleList.length}
+                </p>
+              )}
+              {counter !== "question" && (a.layout === "by_section" || step.questions[0] === def.sections[step.sectionIndex].questions.find((q) => visible.has(q.id))) && (
                 <div className="mb-5">
-                  {totalSections > 1 && (
+                  {totalSections > 1 && counter === "section" && (
                     <p className="text-[12.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--q-primary)" }}>
                       Etapa {def.sections.slice(0, step.sectionIndex + 1).filter((s) => s.questions.some((q) => visible.has(q.id))).length} de {totalSections}
                     </p>
@@ -371,13 +445,13 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
               )}
               <div className="flex items-center gap-3">
                 {stepIndex > 0 && steps[stepIndex - 1]?.kind !== undefined && (
-                  <QButton style={btn("ghost")} onClick={() => go(stepIndex - 1)} aria-label="Voltar">
-                    <ArrowLeft className="size-5" aria-hidden /> <span className="max-sm:sr-only">Voltar</span>
+                  <QButton style={btn("ghost")} onClick={() => go(stepIndex - 1)} aria-label={labels.back || "Voltar"}>
+                    <ArrowLeft className="size-5" aria-hidden /> <span className="max-sm:sr-only">{labels.back || "Voltar"}</span>
                   </QButton>
                 )}
                 <QButton style={btn("primary")} onClick={next} disabled={busy} className="flex-1 sm:flex-none">
                   {busy ? <LoaderCircle className="size-5 animate-spin" aria-hidden /> : null}
-                  {isLast ? (busy ? "Enviando…" : "Enviar respostas") : nextIsNewSection ? "Continuar" : "Próximo"}
+                  {isLast ? (busy ? "Enviando…" : submitLabel) : nextLabel}
                   {!busy && !isLast && <ArrowRight className="size-5" aria-hidden />}
                 </QButton>
               </div>
@@ -399,6 +473,13 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
   );
 }
 
+/** Link de origem (?origem=stories), cadastrado em Publicação. */
+function origem() {
+  if (typeof window === "undefined") return undefined;
+  const v = new URLSearchParams(window.location.search).get("origem");
+  return v && /^[a-z0-9-]{1,40}$/i.test(v) ? v.toLowerCase() : undefined;
+}
+
 function utm() {
   if (typeof window === "undefined") return {} as Record<string, string>;
   const sp = new URLSearchParams(window.location.search);
@@ -414,7 +495,7 @@ function utm() {
 function readableOn(hex: string) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
   const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  return l > 0.45 ? "#10201a" : "#ffffff";
+  return l > 0.4 ? "#10201a" : "#ffffff";
 }
 
 function QButton({ children, style, className, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement> & { style: CSSProperties }) {
@@ -616,7 +697,7 @@ function QuestionField({ q, value, error, big, onPrimary, onChange, onEnter, onA
   );
 }
 
-function Done({ message, celebrate, redirecting }: { message: string; celebrate: boolean; redirecting: boolean }) {
+function Done({ title, message, celebrate, redirecting }: { title: string; message: string; celebrate: boolean; redirecting: boolean }) {
   return (
     <div className="quiz-step relative flex flex-col items-center py-10 text-center">
       {celebrate && (
@@ -633,7 +714,7 @@ function Done({ message, celebrate, redirecting }: { message: string; celebrate:
       <div className="anim-pop flex size-20 items-center justify-center rounded-full" style={{ background: "var(--q-secondary)", color: "var(--q-primary)" }}>
         <Check className="size-10" strokeWidth={2.6} aria-hidden />
       </div>
-      <h2 className="mt-6 text-[26px] font-bold">Respostas enviadas!</h2>
+      <h2 className="mt-6 text-[26px] font-bold">{title}</h2>
       <p className="mt-3 max-w-[460px] text-[16px] leading-relaxed" style={{ color: "var(--q-muted)" }}>
         {message}
       </p>

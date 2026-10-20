@@ -3,14 +3,17 @@
  *   <div data-crmlabs-form="SLUG"></div>
  *   <script src="https://DOMINIO/forms/embed.js" async></script>
  * Repassa as UTMs da página do site para o formulário (atribuição comercial).
+ * data-crmlabs-origem="stories" identifica o link de origem (ou ?origem= na página do site).
  */
 const SCRIPT = `(function () {
   var cur = document.currentScript;
   var base = cur ? new URL(cur.src).origin : "";
   var KEYS = ["utm_source","utm_medium","utm_campaign","utm_content","utm_term","fbclid","gclid","ad_id","ad_name","adset_name","campaign_name","platform"];
-  function params() {
+  function params(el) {
     var sp = new URLSearchParams(window.location.search), out = new URLSearchParams({ embed: "1" });
     KEYS.forEach(function (k) { var v = sp.get(k); if (v) out.set(k, v); });
+    var origem = el.getAttribute("data-crmlabs-origem") || sp.get("origem");
+    if (origem && /^[a-z0-9-]{1,40}$/i.test(origem)) out.set("origem", origem.toLowerCase());
     return out.toString();
   }
   function mount(el) {
@@ -19,7 +22,7 @@ const SCRIPT = `(function () {
     if (!slug || !/^[a-z0-9-]{3,60}$/.test(slug)) return;
     el.setAttribute("data-crmlabs-ready", "1");
     var f = document.createElement("iframe");
-    f.src = base + "/forms/" + slug + "?" + params();
+    f.src = base + "/forms/" + slug + "?" + params(el);
     f.title = el.getAttribute("data-title") || "Formulário";
     f.setAttribute("loading", "lazy");
     f.setAttribute("allow", "fullscreen");

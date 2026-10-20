@@ -9,6 +9,7 @@ import { ROLE_LABEL, type Role } from "@/lib/types";
 import { Button, Checkbox, cx, Field, IconButton, Input, Select, Switch, Textarea } from "@/components/ui";
 import { TIER_COLORS, TierBadge } from "../shared";
 import { Panel, PeoplePicker, TagInput, type EditorProps } from "./common";
+import { RecommendationPanel } from "./RecommendationPanel";
 
 export type Meta = { name: string; slug: string };
 
@@ -198,10 +199,14 @@ function TierEditor({ tier, draft, update, options, onRemove }: { tier: Tier; dr
             <TagInput id={`tt-${tier.id}`} value={tier.tags} onChange={(v) => set((t) => void (t.tags = v.slice(0, 10)))} placeholder="Ex.: ICP A" />
           </Field>
 
-          <div className="flex flex-col gap-2">
-            <span className="text-[14px] font-semibold">Distribuição desta faixa</span>
-            <RouteEditor idPrefix={`tr-${tier.id}`} value={tier.route} options={options} onChange={(r) => set((t) => void (t.route = r))} />
-          </div>
+          {draft.recommendation?.enabled ? (
+            <p className="rounded-[14px] bg-page px-3 py-2 text-[13px] text-muted">Com a recomendação de produto ligada, o destino no CRM segue o produto sugerido. Esta faixa vira só a prioridade comercial.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <span className="text-[14px] font-semibold">Distribuição desta faixa</span>
+              <RouteEditor idPrefix={`tr-${tier.id}`} value={tier.route} options={options} onChange={(r) => set((t) => void (t.route = r))} />
+            </div>
+          )}
 
           <Button size="sm" variant="ghost" className="self-start text-danger" icon={<Trash2 className="size-4" />} onClick={onRemove}>
             Excluir faixa
@@ -247,8 +252,28 @@ export function SettingsTab({ draft, update, options, meta, setMeta, slugError }
         </div>
       </Panel>
 
+      <Panel title="Textos dos botões" description="Vazio usa o padrão.">
+        <div className="grid gap-4 sm:grid-cols-2">
+          {(
+            [
+              ["start", "Botão da tela inicial", "Começar"],
+              ["next", "Botão de avançar", "Próximo"],
+              ["back", "Botão de voltar", "Voltar"],
+              ["submit", "Botão de enviar", "Enviar respostas"],
+            ] as const
+          ).map(([k, label, ph]) => (
+            <Field key={k} label={label} htmlFor={`st-lb-${k}`}>
+              <Input id={`st-lb-${k}`} value={s.labels?.[k] ?? ""} maxLength={60} placeholder={ph} onChange={(e) => update((d) => void (d.settings.labels = { ...d.settings.labels, [k]: e.target.value || null }))} />
+            </Field>
+          ))}
+        </div>
+      </Panel>
+
       <Panel title="Após o envio">
         <div className="grid gap-4">
+          <Field label="Título da tela final" htmlFor="st-done-title">
+            <Input id="st-done-title" value={s.labels?.doneTitle ?? ""} maxLength={120} placeholder="Respostas enviadas!" onChange={(e) => update((d) => void (d.settings.labels = { ...d.settings.labels, doneTitle: e.target.value || null }))} />
+          </Field>
           <Field label="Mensagem de conclusão" htmlFor="st-completion">
             <Textarea id="st-completion" value={s.completion} maxLength={1000} onChange={(e) => setS("completion", e.target.value)} />
           </Field>
@@ -346,6 +371,8 @@ export function SettingsTab({ draft, update, options, meta, setMeta, slugError }
           </div>
         )}
       </Panel>
+
+      <RecommendationPanel draft={draft} update={update} renderRoute={({ value, onChange, idPrefix }) => <RouteEditor idPrefix={idPrefix} value={value} options={options} onChange={onChange} />} />
 
       <Panel title="Consentimento e privacidade" description="O aviso de tratamento é obrigatório para enviar. O consentimento de marketing é separado e opcional.">
         <div className="grid gap-4">

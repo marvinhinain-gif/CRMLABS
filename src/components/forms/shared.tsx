@@ -4,7 +4,7 @@ import { useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Check, Copy } from "lucide-react";
 import { Badge, Button, Card, cx, Dialog, Tabs } from "@/components/ui";
-import { FORM_STATUS_LABEL, type FormStatus, type QuizDefinition } from "@/lib/quiz/types";
+import { FORM_STATUS_LABEL, type FormStatus, type QuizDefinition, type SessionInterest, type SourceLink } from "@/lib/quiz/types";
 
 // ---------- Tipos das respostas da API ----------
 
@@ -23,6 +23,7 @@ export type FormSummary = {
   live: boolean;
   hasUnpublishedChanges: boolean;
   allowedDomains: string[];
+  links: (SourceLink & { url: string })[];
   templateKey: string | null;
   publicUrl: string;
   embed: EmbedCode;
@@ -71,6 +72,8 @@ export type SubmissionDetail = {
   demotions: { tier: string; failed: string[] }[];
   channel: "link" | "embed";
   origin: string;
+  linkLabel: string | null;
+  recommendation: RecommendationView | null;
   utm: Record<string, string | undefined>;
   referrer: string | null;
   completedAt: string;
@@ -82,7 +85,24 @@ export type SubmissionDetail = {
   route: { mode: "relationship" | "sales" | "none"; assignMode: string } | null;
   sections: { title: string; answers: { questionId: string; title: string; type: string; value: string; points: number | null; maxPoints: number | null }[] }[];
   consents: { kind: string; granted: boolean; textVersion: string; text: string; createdAt: string }[];
-  history: { id: string; score: number | null; rawPoints: number; maxPoints: number; tierLabel: string | null; reason: string; createdAt: string; actorName: string | null; version: number | null }[];
+  history: { id: string; score: number | null; rawPoints: number; maxPoints: number; tierLabel: string | null; productLabel: string | null; reason: string; createdAt: string; actorName: string | null; version: number | null }[];
+};
+
+export type RecommendationView = {
+  productId: string | null;
+  productLabel: string | null;
+  productColor: string;
+  productDescription: string | null;
+  finalProductId: string | null;
+  finalProductLabel: string | null;
+  finalProductColor: string;
+  reasons: string[];
+  checks: { label: string; ok: boolean }[];
+  flags: string[];
+  needsReview: boolean;
+  intent: string | null;
+  override: { productId: string; productLabel: string; sessionInterest: SessionInterest | null; sessionInterestLabel: string | null; note: string | null; byName: string | null; at: string } | null;
+  options: { id: string; label: string; color: string }[];
 };
 
 // ---------- Rótulos ----------

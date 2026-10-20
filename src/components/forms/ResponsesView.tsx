@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { ArrowLeft, ChevronLeft, ChevronRight, Download, Eye, Gauge, Inbox, Percent, Play, Star, TrendingUp, X } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, CircleAlert, Download, Eye, Gauge, Inbox, Percent, Play, Star, TrendingUp, X } from "lucide-react";
 import { fetcher, qs } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { formatDateTime } from "@/lib/format";
@@ -22,6 +22,11 @@ type Row = {
   score: number | null;
   tierId: string | null;
   tierLabel: string | null;
+  productId: string | null;
+  productLabel: string | null;
+  overridden: boolean;
+  needsReview: boolean;
+  flags: string[];
   origin: string;
   channel: string;
   completedAt: string;
@@ -42,11 +47,14 @@ type Analytics = {
   tiers: { id: string; label: string; color: string; qualified: boolean; count: number }[];
   questions: { id: string; title: string; options: { id: string; label: string; count: number }[] }[];
   origins: { label: string; count: number }[];
+  links: { key: string; label: string; kind: string; views: number; starts: number; completed: number; qualified: number }[];
+  products: { id: string; label: string; color: string; count: number }[];
+  needsReview: number;
   series: { day: string; count: number }[];
 };
-type FilterOptions = { tiers: { id: string; label: string; color: string }[]; origins: string[]; people: { id: string; name: string }[] };
+type FilterOptions = { tiers: { id: string; label: string; color: string }[]; products: { id: string; label: string; color: string }[]; origins: string[]; people: { id: string; name: string }[] };
 
-const FILTER_KEYS = ["from", "to", "scoreMin", "scoreMax", "tier", "origin", "assignedTo", "status", "q", "duplicates"] as const;
+const FILTER_KEYS = ["from", "to", "scoreMin", "scoreMax", "tier", "product", "origin", "assignedTo", "status", "q", "duplicates"] as const;
 
 export function ResponsesView({ id }: { id: string }) {
   const me = useMe();
@@ -74,6 +82,8 @@ export function ResponsesView({ id }: { id: string }) {
 
   if (!allowed) return <NoPermission message="Formulários & Quizzes é gerenciado por administradores e gestores." />;
   const tierColor = (tid: string | null) => opts?.tiers.find((t) => t.id === tid)?.color ?? "gray";
+  const productColor = (pid: string | null) => opts?.products.find((p) => p.id === pid)?.color ?? "gray";
+  const hasProducts = !!opts?.products.length;
   const active = FILTER_KEYS.filter((k) => filters[k]).length;
   const pages = list ? Math.max(1, Math.ceil(list.total / list.pageSize)) : 1;
 
@@ -122,6 +132,20 @@ export function ResponsesView({ id }: { id: string }) {
               <option value="none">Sem classificação</option>
             </Select>
           </label>
+          {hasProducts && (
+            <label className="flex flex-col gap-1 text-[12.5px] font-medium text-muted">
+              Produto sugerido
+              <Select value={filters.product} onChange={(e) => setParams({ product: e.target.value })}>
+                <option value="">Todos</option>
+                {opts?.products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+                <option value="none">Sem sugestão</option>
+              </Select>
+            </label>
+          )}
           <label className="flex flex-col gap-1 text-[12.5px] font-medium text-muted">
             Origem
             <Select value={filters.origin} onChange={(e) => setParams({ origin: e.target.value })}>
@@ -223,10 +247,46 @@ export function ResponsesView({ id }: { id: string }) {
               <h3 className="mb-4 text-[16px] font-semibold">Classificação</h3>
               <BarList rows={stats.tiers} empty="Sem respostas classificadas." />
             </Card>
+            {stats.products.some((p) => p.count) && (
+              <Card className="p-5">
+                <h3 className="mb-1 text-[16px] font-semibold">Produto sugerido</h3>
+                <p className="mb-4 text-[12.5px] text-muted">{stats.needsReview ? `${stats.needsReview} aguardando revisão manual` : "Nenhuma revisão pendente"}</p>
+                <BarList rows={stats.products} empty="Sem sugestões." />
+              </Card>
+            )}
             <Card className="p-5">
               <h3 className="mb-4 text-[16px] font-semibold">Origem</h3>
               <BarList rows={stats.origins} />
             </Card>
+            {stats.links.length > 0 && (
+              <Card className="p-5 lg:col-span-2">
+                <h3 className="mb-4 text-[16px] font-semibold">Links de origem</h3>
+                <div className="overflow-x-auto scroll-thin">
+                  <table className="w-full text-left text-[13.5px]">
+                    <thead>
+                      <tr className="border-b border-line text-[12.5px] text-muted">
+                        <th className="py-2 pr-3 font-medium">Link</th>
+                        <th className="px-3 py-2 text-right font-medium">Visitas</th>
+                        <th className="px-3 py-2 text-right font-medium">Começaram</th>
+                        <th className="px-3 py-2 text-right font-medium">Responderam</th>
+                        <th className="py-2 pl-3 text-right font-medium">Qualificados</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.links.map((l) => (
+                        <tr key={l.key} className="border-b border-line/70 last:border-0">
+                          <td className="py-2 pr-3 font-medium">{l.label}</td>
+                          <td className="px-3 py-2 text-right">{l.views}</td>
+                          <td className="px-3 py-2 text-right">{l.starts}</td>
+                          <td className="px-3 py-2 text-right font-semibold">{l.completed}</td>
+                          <td className="py-2 pl-3 text-right">{l.qualified}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
             <Card className="p-5 lg:col-span-2">
               <details>
                 <summary className="cursor-pointer text-[16px] font-semibold">Distribuição das respostas por pergunta</summary>
@@ -267,6 +327,7 @@ export function ResponsesView({ id }: { id: string }) {
                     <th className="px-3 py-2.5 font-medium">Pessoa</th>
                     <th className="px-3 py-2.5 text-right font-medium">Score</th>
                     <th className="px-3 py-2.5 font-medium">Classificação</th>
+                    {hasProducts && <th className="px-3 py-2.5 font-medium">Produto</th>}
                     <th className="px-3 py-2.5 font-medium">Origem</th>
                     <th className="px-3 py-2.5 font-medium">Responsável</th>
                     <th className="py-2.5 pl-3 font-medium">Status</th>
@@ -286,6 +347,11 @@ export function ResponsesView({ id }: { id: string }) {
                       <td className="px-3 py-3">
                         <TierBadge label={r.tierLabel} color={tierColor(r.tierId)} />
                       </td>
+                      {hasProducts && (
+                        <td className="px-3 py-3">
+                          <ProductCell r={r} color={productColor(r.productId)} />
+                        </td>
+                      )}
                       <td className="px-3 py-3 text-muted">{r.origin}</td>
                       <td className="px-3 py-3 text-muted">{r.assignedName ?? "—"}</td>
                       <td className="py-3 pl-3 text-muted">{r.duplicateOf ? "Envio repetido" : r.leadStatus ? LEAD_STATUS_LABEL[r.leadStatus] : "—"}</td>
@@ -307,6 +373,7 @@ export function ResponsesView({ id }: { id: string }) {
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
                       <TierBadge label={r.tierLabel} color={tierColor(r.tierId)} />
+                      {hasProducts && <ProductCell r={r} color={productColor(r.productId)} />}
                       <span>{r.origin}</span>
                       {r.assignedName && <span>· {r.assignedName}</span>}
                     </div>
@@ -343,5 +410,25 @@ export function ResponsesView({ id }: { id: string }) {
         <div className="flex-1 overflow-y-auto scroll-thin px-5 py-5">{selected && <SubmissionView id={selected} onOpenContact={(cid) => setParams({ resposta: null, contato: cid })} />}</div>
       </Sheet>
     </div>
+  );
+}
+
+function ProductCell({ r, color }: { r: Row; color: string }) {
+  if (!r.productLabel) return <span className="text-[13px] text-muted">—</span>;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <TierBadge label={r.productLabel} color={color} />
+      {r.overridden && <span className="text-[11.5px] text-muted">ajustado</span>}
+      {r.needsReview && (
+        <span className="inline-flex items-center gap-1 text-[11.5px] font-medium text-warning">
+          <CircleAlert className="size-3.5" aria-hidden /> revisar
+        </span>
+      )}
+      {r.flags.length > 0 && !r.needsReview && (
+        <span className="text-[11.5px] text-muted" title={r.flags.join("\n")}>
+          {r.flags.length} alerta{r.flags.length === 1 ? "" : "s"}
+        </span>
+      )}
+    </span>
   );
 }

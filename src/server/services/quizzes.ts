@@ -35,10 +35,10 @@ import { logger } from "../logger";
 import { audit, getPipeline } from "./common";
 import { QUIZ_PROVIDER } from "./leads";
 import { sniffImage } from "./avatars";
-import { definitionSchema } from "@/lib/quiz/schema";
+import { definitionSchema, linksSchema } from "@/lib/quiz/schema";
 import { allQuestions, maxPoints, publishProblems } from "@/lib/quiz/engine";
-import { AXION_TEMPLATE_KEY, axionDefinition, blankDefinition } from "@/lib/quiz/templates";
-import type { QuizDefinition, Route } from "@/lib/quiz/types";
+import { AXION_APPLICATION_KEY, AXION_TEMPLATE_KEY, axionApplicationDefinition, axionDefinition, blankDefinition } from "@/lib/quiz/templates";
+import type { LinkKind, QuizDefinition, Route, SourceLink } from "@/lib/quiz/types";
 
 const NO_ACCESS = "Somente administradores e gestores gerenciam formulários.";
 export const assertForms = (ctx: Ctx) => assertCan(ctx, "forms.manage", NO_ACCESS);
@@ -71,6 +71,7 @@ async function uniqueSlug(base: string, exceptId?: string, tx: DbOrTx = db) {
 }
 
 export const publicUrl = (slug: string) => `${appUrl()}/forms/${slug}`;
+export const linkUrl = (slug: string, key: string) => `${publicUrl(slug)}?origem=${encodeURIComponent(key)}`;
 
 export function embedCode(slug: string, title: string) {
   const src = publicUrl(slug);
@@ -92,7 +93,7 @@ async function stageRefs(orgId: string) {
 
 /** Confere se etapas, pessoas, origem e produto citados no rascunho pertencem à organização. */
 async function checkRefs(ctx: Ctx, def: QuizDefinition) {
-  const routes: Route[] = [def.settings.defaultRoute, ...def.scoring.tiers.map((t) => t.route)];
+  const routes: Route[] = [def.settings.defaultRoute, ...def.scoring.tiers.map((t) => t.route), ...(def.recommendation?.products ?? []).map((p) => p.route)];
   const rel = await getPipeline(ctx.orgId, "relationship");
   const sales = await getPipeline(ctx.orgId, "sales");
   for (const r of routes) {
@@ -235,6 +236,7 @@ function view(f: FormRow) {
     live: !!f.liveVersionId && f.status === "published",
     hasUnpublishedChanges: hasUnpublished(f),
     allowedDomains: f.allowedDomains,
+    links: (f.links ?? []).map((l) => ({ ...l, url: linkUrl(f.slug, l.key) })),
     templateKey: f.templateKey,
     publicUrl: publicUrl(f.slug),
     embed: embedCode(f.slug, f.draft.settings.title),
@@ -308,12 +310,58 @@ export async function formHistory(ctx: Ctx, id: string) {
 
 export const createFormSchema = z.object({
   name: z.string().trim().min(2, "Dê um nome ao formulário.").max(120),
-  template: z.enum(["blank", AXION_TEMPLATE_KEY]).default("blank"),
+  template: z.enum(["blank", AXION_TEMPLATE_KEY, AXION_APPLICATION_KEY]).default("blank"),
 });
+
+/** Origem padrão do CRM para cada tipo de link (Grupo de WhatsApp é criada se não existir). */
+const LINK_SOURCE: Partial<Record<LinkKind, { key: string; name: string; color: string }>> = {
+  stories: { key: "stories", name: "Stories", color: "pink" },
+  traffic: { key: "trafego-pago", name: "Tráfego Pago", color: "blue" },
+  whatsapp_group: { key: "grupo-whatsapp", name: "Grupo de WhatsApp", color: "green" },
+  bio: { key: "conteudo-organico", name: "Conteúdo Orgânico", color: "green" },
+  direct: { key: "conteudo-organico", name: "Conteúdo Orgânico", color: "green" },
+};
+
+async function defaultSourceFor(tx: DbOrTx, orgId: string, kind: LinkKind) {
+  const d = LINK_SOURCE[kind];
+  if (!d) return null;
+  const [hit] = await tx.select({ id: leadSources.id, archivedAt: leadSources.archivedAt }).from(leadSources).where(and(eq(leadSources.orgId, orgId), eq(leadSources.key, d.key)));
+  if (hit) return hit.archivedAt ? null : hit.id;
+  const [{ max }] = await tx.select({ max: sql<number>`coalesce(max(${leadSources.position}), 0)::int` }).from(leadSources).where(eq(leadSources.orgId, orgId));
+  const [row] = await tx.insert(leadSources).values({ orgId, key: d.key, name: d.name, color: d.color, position: max + 1 }).onConflictDoNothing().returning({ id: leadSources.id });
+  return row?.id ?? null;
+}
+
+/** Valida os links, confere as origens e preenche a origem padrão de cada tipo. */
+async function prepareLinks(tx: DbOrTx, orgId: string, raw: unknown): Promise<SourceLink[]> {
+  const r = linksSchema.safeParse(raw);
+  if (!r.success) throw invalid(r.error.issues[0]?.message ?? "Links de origem inválidos.");
+  const out: SourceLink[] = [];
+  for (const l of r.data) {
+    let sourceId = l.sourceId;
+    if (sourceId) {
+      const [s] = await tx.select({ id: leadSources.id }).from(leadSources).where(and(eq(leadSources.id, sourceId), eq(leadSources.orgId, orgId)));
+      if (!s) throw invalid(`A origem escolhida para o link “${l.label}” não existe mais.`);
+    } else sourceId = await defaultSourceFor(tx, orgId, l.kind);
+    out.push({ ...l, sourceId, utmSource: l.utmSource || null, utmMedium: l.utmMedium || null, utmCampaign: l.utmCampaign || null });
+  }
+  return out;
+}
+
+const DEFAULT_APPLICATION_LINKS: SourceLink[] = [
+  { key: "stories", label: "Stories", kind: "stories", sourceId: null, utmSource: "instagram", utmMedium: "stories", utmCampaign: "aplicacao" },
+  { key: "grupo-whatsapp", label: "Grupo de WhatsApp", kind: "whatsapp_group", sourceId: null, utmSource: "whatsapp", utmMedium: "grupo", utmCampaign: "aplicacao" },
+  { key: "trafego", label: "Tráfego pago", kind: "traffic", sourceId: null, utmSource: "meta", utmMedium: "cpc", utmCampaign: "aplicacao" },
+];
 
 export async function createForm(ctx: Ctx, input: z.infer<typeof createFormSchema>) {
   assertForms(ctx);
-  const def = input.template === AXION_TEMPLATE_KEY ? axionDefinition(await stageRefs(ctx.orgId)) : blankDefinition(input.name);
+  const def =
+    input.template === AXION_TEMPLATE_KEY
+      ? axionDefinition(await stageRefs(ctx.orgId))
+      : input.template === AXION_APPLICATION_KEY
+        ? axionApplicationDefinition(await stageRefs(ctx.orgId))
+        : blankDefinition(input.name);
   if (input.template === "blank") def.settings.title = input.name;
   const f = await db.transaction(async (tx) => {
     const backing = await createBackingIntegration(tx, ctx.orgId, input.name);
@@ -322,8 +370,9 @@ export async function createForm(ctx: Ctx, input: z.infer<typeof createFormSchem
       .values({
         orgId: ctx.orgId,
         name: input.name,
-        slug: await uniqueSlug(`${slugify(input.template === AXION_TEMPLATE_KEY ? "diagnostico-axion" : input.name)}-${suffix()}`, undefined, tx),
+        slug: await uniqueSlug(`${slugify(input.template === AXION_TEMPLATE_KEY ? "diagnostico-axion" : input.template === AXION_APPLICATION_KEY ? "aplicacao-axion" : input.name)}-${suffix()}`, undefined, tx),
         draft: def,
+        links: input.template === AXION_APPLICATION_KEY ? await prepareLinks(tx, ctx.orgId, DEFAULT_APPLICATION_LINKS) : [],
         leadFormId: backing.id,
         templateKey: input.template,
         createdBy: ctx.userId,
@@ -340,6 +389,8 @@ export const saveDraftSchema = z.object({
   slug: z.string().trim().toLowerCase().optional(),
   draft: z.unknown().optional(),
   allowedDomains: z.array(z.string().trim().toLowerCase().max(200)).max(20).optional(),
+  /** Links de origem: valem na hora, sem publicar. */
+  links: z.unknown().optional(),
   /** Evita sobrescrever o trabalho de outra pessoa: data do rascunho que o editor carregou. */
   baseUpdatedAt: z.string().optional(),
 });
@@ -359,6 +410,8 @@ function scoringSummary(def: QuizDefinition) {
     normalize: def.scoring.normalize,
     weights: Object.fromEntries(allQuestions(def).filter((q) => q.scored).map((q) => [q.id, (q.options ?? []).map((o) => `${o.id}:${o.points}`).join(",")])),
     tiers: def.scoring.tiers.map((t) => ({ id: t.id, min: t.min, demoteTo: t.demoteTo, requirements: t.requirements.map((r) => `${r.questionId}∈[${r.optionIds.join(",")}]`), route: t.route })),
+    signals: Object.fromEntries(allQuestions(def).filter((q) => q.options?.some((o) => o.signal)).map((q) => [q.id, (q.options ?? []).map((o) => `${o.id}:${o.signal ?? ""}`).join(",")])),
+    recommendation: def.recommendation ?? null,
   };
 }
 
@@ -386,6 +439,13 @@ export async function saveDraft(ctx: Ctx, id: string, input: z.infer<typeof save
   if (input.allowedDomains !== undefined) {
     patch.allowedDomains = [...new Set(input.allowedDomains.filter(Boolean).map(normalizeDomain))];
     changes.push("domínios autorizados");
+  }
+  if (input.links !== undefined) {
+    const links = await prepareLinks(db, ctx.orgId, input.links);
+    if (JSON.stringify(links) !== JSON.stringify(f.links ?? [])) {
+      patch.links = links;
+      changes.push("links de origem");
+    }
   }
   if (input.draft !== undefined) {
     const def = parseDefinition(input.draft);
@@ -487,7 +547,7 @@ export async function duplicateForm(ctx: Ctx, id: string) {
     const backing = await createBackingIntegration(tx, ctx.orgId, name);
     const [row] = await tx
       .insert(quizForms)
-      .values({ orgId: ctx.orgId, name, slug: await uniqueSlug(`${slugify(f.name).slice(0, 40)}-${suffix()}`, undefined, tx), draft: f.draft, leadFormId: backing.id, templateKey: f.templateKey, allowedDomains: f.allowedDomains, createdBy: ctx.userId })
+      .values({ orgId: ctx.orgId, name, slug: await uniqueSlug(`${slugify(f.name).slice(0, 40)}-${suffix()}`, undefined, tx), draft: f.draft, leadFormId: backing.id, templateKey: f.templateKey, allowedDomains: f.allowedDomains, links: f.links ?? [], createdBy: ctx.userId })
       .returning();
     await audit(tx, ctx, "form.duplicated", "quiz_form", row.id, { from: f.id });
     return row;
@@ -600,7 +660,7 @@ export async function formsDashboard(ctx: Ctx, f: z.infer<typeof dashboardSchema
     .from(quizEvents)
     .where(and(eq(quizEvents.orgId, ctx.orgId), gte(quizEvents.createdAt, since)));
   const subs = await db
-    .select({ completedAt: quizSubmissions.completedAt, tierLabel: quizSubmissions.tierLabel, tierId: quizSubmissions.tierId, formId: quizSubmissions.formId, channel: quizSubmissions.channel, utmSource: sql<string | null>`${quizSubmissions.utm}->>'utm_source'`, classification: quizSubmissions.classification })
+    .select({ completedAt: quizSubmissions.completedAt, tierLabel: quizSubmissions.tierLabel, tierId: quizSubmissions.tierId, formId: quizSubmissions.formId, channel: quizSubmissions.channel, utmSource: sql<string | null>`${quizSubmissions.utm}->>'utm_source'`, linkLabel: quizSubmissions.linkLabel, classification: quizSubmissions.classification })
     .from(quizSubmissions)
     .where(and(eq(quizSubmissions.orgId, ctx.orgId), gte(quizSubmissions.completedAt, since), isNull(quizSubmissions.duplicateOf)))
     .limit(50000);
@@ -615,7 +675,7 @@ export async function formsDashboard(ctx: Ctx, f: z.infer<typeof dashboardSchema
   for (const s of subs) {
     const t = s.tierLabel ?? "Sem classificação";
     byTier.set(t, (byTier.get(t) ?? 0) + 1);
-    const o = originLabel(s.channel, s.utmSource);
+    const o = originLabel(s.channel, s.utmSource, s.linkLabel);
     byOrigin.set(o, (byOrigin.get(o) ?? 0) + 1);
     const k = dayKey(s.completedAt);
     byDay.set(k, (byDay.get(k) ?? 0) + 1);
@@ -647,7 +707,9 @@ export async function formsDashboard(ctx: Ctx, f: z.infer<typeof dashboardSchema
   };
 }
 
-export function originLabel(channel: string, utmSource: string | null | undefined) {
+/** Origem legível: nome do link (?origem=) > utm_source > canal. */
+export function originLabel(channel: string, utmSource: string | null | undefined, linkLabel?: string | null) {
+  if (linkLabel) return linkLabel;
   if (utmSource) return utmSource;
   return channel === "embed" ? "Site (incorporado)" : "Link direto";
 }

@@ -3,7 +3,22 @@
  * Funções puras. O servidor recalcula tudo a partir das respostas — nada que o navegador envie
  * sobre pontos ou classificação é aceito.
  */
-import { CHOICE_TYPES, type AnswerValue, type Answers, type PublicDefinition, type QuizDefinition, type QuizQuestion, type Scoring, type ShowIf, type Tier } from "./types";
+import {
+  CHOICE_TYPES,
+  INTENT_CONFLICT,
+  INTENT_REF,
+  PRODUCT_REF,
+  SCORE_REF,
+  type AnswerValue,
+  type Answers,
+  type PublicDefinition,
+  type QuizDefinition,
+  type QuizQuestion,
+  type Recommendation,
+  type Scoring,
+  type ShowIf,
+  type Tier,
+} from "./types";
 
 export const allQuestions = (def: Pick<QuizDefinition, "sections">) => def.sections.flatMap((s) => s.questions);
 
@@ -39,6 +54,10 @@ export function conditionMet(showIf: ShowIf | null | undefined, answers: Answers
         return typeof v === "number" ? v >= Number(c.value) : Number(v) >= Number(c.value);
       case "lte":
         return typeof v === "number" ? v <= Number(c.value) : Number(v) <= Number(c.value);
+      case "in":
+        return asList(v).some((x) => (c.values ?? []).includes(x));
+      case "not_in":
+        return !isEmpty(v) && !asList(v).some((x) => (c.values ?? []).includes(x));
       default:
         return true;
     }
@@ -71,9 +90,19 @@ export function phoneDigits(v: string) {
   return d;
 }
 
+/**
+ * Telefone válido. Número brasileiro (com ou sem 55): DDD + 8 dígitos (fixo, começa com 2–5)
+ * ou DDD + 9 dígitos (celular, começa com 9). Com "+" e outro código de país: 10 a 15 dígitos.
+ */
 export function validPhone(v: string) {
   const d = phoneDigits(v);
-  return d.length >= 10 && d.length <= 15;
+  const international = /^\s*(\+|00)/.test(v) && !d.startsWith("55");
+  if (international) return d.length >= 10 && d.length <= 15;
+  const br = (d.length === 12 || d.length === 13) && d.startsWith("55") ? d.slice(2) : d;
+  if (!/^[1-9][1-9]/.test(br)) return false;
+  if (br.length === 11) return br[2] === "9";
+  if (br.length === 10) return /[2-5]/.test(br[2]);
+  return false;
 }
 
 /** Aceita @usuario, usuario, instagram.com/usuario ou outra URL http(s). */
@@ -248,6 +277,83 @@ export function classify(scoring: Scoring, score: number, answers: Answers): Cla
   return { tierId: last.id, scoreTierId: start.id, path };
 }
 
+// ---------- Recomendação de produto ----------
+
+/**
+ * Intenção declarada: o sinal das alternativas escolhidas (ex.: MENTORIA).
+ * Nenhum sinal = null; sinais diferentes = conflito (vai para revisão, nunca para o produto maior).
+ */
+export function intentOf(def: Pick<QuizDefinition, "sections">, answers: Answers) {
+  const visible = visibleQuestionIds(def, answers);
+  const signals = new Set<string>();
+  for (const q of allQuestions(def)) {
+    if (!visible.has(q.id) || !CHOICE_TYPES.includes(q.type)) continue;
+    for (const id of asList(answers[q.id])) {
+      const sig = q.options?.find((o) => o.id === id)?.signal;
+      if (sig) signals.add(sig);
+    }
+  }
+  if (!signals.size) return null;
+  return signals.size === 1 ? [...signals][0] : INTENT_CONFLICT;
+}
+
+export type RecommendationResult = {
+  productId: string | null;
+  ruleId: string | null;
+  intent: string | null;
+  /** Motivos legíveis da sugestão. */
+  reasons: string[];
+  /** Requisitos da regra aplicada, atendidos ou não. */
+  checks: { label: string; ok: boolean }[];
+  /** Alertas para a equipe comercial. */
+  flags: string[];
+  needsReview: boolean;
+};
+
+/**
+ * Sugere um produto: a primeira regra cuja condição bate decide. Se todos os requisitos forem atendidos,
+ * fica com o produto da regra; senão, o primeiro requisito que falhou leva ao seu destino
+ * (ou ao "senão" da regra). Nunca é uma aprovação: é uma sugestão para a equipe comercial.
+ */
+export function recommend(def: Pick<QuizDefinition, "sections" | "recommendation">, answers: Answers, score: number | null): RecommendationResult | null {
+  const rec: Recommendation | undefined = def.recommendation;
+  if (!rec?.enabled || !rec.products.length) return null;
+  const visible = visibleQuestionIds(def, answers);
+  const ctx: Answers = Object.fromEntries(Object.entries(answers).filter(([k]) => visible.has(k)));
+  const intent = intentOf(def, answers);
+  ctx[SCORE_REF] = score ?? 0;
+  ctx[INTENT_REF] = intent;
+  const productLabel = (id: string | null) => rec.products.find((p) => p.id === id)?.label ?? id ?? "—";
+
+  let productId: string | null = null;
+  let ruleId: string | null = null;
+  const reasons: string[] = [];
+  let checks: RecommendationResult["checks"] = [];
+  const rule = rec.rules.find((r) => r.when.conditions.length > 0 && conditionMet(r.when, ctx));
+  if (rule) {
+    ruleId = rule.id;
+    reasons.push(rule.label);
+    checks = rule.requirements.map((q) => ({ label: q.label, ok: conditionMet(q.when, ctx) }));
+    const firstFail = rule.requirements.find((_, i) => !checks[i].ok);
+    if (!firstFail) {
+      productId = rule.product;
+      if (rule.requirements.length) reasons.push(`Atende a todos os requisitos de ${productLabel(rule.product)}.`);
+    } else {
+      productId = firstFail.failProduct ?? rule.otherwise ?? rec.fallbackProduct;
+      const failed = checks.filter((c) => !c.ok).map((c) => c.label);
+      reasons.push(`Perfil indicado para ${productLabel(rule.product)}, mas não atende: ${failed.join("; ")}.`);
+    }
+  } else {
+    productId = rec.fallbackProduct;
+    reasons.push("Nenhuma regra se aplicou às respostas.");
+  }
+  if (productId && !rec.products.some((p) => p.id === productId)) productId = rec.fallbackProduct;
+  ctx[PRODUCT_REF] = productId;
+  const flags = rec.flags.filter((f) => f.when.conditions.length > 0 && conditionMet(f.when, ctx)).map((f) => f.label);
+  const product = rec.products.find((p) => p.id === productId);
+  return { productId, ruleId, intent, reasons, checks, flags, needsReview: !!product?.needsReview };
+}
+
 // ---------- Apresentação ----------
 
 /** Texto legível de uma resposta (rótulos das alternativas em vez dos ids). */
@@ -291,6 +397,7 @@ export function publicDefinition(def: QuizDefinition): PublicDefinition {
       welcome: def.settings.welcome,
       completion: def.settings.completion,
       redirectUrl: def.settings.redirectUrl,
+      labels: def.settings.labels,
       consent: def.settings.consent,
     },
   };
@@ -321,6 +428,25 @@ export function publishProblems(def: QuizDefinition): string[] {
     for (const t of def.scoring.tiers) {
       for (const r of t.requirements) if (!qs.some((q) => q.id === r.questionId)) out.push(`O requisito “${r.label}” (${t.label}) aponta para uma pergunta que não existe mais.`);
     }
+  }
+  const rec = def.recommendation;
+  if (rec?.enabled) {
+    const productIds = new Set(rec.products.map((p) => p.id));
+    const special = new Set([SCORE_REF, INTENT_REF, PRODUCT_REF]);
+    const badRef = (w: ShowIf) => w.conditions.some((c) => !special.has(c.questionId) && !qs.some((q) => q.id === c.questionId));
+    if (!rec.products.length) out.push("Cadastre ao menos um produto na recomendação.");
+    if (rec.fallbackProduct && !productIds.has(rec.fallbackProduct)) out.push("O produto padrão da recomendação não existe mais.");
+    for (const r of rec.rules) {
+      if (!productIds.has(r.product)) out.push(`A regra “${r.label}” sugere um produto que não existe mais.`);
+      if (r.otherwise && !productIds.has(r.otherwise)) out.push(`O “senão” da regra “${r.label}” aponta para um produto que não existe mais.`);
+      if (!r.when.conditions.length) out.push(`A regra “${r.label}” precisa de ao menos uma condição.`);
+      if (badRef(r.when)) out.push(`A regra “${r.label}” depende de uma pergunta que não existe mais.`);
+      for (const q of r.requirements) {
+        if (q.failProduct && !productIds.has(q.failProduct)) out.push(`O requisito “${q.label}” aponta para um produto que não existe mais.`);
+        if (badRef(q.when)) out.push(`O requisito “${q.label}” depende de uma pergunta que não existe mais.`);
+      }
+    }
+    for (const f of rec.flags) if (badRef(f.when)) out.push(`O alerta “${f.label}” depende de uma pergunta que não existe mais.`);
   }
   return [...new Set(out)];
 }

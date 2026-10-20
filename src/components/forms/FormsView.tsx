@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  Target,
   Trash2,
   TrendingUp,
 } from "lucide-react";
@@ -44,19 +45,20 @@ type Dashboard = {
 };
 
 const TEMPLATE_CHOICES = [
+  { key: "axion-aplicacao", title: "Quiz de Aplicação AXION", description: "11 perguntas, Lead Score de 100 pontos, prioridade alta/média/baixa e sugestão de produto (Mentoria, Consultoria, Sessão, Nutrição ou Análise manual). Já vem com links para Stories, Grupo de WhatsApp e Tráfego.", icon: Target },
   { key: "axion-diagnostico", title: "Diagnóstico Estratégico — AXION", description: "2 etapas, 13 perguntas, Lead Score de 0 a 100 e classificação ICP A, B, C e D com regras de qualificação.", icon: Sparkles },
   { key: "blank", title: "Formulário em branco", description: "Começa com nome, e-mail e WhatsApp. Monte as perguntas do seu jeito.", icon: FileText },
 ] as const;
 
 function CreateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const router = useRouter();
-  const [template, setTemplate] = useState<(typeof TEMPLATE_CHOICES)[number]["key"]>("axion-diagnostico");
-  const [name, setName] = useState("Diagnóstico Estratégico — AXION");
+  const [template, setTemplate] = useState<(typeof TEMPLATE_CHOICES)[number]["key"]>("axion-aplicacao");
+  const [name, setName] = useState<string>(TEMPLATE_CHOICES[0].title);
   const [err, setErr] = useState<string>();
   const [busy, setBusy] = useState(false);
   const pick = (k: typeof template) => {
     setTemplate(k);
-    setName((n) => (TEMPLATE_CHOICES.some((t) => t.title === n) || !n ? (k === "blank" ? "" : TEMPLATE_CHOICES[0].title) : n));
+    setName((n) => (TEMPLATE_CHOICES.some((t) => t.title === n) || !n ? (k === "blank" ? "" : TEMPLATE_CHOICES.find((t) => t.key === k)!.title) : n));
   };
   const create = async () => {
     setBusy(true);
@@ -202,7 +204,7 @@ function FormsList({ onChanged }: { onChanged: () => void }) {
         ) : isLoading && !data ? (
           <LoadingState rows={3} />
         ) : !data?.length ? (
-          <EmptyState icon={<ClipboardList />} title={status === "archived" ? "Nenhum formulário arquivado" : "Nenhum formulário ainda"} description="Crie um formulário a partir do Diagnóstico AXION ou do zero." />
+          <EmptyState icon={<ClipboardList />} title={status === "archived" ? "Nenhum formulário arquivado" : "Nenhum formulário ainda"} description="Crie a partir do Quiz de Aplicação AXION, do Diagnóstico AXION ou do zero." />
         ) : (
           <>
             {/* Tabela no desktop */}

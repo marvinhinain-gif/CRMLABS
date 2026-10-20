@@ -27,8 +27,8 @@ import { AppError, invalid, notFound } from "../errors";
 import { logger } from "../logger";
 import { cleanText, notifyUser } from "./common";
 import { cleanUtm, ingestLead, normalizeEmail, normalizePhone, type IngestOptions } from "./leads";
-import { allQuestions, classify, computeScore, displayValue, parseInstagramOrUrl, publicDefinition, validateAnswers } from "@/lib/quiz/engine";
-import { CHOICE_TYPES, PRIVACY_KIND_LABEL, type Answers, type QuizDefinition, type Route, type Tier } from "@/lib/quiz/types";
+import { allQuestions, classify, computeScore, displayValue, parseInstagramOrUrl, publicDefinition, recommend, validateAnswers, type RecommendationResult } from "@/lib/quiz/engine";
+import { CHOICE_TYPES, PRIVACY_KIND_LABEL, type Answers, type QuizDefinition, type RecProduct, type Route, type SourceLink, type Tier } from "@/lib/quiz/types";
 
 // ---------- Leitura ----------
 
@@ -97,15 +97,20 @@ export const eventSchema = z.object({
   kind: z.enum(["view", "start"]),
   embed: z.boolean().default(false),
   utmSource: z.string().trim().max(120).optional(),
+  origem: z.string().trim().toLowerCase().max(40).optional(),
 });
+
+/** Link de origem (?origem=chave) cadastrado no formulário; chave desconhecida é ignorada. */
+export const findLink = (links: SourceLink[] | null | undefined, key: string | null | undefined) => (key ? (links ?? []).find((l) => l.key === key) ?? null : null);
 
 export async function recordEvent(slug: string, raw: unknown, ip: string | null) {
   const input = eventSchema.parse(raw);
   if (!eventAllowed(ip)) return { ok: true };
   const { form, version } = await liveForm(slug);
+  const link = findLink(form.links, input.origem);
   await db
     .insert(quizEvents)
-    .values({ orgId: form.orgId, formId: form.id, versionId: version.id, sessionId: input.sessionId, kind: input.kind, channel: input.embed ? "embed" : "link", utmSource: cleanText(input.utmSource, 120) })
+    .values({ orgId: form.orgId, formId: form.id, versionId: version.id, sessionId: input.sessionId, kind: input.kind, channel: input.embed ? "embed" : "link", utmSource: cleanText(input.utmSource ?? link?.utmSource ?? undefined, 120), linkKey: link?.key ?? null })
     .onConflictDoNothing();
   return { ok: true };
 }
@@ -119,6 +124,8 @@ export const submitSchema = z.object({
   utm: z.record(z.string().max(40), z.string().max(300)).optional(),
   referrer: z.string().max(500).optional(),
   embed: z.boolean().default(false),
+  /** Chave do link de origem (?origem=stories). */
+  origem: z.string().trim().toLowerCase().max(40).optional(),
   /** Campo invisível: robôs costumam preencher. */
   website: z.string().max(200).optional().default(""),
   startedAt: z.number().optional(),
@@ -128,9 +135,10 @@ const SUBMIT_LIMIT_PER_HOUR = 12;
 const DUPLICATE_WINDOW_MIN = 10;
 
 /** Destino do CRM a partir da rota configurada. */
-export function routeToIngest(r: Route): Pick<IngestOptions, "route" | "notify"> {
+export function routeToIngest(r: Route, sourceId?: string | null): Pick<IngestOptions, "route" | "notify"> {
   return {
     route: {
+      ...(sourceId ? { sourceId } : {}),
       pipelineKind: r.mode === "sales" ? "sales" : "relationship",
       stageId: r.mode === "relationship" ? r.stageId : null,
       salesStageId: r.mode === "sales" ? r.salesStageId : null,
@@ -191,15 +199,31 @@ function extractIdentity(def: QuizDefinition, answers: Answers) {
   return out;
 }
 
-export type Scored = { raw: number; max: number; score: number | null; tier: Tier | null; classification: ReturnType<typeof classify> | null; perQuestion: Record<string, number> };
+export type Scored = {
+  raw: number;
+  max: number;
+  score: number | null;
+  tier: Tier | null;
+  classification: ReturnType<typeof classify> | null;
+  perQuestion: Record<string, number>;
+  /** Sugestão de produto (null quando a recomendação está desligada). */
+  recommendation: RecommendationResult | null;
+  product: RecProduct | null;
+};
 
-/** Score e classificação no servidor, com as regras de uma versão. */
+/** Score, classificação e sugestão de produto no servidor, com as regras de uma versão. */
 export function scoreWith(def: QuizDefinition, answers: Answers): Scored {
   const s = computeScore(def, answers);
-  if (!def.scoring.enabled) return { raw: s.raw, max: s.max, score: null, tier: null, classification: null, perQuestion: s.perQuestion };
+  const scoreForRules = def.scoring.enabled ? s.score : def.scoring.normalize && s.max > 0 ? Math.round((s.raw / s.max) * 100) : s.raw;
+  const recommendation = recommend(def, answers, scoreForRules);
+  const product = def.recommendation?.products.find((p) => p.id === recommendation?.productId) ?? null;
+  if (!def.scoring.enabled) return { raw: s.raw, max: s.max, score: null, tier: null, classification: null, perQuestion: s.perQuestion, recommendation, product };
   const c = classify(def.scoring, s.score, answers);
-  return { raw: s.raw, max: s.max, score: s.score, tier: def.scoring.tiers.find((t) => t.id === c.tierId) ?? null, classification: c, perQuestion: s.perQuestion };
+  return { raw: s.raw, max: s.max, score: s.score, tier: def.scoring.tiers.find((t) => t.id === c.tierId) ?? null, classification: c, perQuestion: s.perQuestion, recommendation, product };
 }
+
+/** Destino no CRM: o produto sugerido manda; sem recomendação, a faixa de score; senão, o padrão. */
+export const destinationOf = (def: QuizDefinition, scored: Scored): Route => scored.product?.route ?? scored.tier?.route ?? def.settings.defaultRoute;
 
 const asList = (v: unknown) => (Array.isArray(v) ? (v as string[]) : typeof v === "string" ? [v] : []);
 
@@ -229,8 +253,16 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
 
   const scored = scoreWith(def, answers);
   const tier = scored.tier;
-  const route = tier?.route ?? def.settings.defaultRoute;
-  const utm = cleanUtm(input.utm);
+  const product = scored.product;
+  const route = destinationOf(def, scored);
+  const link = findLink(form.links, input.origem);
+  // O link completa as UTMs que a página não trouxe (as da página têm prioridade).
+  const utm = cleanUtm({
+    ...(link?.utmSource ? { utm_source: link.utmSource } : {}),
+    ...(link?.utmMedium ? { utm_medium: link.utmMedium } : {}),
+    ...(link?.utmCampaign ? { utm_campaign: link.utmCampaign } : {}),
+    ...Object.fromEntries(Object.entries(input.utm ?? {}).filter(([, v]) => v)),
+  });
   const channel = input.embed ? "embed" : "link";
   const now = new Date();
 
@@ -251,6 +283,7 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
   const visibleQs = allQuestions(def).filter((q) => visible.has(q.id) && answers[q.id] !== undefined);
   const leadAnswers = visibleQs.map((q) => ({ label: q.title, value: displayValue(q, answers[q.id]) }));
 
+  const sourceLink = link;
   const recordSubmission = async (tx: DbOrTx, link: { contactId: string | null; leadId: string | null; duplicateOf: string | null }) => {
     const [sub] = await tx
       .insert(quizSubmissions)
@@ -278,6 +311,11 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
         utm,
         referrer: cleanText(input.referrer, 500),
         route: link.duplicateOf ? null : route,
+        linkKey: sourceLink?.key ?? null,
+        linkLabel: sourceLink?.label ?? null,
+        productId: product?.id ?? null,
+        productLabel: product?.label ?? null,
+        recommendation: scored.recommendation,
         ipHash,
         userAgent: cleanText(meta.userAgent, 300),
         duplicateOf: link.duplicateOf,
@@ -307,8 +345,8 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
       ...visibleQs.filter((q) => q.type === "consent").map((q) => ({ kind: `question:${q.id}`, granted: answers[q.id] === true, text: q.title })),
     ];
     await tx.insert(quizConsents).values(consents.map((c) => ({ orgId: form.orgId, submissionId: sub.id, contactId: link.contactId, kind: c.kind, granted: c.granted, textVersion: consent.version, text: c.text, policyUrl: consent.policyUrl })));
-    await tx.insert(quizScoreHistory).values({ orgId: form.orgId, submissionId: sub.id, versionId: version.id, rawPoints: scored.raw, maxPoints: scored.max, score: scored.score, tierId: tier?.id ?? null, tierLabel: tier?.label ?? null, reason: "Cálculo no envio" });
-    await tx.insert(quizEvents).values({ orgId: form.orgId, formId: form.id, versionId: version.id, sessionId: input.sessionId, kind: "complete", channel, utmSource: utm.utm_source ?? null }).onConflictDoNothing();
+    await tx.insert(quizScoreHistory).values({ orgId: form.orgId, submissionId: sub.id, versionId: version.id, rawPoints: scored.raw, maxPoints: scored.max, score: scored.score, tierId: tier?.id ?? null, tierLabel: tier?.label ?? null, productLabel: product?.label ?? null, reason: "Cálculo no envio" });
+    await tx.insert(quizEvents).values({ orgId: form.orgId, formId: form.id, versionId: version.id, sessionId: input.sessionId, kind: "complete", channel, utmSource: utm.utm_source ?? null, linkKey: sourceLink?.key ?? null }).onConflictDoNothing();
     return sub;
   };
 
@@ -327,12 +365,12 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
     backing,
     { name, phone: who.phone, email: who.email, instagram: who.instagram, answers: leadAnswers, custom, productText: null, preferredAt: null, preferredText: null, utm, channel: "crmlabs_quiz" },
     {
-      ...routeToIngest(route),
-      touchpointNote: `Respondeu “${def.settings.title}”${channel === "embed" ? " (site)" : ""}.`,
+      ...routeToIngest(route, link?.sourceId),
+      touchpointNote: `Respondeu “${def.settings.title}”${link ? ` (${link.label})` : channel === "embed" ? " (site)" : ""}.`,
       afterInsert: async (tx, r) => {
         const sub = await recordSubmission(tx, { contactId: r.contactId, leadId: r.lead.id, duplicateOf: null });
         submissionId = sub.id;
-        await addTags(tx, form.orgId, r.contactId, [...def.settings.tags, ...(tier?.tags ?? [])]);
+        await addTags(tx, form.orgId, r.contactId, [...def.settings.tags, ...(tier?.tags ?? []), ...(product?.tags ?? [])]);
       },
     },
   );
@@ -347,7 +385,7 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
         userId: a.userId,
         type: "lead.new",
         title: `Nova resposta: ${name}`,
-        body: [def.settings.title, tier?.label].filter(Boolean).join(" · "),
+        body: [def.settings.title, tier?.label, product?.label].filter(Boolean).join(" · "),
         link: `/formularios/${form.id}/respostas?resposta=${submissionId}`,
         dedupeKey: `quiz:${submissionId}`,
       }).catch((e) => logger.warn("Falha ao avisar sobre resposta de formulário", e));

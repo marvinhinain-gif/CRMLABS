@@ -20,6 +20,9 @@ type Row = {
   tierId: string | null;
   tierLabel: string | null;
   tierColor: string | null;
+  productLabel: string | null;
+  productColor: string | null;
+  needsReview: boolean;
   completedAt: string;
   channel: string;
   origin: string;
@@ -86,6 +89,8 @@ export function ContactFormsTab({ contactId }: { contactId: string }) {
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <TierBadge label={r.tierLabel} color={r.tierColor} />
+                  {r.productLabel && <TierBadge label={r.productLabel} color={r.productColor} />}
+                  {r.needsReview && <span className="text-[12px] font-medium text-warning">revisar</span>}
                   {r.historyCount > 1 && <Badge tone="info">Recalculado</Badge>}
                   {r.duplicateOf && <Badge tone="warning">Envio repetido</Badge>}
                   {r.anonymizedAt && <Badge tone="neutral">Anonimizada</Badge>}

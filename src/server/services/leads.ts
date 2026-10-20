@@ -194,7 +194,7 @@ export const QUIZ_PROVIDER = "crmlabs_quiz";
  * `afterInsert` roda dentro da mesma transação, depois de o lead existir.
  */
 export type IngestOptions = {
-  route?: Partial<Pick<Integration, "pipelineKind" | "stageId" | "salesStageId" | "assignMode" | "fixedAssigneeId" | "assigneeIds">> & { noAssign?: boolean };
+  route?: Partial<Pick<Integration, "pipelineKind" | "stageId" | "salesStageId" | "assignMode" | "fixedAssigneeId" | "assigneeIds" | "sourceId">> & { noAssign?: boolean };
   notify?: boolean;
   touchpointNote?: string;
   afterInsert?: (tx: DbOrTx, r: { lead: typeof leads.$inferSelect; contactId: string; returning: boolean }) => Promise<void>;

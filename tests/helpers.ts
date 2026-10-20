@@ -6,7 +6,7 @@ import { hashPassword } from "@/server/crypto";
 import type { Ctx } from "@/server/context";
 import type { Role } from "@/server/db/schema";
 import { eq } from "drizzle-orm";
-import type { InstagramApi } from "@/server/integrations/instagram/client";
+import type { InstagramApi, UserProfile } from "@/server/integrations/instagram/client";
 import { ProviderError } from "@/server/integrations/instagram/client";
 
 let seq = 0;
@@ -109,7 +109,7 @@ export class FakeInstagramApi implements InstagramApi {
     this.outcome();
     return { id: `reply.${++this.n}` };
   }
-  profiles: Record<string, { name?: string; username?: string }> = {};
+  profiles: Record<string, UserProfile> = {};
   async getUserProfile(t: string, id: string) {
     this.record("getUserProfile", t, id);
     return this.profiles[id] ?? { name: "Ana Souza", username: "anasouza" };

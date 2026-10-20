@@ -53,6 +53,12 @@ export type ConversationItem = { id: string; updatedTime?: string; participants:
 export type ConversationPage = { items: ConversationItem[]; next: string | null };
 export type MediaDetails = MediaItem & { likeCount?: number; commentsCount?: number; comments?: CommentItem[] };
 
+/**
+ * Perfil de quem conversa com a conta (API de perfil do usuário do Instagram Messaging).
+ * `followsBusiness` diz se a pessoa segue a conta agora; a Meta não informa desde quando.
+ */
+export type UserProfile = { name?: string; username?: string; profilePic?: string; followerCount?: number; followsBusiness?: boolean; businessFollowsUser?: boolean; verified?: boolean };
+
 export interface InstagramApi {
   exchangeCode(code: string): Promise<TokenResult>;
   longLivedToken(shortToken: string): Promise<TokenResult>;
@@ -63,7 +69,7 @@ export interface InstagramApi {
   sendText(token: string, recipientId: string, text: string, opts?: { humanAgent?: boolean }): Promise<SendResult>;
   sendPrivateReply(token: string, commentId: string, text: string): Promise<SendResult>;
   replyToComment(token: string, commentId: string, text: string): Promise<{ id: string }>;
-  getUserProfile(token: string, igsid: string): Promise<{ name?: string; username?: string; profilePic?: string }>;
+  getUserProfile(token: string, igsid: string): Promise<UserProfile>;
   findConversationMessages(token: string, igsid: string): Promise<ProviderMessage[]>;
   listMedia(token: string, limit: number): Promise<MediaItem[]>;
   listComments(token: string, mediaId: string, limit: number): Promise<CommentItem[]>;
@@ -238,12 +244,26 @@ export class GraphInstagramApi implements InstagramApi {
     });
   }
 
-  async getUserProfile(token: string, igsid: string) {
-    const r = await this.request<{ name?: string; username?: string; profile_pic?: string }>(
-      `${this.graph}/${encodeURIComponent(igsid)}?fields=name,username,profile_pic`,
-      { token },
-    );
-    return { name: r.name, username: r.username, profilePic: r.profile_pic };
+  async getUserProfile(token: string, igsid: string): Promise<UserProfile> {
+    type Raw = { name?: string; username?: string; profile_pic?: string; follower_count?: number; is_user_follow_business?: boolean; is_business_follow_user?: boolean; is_verified_user?: boolean };
+    const url = (fields: string) => `${this.graph}/${encodeURIComponent(igsid)}?fields=${fields}`;
+    let r: Raw;
+    try {
+      r = await this.request<Raw>(url("name,username,profile_pic,follower_count,is_user_follow_business,is_business_follow_user,is_verified_user"), { token });
+    } catch (e) {
+      // Algumas contas/permissões não liberam os campos de relacionamento: fica só com nome e foto.
+      if (e instanceof ProviderError && e.kind === "auth") throw e;
+      r = await this.request<Raw>(url("name,username,profile_pic"), { token });
+    }
+    return {
+      name: r.name,
+      username: r.username,
+      profilePic: r.profile_pic,
+      followerCount: typeof r.follower_count === "number" ? r.follower_count : undefined,
+      followsBusiness: typeof r.is_user_follow_business === "boolean" ? r.is_user_follow_business : undefined,
+      businessFollowsUser: typeof r.is_business_follow_user === "boolean" ? r.is_business_follow_user : undefined,
+      verified: typeof r.is_verified_user === "boolean" ? r.is_verified_user : undefined,
+    };
   }
 
   async findConversationMessages(token: string, igsid: string): Promise<ProviderMessage[]> {

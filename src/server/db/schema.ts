@@ -20,7 +20,7 @@ import {
   primaryKey,
   customType,
 } from "drizzle-orm/pg-core";
-import type { Answers, QuizDefinition } from "@/lib/quiz/types";
+import type { Answers, QuizDefinition, SourceLink, SubmissionOverride } from "@/lib/quiz/types";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
@@ -282,6 +282,13 @@ export const channelIdentities = pgTable(
     username: text("username"),
     /** Última consulta de nome/foto oficiais (null = ainda não consultado). */
     profileCheckedAt: ts("profile_checked_at"),
+    /** A pessoa segue a conta conectada (null = nunca consultado). A API não informa desde quando. */
+    followsBusiness: boolean("follows_business"),
+    /** Primeira consulta em que a pessoa já aparecia como seguidora. */
+    followFirstSeenAt: ts("follow_first_seen_at"),
+    followCheckedAt: ts("follow_checked_at"),
+    /** Seguidores do perfil da pessoa (quando a API informa). */
+    followerCount: integer("follower_count"),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("channel_identities_uq").on(t.orgId, t.accountId, t.externalId), index("channel_identities_contact_idx").on(t.contactId), index("channel_identities_ext_idx").on(t.orgId, t.externalId)],
@@ -1067,6 +1074,8 @@ export const quizForms = pgTable(
     leadFormId: uuid("lead_form_id").references(() => leadForms.id, { onDelete: "set null" }),
     /** Domínios autorizados a incorporar (vazio = qualquer site). */
     allowedDomains: text("allowed_domains").array().notNull().default(sql`'{}'::text[]`),
+    /** Links de origem (Stories, Grupo de WhatsApp, Tráfego…): editáveis sem publicar. */
+    links: jsonb("links").$type<SourceLink[]>().notNull().default([]),
     templateKey: text("template_key"),
     archivedAt: ts("archived_at"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
@@ -1207,6 +1216,15 @@ export const quizSubmissions = pgTable(
     utm: jsonb("utm").$type<Record<string, string>>().notNull().default({}),
     referrer: text("referrer"),
     route: jsonb("route"),
+    /** Link de origem usado (?origem=chave) e o nome dele no momento do envio. */
+    linkKey: text("link_key"),
+    linkLabel: text("link_label"),
+    /** Produto sugerido pelas regras (id e nome) e o detalhamento (motivos, requisitos, alertas). */
+    productId: text("product_id"),
+    productLabel: text("product_label"),
+    recommendation: jsonb("recommendation"),
+    /** Ajuste manual da equipe comercial (a sugestão original continua guardada). */
+    override: jsonb("override").$type<SubmissionOverride>(),
     ipHash: text("ip_hash"),
     userAgent: text("user_agent"),
     /** Envio repetido da mesma pessoa em pouco tempo: guardado, mas sem novo lead. */
@@ -1273,6 +1291,7 @@ export const quizEvents = pgTable(
     kind: text("kind").$type<"view" | "start" | "complete">().notNull(),
     channel: text("channel").notNull().default("link"),
     utmSource: text("utm_source"),
+    linkKey: text("link_key"),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("quiz_events_uq").on(t.formId, t.sessionId, t.kind), index("quiz_events_form_idx").on(t.formId, t.kind, t.createdAt)],
@@ -1291,6 +1310,8 @@ export const quizScoreHistory = pgTable(
     score: integer("score"),
     tierId: text("tier_id"),
     tierLabel: text("tier_label"),
+    /** Produto sugerido (ou ajustado) neste registro. */
+    productLabel: text("product_label"),
     reason: text("reason").notNull(),
     actorId: uuid("actor_id"),
     createdAt: createdAt(),

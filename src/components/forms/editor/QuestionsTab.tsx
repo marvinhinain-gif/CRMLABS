@@ -65,6 +65,8 @@ const OP_LABEL: Record<ConditionOp, string> = {
   answered: "foi respondida",
   gte: "é maior ou igual a",
   lte: "é menor ou igual a",
+  in: "é uma destas",
+  not_in: "não é nenhuma destas",
 };
 
 function opsFor(t: QuestionType): ConditionOp[] {
@@ -123,7 +125,7 @@ function SectionDrop({ id, children, empty }: { id: string; children: React.Reac
 
 // ---------- Editor de uma pergunta ----------
 
-function QuestionEditor({ q, index, all, update, options, scoringOn, normalize, total }: { q: QuizQuestion; index: number; all: QuizQuestion[]; update: (fn: (q: QuizQuestion) => void) => void; options: EditorProps["options"]; scoringOn: boolean; normalize: boolean; total: number }) {
+function QuestionEditor({ q, index, all, update, options, scoringOn, normalize, total, recOn }: { q: QuizQuestion; index: number; all: QuizQuestion[]; update: (fn: (q: QuizQuestion) => void) => void; options: EditorProps["options"]; scoringOn: boolean; normalize: boolean; total: number; recOn: boolean }) {
   const [newKey, setNewKey] = useState("");
   const isChoice = CHOICE_TYPES.includes(q.type);
   const previous = all.slice(0, index);
@@ -161,7 +163,7 @@ function QuestionEditor({ q, index, all, update, options, scoringOn, normalize, 
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="text-[14px] font-medium">Alternativas</span>
-            {q.scored && scoringOn && <span className="text-[12.5px] text-muted">Pontos por alternativa</span>}
+            <span className="text-[12.5px] text-muted">{[q.scored && scoringOn && "Pontos", recOn && "Sinal de intenção"].filter(Boolean).join(" · ")}</span>
           </div>
           <ul className="flex flex-col gap-2">
             {(q.options ?? []).map((o, oi) => (
@@ -184,6 +186,17 @@ function QuestionEditor({ q, index, all, update, options, scoringOn, normalize, 
                     value={o.points}
                     onChange={(e) => update((x) => void (x.options![oi].points = Math.max(-100, Math.min(100, Math.round(Number(e.target.value) || 0)))))}
                     className="w-20 text-right"
+                  />
+                )}
+                {recOn && (
+                  <Input
+                    aria-label={`Sinal da alternativa ${oi + 1}`}
+                    title="Intenção que esta alternativa indica (ex.: MENTORIA). Usado na recomendação; não soma pontos."
+                    value={o.signal ?? ""}
+                    placeholder="Sinal"
+                    maxLength={40}
+                    onChange={(e) => update((x) => void (x.options![oi].signal = e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_") || null))}
+                    className="w-32 font-mono text-[12.5px] uppercase"
                   />
                 )}
                 <div className="flex shrink-0">
@@ -622,7 +635,7 @@ export function QuestionsTab({ draft, update, options, open, setOpen }: EditorPr
                               </MenuContent>
                             </Menu>
                           </div>
-                          {isOpen && <QuestionEditor q={q} index={idx} all={all} update={qUpdate(q.id)} options={options} scoringOn={scoringOn} normalize={draft.scoring.normalize} total={total} />}
+                          {isOpen && <QuestionEditor q={q} index={idx} all={all} update={qUpdate(q.id)} options={options} scoringOn={scoringOn} normalize={draft.scoring.normalize} total={total} recOn={!!draft.recommendation?.enabled} />}
                         </div>
                       )}
                     </SortableQuestion>

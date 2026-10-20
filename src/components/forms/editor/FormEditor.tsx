@@ -10,7 +10,7 @@ import { api, ApiError, fetcher } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useQueryParam } from "@/lib/nav";
 import { definitionSchema } from "@/lib/quiz/schema";
-import type { QuizDefinition } from "@/lib/quiz/types";
+import type { QuizDefinition, SourceLink } from "@/lib/quiz/types";
 import { Button, ErrorState, LoadingState, NoPermission, Sheet, SheetClose, Tabs } from "@/components/ui";
 import { StatusBadge, type EditorOptions, type FormDetail } from "../shared";
 import { AppearanceTab } from "./AppearanceTab";
@@ -29,6 +29,8 @@ function draftError(d: QuizDefinition) {
   return issue?.message && !issue.message.startsWith("Invalid") ? issue.message : "Há um campo inválido. Confira cores, endereços e textos obrigatórios.";
 }
 
+const stripUrls = (l: FormDetail["links"]): SourceLink[] => (l ?? []).map(({ url: _url, ...x }) => x);
+
 export function FormEditor({ id }: { id: string }) {
   const me = useMe();
   const router = useRouter();
@@ -39,6 +41,7 @@ export function FormEditor({ id }: { id: string }) {
   const [draft, setDraft] = useState<QuizDefinition | null>(null);
   const [meta, setMetaState] = useState<Meta>({ name: "", slug: "" });
   const [domains, setDomainsState] = useState<string[]>([]);
+  const [links, setLinksState] = useState<SourceLink[]>([]);
   const [base, setBase] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -53,6 +56,7 @@ export function FormEditor({ id }: { id: string }) {
     setDraft(structuredClone(f.draft));
     setMetaState({ name: f.name, slug: f.slug });
     setDomainsState(f.allowedDomains);
+    setLinksState(stripUrls(f.links));
     setBase(f.draftUpdatedAt);
     setDirty(false);
     setSlugError(undefined);
@@ -80,6 +84,10 @@ export function FormEditor({ id }: { id: string }) {
     setDomainsState(v);
     setDirty(true);
   };
+  const setLinks = (v: SourceLink[]) => {
+    setLinksState(v);
+    setDirty(true);
+  };
 
   const save = useCallback(
     async (quiet = false) => {
@@ -91,11 +99,12 @@ export function FormEditor({ id }: { id: string }) {
       }
       setSaving(true);
       try {
-        const f = await api.patch<FormDetail>(`/api/forms/${form.id}`, { name: meta.name, slug: meta.slug, draft, allowedDomains: domains, baseUpdatedAt: base });
+        const f = await api.patch<FormDetail>(`/api/forms/${form.id}`, { name: meta.name, slug: meta.slug, draft, allowedDomains: domains, links, baseUpdatedAt: base });
         await mutate(f, { revalidate: false });
         setBase(f.draftUpdatedAt);
         setMetaState({ name: f.name, slug: f.slug });
         setDomainsState(f.allowedDomains);
+        setLinksState(stripUrls(f.links));
         setDirty(false);
         if (!quiet) toast.success("Rascunho salvo. O que está no ar só muda ao publicar.");
         return f;
@@ -111,7 +120,7 @@ export function FormEditor({ id }: { id: string }) {
         setSaving(false);
       }
     },
-    [draft, form, meta, domains, base, mutate, hydrate],
+    [draft, form, meta, domains, links, base, mutate, hydrate],
   );
 
   const publish = async () => {
@@ -219,7 +228,7 @@ export function FormEditor({ id }: { id: string }) {
             {t === "perguntas" && <QuestionsTab draft={draft} update={update} options={options} open={openQuestion} setOpen={setOpenQuestion} />}
             {t === "aparencia" && <AppearanceTab draft={draft} update={update} options={options} />}
             {t === "configuracoes" && <SettingsTab draft={draft} update={update} options={options} meta={meta} setMeta={setMeta} slugError={slugError} />}
-            {t === "publicacao" && <PublishTab form={form} dirty={dirty} busy={publishing} onPublish={publish} onUnpublish={unpublish} domains={domains} setDomains={setDomains} />}
+            {t === "publicacao" && <PublishTab form={form} dirty={dirty} busy={publishing} onPublish={publish} onUnpublish={unpublish} domains={domains} setDomains={setDomains} links={links} setLinks={setLinks} sources={options.sources} />}
           </fieldset>
         </div>
         <aside className="hidden xl:block">
