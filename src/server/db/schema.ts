@@ -848,7 +848,7 @@ export const leadForms = pgTable(
     /** Social sellers que recebem os leads em rodízio (vazio = todos os sellers ativos). */
     assigneeIds: jsonb("assignee_ids").$type<string[]>().notNull().default([]),
     rotation: integer("rotation").notNull().default(0),
-    /** Etapa do Social Seller onde o contato entra (null = não cria cartão). */
+    /** Etapa do Social Seller sugerida para o lead (ele só entra no Kanban pelo botão "Adicionar ao CRM"). */
     stageId: uuid("stage_id"),
     active: boolean("active").notNull().default(true),
     /** Token do webhook: hash para busca e cópia criptografada para o administrador ver de novo. */
@@ -914,6 +914,8 @@ export const leads = pgTable(
     /** Valores dos campos personalizados: { [customFieldId]: valor } */
     custom: jsonb("custom").$type<Record<string, string>>().notNull().default({}),
     opportunityId: uuid("opportunity_id"),
+    /** Etapa do Social Seller sugerida pelo formulário: o lead só entra no Kanban quando alguém aperta "Adicionar ao CRM". */
+    suggestedStageId: uuid("suggested_stage_id").references(() => pipelineStages.id, { onDelete: "set null" }),
     appointmentId: uuid("appointment_id"),
     contactedAt: ts("contacted_at"),
     /** Lead score por produto escolhido à mão (MENTORIA, CONSULTORIA, SESSAO, NAO_ICP). null = segue o quiz. */

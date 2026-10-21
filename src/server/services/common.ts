@@ -8,6 +8,8 @@ export const STAGE_COLORS = ["green", "blue", "yellow", "lilac", "pink", "orange
 export type StageColor = (typeof STAGE_COLORS)[number];
 
 export const NOVO_INTERESSADO_KEY = "novo-interessado";
+/** Coluna do Kanban do Social Seller para quem não é do perfil de cliente ideal. */
+export const FORA_DO_ICP_KEY = "fora-do-icp";
 
 export const DEFAULT_RELATIONSHIP_STAGES: { key: string; name: string; color: StageColor }[] = [
   { key: "engajado-1", name: "Engajado #1", color: "green" },
@@ -16,6 +18,7 @@ export const DEFAULT_RELATIONSHIP_STAGES: { key: string; name: string; color: St
   { key: NOVO_INTERESSADO_KEY, name: "Novo interessado", color: "lilac" },
   { key: "em-qualificacao", name: "Em qualificação", color: "pink" },
   { key: "encaminhado-closer", name: "Encaminhado ao closer", color: "teal" },
+  { key: FORA_DO_ICP_KEY, name: "Fora do ICP", color: "gray" },
 ];
 
 /** Funil comercial padrão da organização (oportunidades ainda sem closer). */
