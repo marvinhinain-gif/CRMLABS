@@ -3,6 +3,7 @@ import { z } from "zod";
 import Papa from "papaparse";
 import { db, type DbOrTx } from "../db";
 import {
+  checkoutOrders,
   appointments,
   channelIdentities,
   connectedAccounts,
@@ -58,7 +59,7 @@ export const listContactsSchema = z.object({
   q: z.string().trim().max(100).optional(),
   ownerId: z.string().uuid().optional(),
   tagId: z.string().uuid().optional(),
-  source: z.enum(["manual", "instagram_dm", "instagram_comment", "import"]).optional(),
+  source: z.enum(["manual", "instagram_dm", "instagram_comment", "import", "lead_form", "checkout"]).optional(),
   stageId: z.string().uuid().optional(),
   /** Contatos cuja primeira entrada em "Novo interessado" ocorreu no período (mesma regra do dashboard). */
   novosInteressados: z.enum(["today", "7d", "30d", "month", "last_month"]).optional(),
@@ -512,7 +513,7 @@ export async function mergeContacts(ctx: Ctx, primaryId: string, secondaryId: st
       .set({ contactId: primary.id })
       .where(and(eq(relationshipEntries.contactId, secondary.id), sql`${relationshipEntries.closedAt} is not null`));
 
-    for (const table of [opportunities, tasks, notes, appointments, socialComments] as const) {
+    for (const table of [opportunities, tasks, notes, appointments, socialComments, checkoutOrders] as const) {
       await tx.update(table).set({ contactId: primary.id } as never).where(eq(table.contactId, secondary.id));
     }
     const secTags = await tx.select().from(contactTags).where(eq(contactTags.contactId, secondary.id));

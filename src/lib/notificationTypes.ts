@@ -6,7 +6,7 @@ export type NotifyPrefKey = "leads" | "leadStage" | "meeting" | "sale" | "messag
 
 export const NOTIFY_PREFS: { key: NotifyPrefKey; label: string; description: string; adminOnly?: boolean }[] = [
   { key: "leads", label: "Novos leads de anúncio", description: "Quando um lead chega para você confirmar a reunião." },
-  { key: "sale", label: "Venda fechada", description: "Valor, vendedor (closer) e social seller." },
+  { key: "sale", label: "Venda fechada", description: "Valor, vendedor (closer) e social seller; e cada venda paga na Cakto." },
   { key: "meeting", label: "Reunião agendada", description: "Quando alguém agenda uma reunião com um lead.", adminOnly: true },
   { key: "leadStage", label: "Lead mudou de etapa", description: "Movimentos no funil de relacionamento e no comercial.", adminOnly: true },
   { key: "messages", label: "Novas mensagens", description: "Mensagens do Direct em conversas suas." },
@@ -23,6 +23,7 @@ export const TYPE_TO_PREF: Record<string, NotifyPrefKey> = {
   "opportunity.stage_changed": "leadStage",
   "meeting.scheduled": "meeting",
   "sale.won": "sale",
+  "checkout.sale": "sale",
   "message.received": "messages",
   "task.assigned": "assignments",
   "meeting.assigned": "assignments",

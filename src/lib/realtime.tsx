@@ -12,6 +12,7 @@ const TOPIC_KEYS: Record<string, string[]> = {
   tasks: ["/api/tasks", "/api/dashboard", "/api/contacts/", "/api/commercial"],
   opportunities: ["/api/opportunities", "/api/commercial", "/api/appointments", "/api/agenda", "/api/dashboard", "/api/contacts/", "/api/leads", "/api/tasks"],
   leads: ["/api/leads", "/api/me", "/api/contacts", "/api/board", "/api/appointments", "/api/agenda", "/api/dashboard"],
+  sales: ["/api/dashboard/checkout", "/api/checkout"],
   notifications: ["/api/notifications"],
   settings: ["/api/integrations", "/api/settings", "/api/me", "/api/stages", "/api/board"],
 };

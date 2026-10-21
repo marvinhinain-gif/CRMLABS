@@ -15,6 +15,7 @@ import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { NewContactDialog } from "@/components/contacts/NewContactDialog";
 import { CountUp } from "@/components/motion/CountUp";
 import { OpsSection } from "./OpsSection";
+import { CheckoutSales } from "./CheckoutSales";
 
 type Dash = {
   period: { key: string; start: string; end: string };
@@ -599,6 +600,7 @@ export function DashboardView() {
             <Kpi i={3} icon={<Flag />} label="Reuniões realizadas" value={<CountUp value={data.kpis.done} delay={210} />} sub={data.kpis.noShow ? `${data.kpis.noShow} não compareceu` : undefined} tip="Reuniões marcadas como realizadas (ou movidas para “Reunião realizada” no Kanban)." />
             <Kpi i={4} icon={<MessagesSquare />} label="Contatos realizados" value={<CountUp value={data.kpis.contacts} delay={280} />} tip="Pessoas com quem a equipe falou no período: mensagem enviada, lead marcado como “Falei”, cartão movido ou reunião marcada. Cada pessoa conta uma vez por dia." />
           </div>
+          {isManager && <CheckoutSales query={qs({ period, from: period === "custom" ? from : "", to: period === "custom" ? to : "", sourceId: values.sourceId, campaign: values.campaign })} isAdmin={me.user.role === "admin"} />}
           <Conversions k={data.kpis} c={data.conversions} />
           {isManager && (
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 [&>*]:min-w-0">

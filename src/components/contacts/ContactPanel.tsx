@@ -83,7 +83,7 @@ type Detail = {
   history: { id: string; entityType: string; fromStageName: string | null; toStageName: string | null; reason: string | null; createdAt: string; actorName: string | null }[];
 };
 
-const SOURCE_LABEL: Record<string, string> = { manual: "Cadastro manual", instagram_dm: "Direct do Instagram", instagram_comment: "Comentário no Instagram", import: "Importação CSV" };
+const SOURCE_LABEL: Record<string, string> = { manual: "Cadastro manual", instagram_dm: "Direct do Instagram", instagram_comment: "Comentário no Instagram", import: "Importação CSV", checkout: "Compra na Cakto" };
 
 type Tab = "dados" | "origem" | "formularios" | "tarefas" | "notas" | "historico";
 

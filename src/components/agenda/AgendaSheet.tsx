@@ -21,7 +21,7 @@ export const APPT_STATUS = {
   canceled: { label: "Cancelada", cls: "bg-[#eef2f1] text-[#46565f]" },
 } as const;
 
-const SOURCE: Record<string, string> = { manual: "Cadastro manual", instagram_dm: "Direct do Instagram", instagram_comment: "Comentário no Instagram", import: "Importação", lead_form: "Formulário de anúncio" };
+const SOURCE: Record<string, string> = { manual: "Cadastro manual", instagram_dm: "Direct do Instagram", instagram_comment: "Comentário no Instagram", import: "Importação", lead_form: "Formulário de anúncio", checkout: "Compra na Cakto" };
 
 type Detail = {
   id: string;
