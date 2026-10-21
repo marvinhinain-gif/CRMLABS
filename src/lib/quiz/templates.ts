@@ -99,7 +99,8 @@ export function blankDefinition(title = "Novo formulário"): QuizDefinition {
     appearance: { ...DEFAULT_APPEARANCE },
     settings: {
       title,
-      description: null,
+      // Com descrição, o formulário abre na tela do cartão (marca, título, botão e "N perguntas").
+      description: "Responda algumas perguntas rápidas para que nossa equipe entenda o seu momento.",
       welcome: null,
       completion: DEFAULT_COMPLETION,
       redirectUrl: null,

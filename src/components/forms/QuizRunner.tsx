@@ -559,17 +559,33 @@ function Brand({ orgName, logo, size }: { orgName: string; logo: string | null; 
     // eslint-disable-next-line @next/next/no-img-element
     return <img src={logo} alt={orgName} className={lg ? "h-16 w-auto max-w-[220px] object-contain sm:h-20" : "h-8 w-auto max-w-[160px] object-contain"} />;
   }
+  const axion = orgName.trim().toLowerCase() === "axion";
   const initial = (orgName.trim()[0] ?? "").toUpperCase();
   return (
-    <span className={lg ? "flex flex-col items-center gap-2" : "flex items-center gap-2.5"} aria-label={orgName} role="img">
-      <span aria-hidden className={`relative font-extrabold leading-none tracking-[-0.06em] ${lg ? "text-[64px] sm:text-[76px]" : "text-[26px]"}`}>
-        {initial}
-        <span className={`absolute rounded-full ${lg ? "-right-3 bottom-[0.06em] size-3.5 sm:size-4" : "-right-1.5 bottom-[0.06em] size-1.5"}`} style={{ background: "var(--q-primary)" }} />
-      </span>
+    <span className={lg ? "flex flex-col items-center gap-3" : "flex items-center gap-2.5"} aria-label={orgName} role="img">
+      {axion ? (
+        <AxionMark className={lg ? "h-[64px] w-auto sm:h-[76px]" : "h-[24px] w-auto"} />
+      ) : (
+        <span aria-hidden className={`relative font-extrabold leading-none tracking-[-0.06em] ${lg ? "text-[64px] sm:text-[76px]" : "text-[26px]"}`}>
+          {initial}
+          <span className={`absolute rounded-full ${lg ? "-right-3 bottom-[0.06em] size-3.5 sm:size-4" : "-right-1.5 bottom-[0.06em] size-1.5"}`} style={{ background: "var(--q-primary)" }} />
+        </span>
+      )}
       <span aria-hidden className={`font-bold ${lg ? "pl-[0.34em] text-[22px] tracking-[0.34em] sm:text-[26px]" : "ml-1 text-[13px] tracking-[0.3em]"}`}>
         {orgName.toUpperCase()}
       </span>
     </span>
+  );
+}
+
+/** Símbolo da AXION: o "A" de topo reto com a barra destacada e o ponto dourado. */
+function AxionMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 128 100" className={className} aria-hidden>
+      <path d="M48.9 0H74.1L111 100H88.7L60.7 24L23.5 100H0Z" fill="currentColor" />
+      <path d="M47.8 58.6H76L84 79.6H37.5Z" fill="currentColor" />
+      <circle cx="115" cy="88" r="12" fill="var(--q-primary)" />
+    </svg>
   );
 }
 

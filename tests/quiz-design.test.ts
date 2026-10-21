@@ -34,3 +34,11 @@ describe("Design padrão dos quizzes (Cartão AXION)", () => {
     expect(definitionSchema.safeParse(def).success).toBe(false);
   });
 });
+
+describe("Formulário em branco", () => {
+  it("já abre na tela do cartão, com descrição", () => {
+    const def = blankDefinition();
+    expect(def.settings.description).toBeTruthy();
+    expect(def.appearance.frame).toBe("card");
+  });
+});
