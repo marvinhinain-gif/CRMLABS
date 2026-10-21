@@ -12,6 +12,7 @@ import { useOpenContact, useQueryParam } from "@/lib/nav";
 import { shortAgo } from "@/lib/format";
 import { Avatar, Button, cx, EmptyState, ErrorState, LoadingState } from "@/components/ui";
 import { ChannelBadge, InstagramGlyph } from "@/components/ui/ChannelIcon";
+import { SendFormMenu } from "@/components/forms/SendFormMenu";
 
 type PostRow = { postId: string; caption: string | null; thumbnailUrl: string | null; mediaType: string | null; permalink: string | null; postedAt: string | null; pending: number; total: number; lastAt: string; lastPendingAt: string | null; authors: string[]; authorsCount: number };
 type PostList = { rows: PostRow[]; hasMore: boolean; pendingTotal: number };
@@ -114,6 +115,7 @@ function ReplyBox({ c, kind, onClose, onSent }: { c: Comment; kind: "public" | "
         {kind === "private" && <span className="text-[11.5px]">· uma por comentário, até 7 dias</span>}
       </p>
       <div className="flex items-end gap-2">
+        {kind === "private" && <SendFormMenu handle={c.authorUsername} onPick={(link) => setText((t) => (t ? `${t}\n${link}` : link))} />}
         <textarea
           autoFocus
           aria-label="Sua resposta"

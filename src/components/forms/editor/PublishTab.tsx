@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { CircleAlert, ExternalLink, Inbox, Link2, Plus, RefreshCw, Rocket, Trash2, Undo2 } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { personalLink } from "@/lib/quiz/instagramLink";
 import { LINK_KIND_LABEL, type LinkKind, type SourceLink } from "@/lib/quiz/types";
 import { Badge, Button, Dialog, Field, IconButton, Input, Select } from "@/components/ui";
 import { CopyField, EmbedCodes, StatusBadge, type EditorOptions, type FormDetail } from "../shared";
@@ -43,6 +44,31 @@ const keyOf = (s: string) =>
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/--+/g, "-")
     .slice(0, 40);
+
+/** Instagram de quem responde, sem perguntar: link personalizado com ?ig= e origem automática. */
+function InstagramPanel({ form }: { form: FormDetail }) {
+  const direct = form.links.find((l) => l.kind === "direct")?.key ?? null;
+  return (
+    <Panel
+      title="Instagram de quem responde (sem perguntar)"
+      description="O Instagram não conta para nenhum site quem clicou num link comum (Stories, bio, anúncio). Por isso o @ chega de duas formas:"
+    >
+      <ul className="flex list-disc flex-col gap-2 pl-5 text-[13.5px] text-ink">
+        <li>
+          <b>Pelo Direct do CRM:</b> nas Conversas e na resposta privada de comentários, o botão <b>Enviar formulário</b> coloca na mensagem um link com o @ da pessoa. A resposta chega
+          ligada ao Instagram dela e ao histórico do contato, mesmo sem a pergunta de Instagram.
+        </li>
+        <li>
+          <b>Por automação (ex.: ManyChat):</b> acrescente <code className="rounded bg-page px-1">?ig=</code> e o @ da pessoa no fim do link, como em{" "}
+          <code className="break-all rounded bg-page px-1">{personalLink(form.publicUrl, "fulano", direct)}</code>, usando a variável de usuário do Instagram da sua ferramenta.
+        </li>
+        <li>
+          <b>Link comum aberto pelo app do Instagram:</b> não dá para saber o @, mas a resposta fica com origem <b>Instagram</b> automaticamente (quando o link não tem outra UTM).
+        </li>
+      </ul>
+    </Panel>
+  );
+}
 
 /** Links de origem: o mesmo formulário divulgado em Stories, grupos, anúncios… cada um com sua origem no CRM. */
 function LinksPanel({ form, links, setLinks, sources }: { form: FormDetail; links: SourceLink[]; setLinks: (v: SourceLink[]) => void; sources: EditorOptions["sources"] }) {
@@ -239,6 +265,8 @@ export function PublishTab({
       </Panel>
 
       <LinksPanel form={form} links={links} setLinks={setLinks} sources={sources} />
+
+      <InstagramPanel form={form} />
 
       <Panel title="Sites autorizados a incorporar" description="Sem nenhum domínio, o formulário pode ser incorporado em qualquer site. Com domínios, só neles.">
         <TagInput value={domains} onChange={setDomains} placeholder="meusite.com.br, *.minhaempresa.com" />

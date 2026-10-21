@@ -28,6 +28,7 @@ import { logger } from "../logger";
 import { cleanText, notifyUser } from "./common";
 import { cleanUtm, ingestLead, normalizeEmail, normalizePhone, type IngestOptions } from "./leads";
 import { allQuestions, classify, computeScore, displayValue, parseInstagramOrUrl, publicDefinition, recommend, validateAnswers, type RecommendationResult } from "@/lib/quiz/engine";
+import { cameFromInstagram, instagramUtm, linkHandle } from "@/lib/quiz/instagramLink";
 import { CHOICE_TYPES, PRIVACY_KIND_LABEL, type Answers, type QuizDefinition, type RecProduct, type Route, type SourceLink, type Tier } from "@/lib/quiz/types";
 
 // ---------- Leitura ----------
@@ -98,19 +99,26 @@ export const eventSchema = z.object({
   embed: z.boolean().default(false),
   utmSource: z.string().trim().max(120).optional(),
   origem: z.string().trim().toLowerCase().max(40).optional(),
+  ig: z.string().trim().max(100).optional(),
+  referrer: z.string().max(500).optional(),
 });
 
 /** Link de origem (?origem=chave) cadastrado no formulário; chave desconhecida é ignorada. */
 export const findLink = (links: SourceLink[] | null | undefined, key: string | null | undefined) => (key ? (links ?? []).find((l) => l.key === key) ?? null : null);
 
-export async function recordEvent(slug: string, raw: unknown, ip: string | null) {
+export async function recordEvent(slug: string, raw: unknown, ip: string | null, userAgent: string | null = null) {
   const input = eventSchema.parse(raw);
   if (!eventAllowed(ip)) return { ok: true };
   const { form, version } = await liveForm(slug);
   const link = findLink(form.links, input.origem);
+  const utmSource = instagramUtm(
+    { ...(input.utmSource || link?.utmSource ? { utm_source: input.utmSource || link!.utmSource! } : {}) },
+    linkHandle(input.ig),
+    cameFromInstagram(userAgent, input.referrer),
+  ).utm_source;
   await db
     .insert(quizEvents)
-    .values({ orgId: form.orgId, formId: form.id, versionId: version.id, sessionId: input.sessionId, kind: input.kind, channel: input.embed ? "embed" : "link", utmSource: cleanText(input.utmSource ?? link?.utmSource ?? undefined, 120), linkKey: link?.key ?? null })
+    .values({ orgId: form.orgId, formId: form.id, versionId: version.id, sessionId: input.sessionId, kind: input.kind, channel: input.embed ? "embed" : "link", utmSource: cleanText(utmSource, 120), linkKey: link?.key ?? null })
     .onConflictDoNothing();
   return { ok: true };
 }
@@ -126,6 +134,8 @@ export const submitSchema = z.object({
   embed: z.boolean().default(false),
   /** Chave do link de origem (?origem=stories). */
   origem: z.string().trim().toLowerCase().max(40).optional(),
+  /** @ do Instagram vindo do link personalizado (?ig=fulano). */
+  ig: z.string().trim().max(100).optional(),
   /** Campo invisível: robôs costumam preencher. */
   website: z.string().max(200).optional().default(""),
   startedAt: z.number().optional(),
@@ -248,6 +258,10 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
   if (await hitLimit(`quiz:${ipHash}`, SUBMIT_LIMIT_PER_HOUR)) throw new AppError("rate_limited", "Muitos envios seguidos deste aparelho. Tente novamente mais tarde.");
 
   const who = extractIdentity(def, answers);
+  // Sem pergunta de Instagram (ou sem resposta), vale o @ do link personalizado.
+  const linkIg = linkHandle(input.ig);
+  const igFromLink = !who.instagram && !!linkIg;
+  who.instagram ??= linkIg;
   if (!who.phone && !who.email && !who.instagram) throw invalid("Informe um WhatsApp, e-mail ou Instagram para contato.", { fields: { _contact: "Informe um contato." } });
   const name = who.name ?? who.email ?? who.phone ?? (who.instagram ? `@${who.instagram}` : "Lead sem nome");
 
@@ -257,12 +271,17 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
   const route = destinationOf(def, scored);
   const link = findLink(form.links, input.origem);
   // O link completa as UTMs que a página não trouxe (as da página têm prioridade).
-  const utm = cleanUtm({
-    ...(link?.utmSource ? { utm_source: link.utmSource } : {}),
-    ...(link?.utmMedium ? { utm_medium: link.utmMedium } : {}),
-    ...(link?.utmCampaign ? { utm_campaign: link.utmCampaign } : {}),
-    ...Object.fromEntries(Object.entries(input.utm ?? {}).filter(([, v]) => v)),
-  });
+  // Sem UTM nenhuma, o Instagram ainda aparece como origem (link com @ ou aberto pelo app).
+  const utm = instagramUtm(
+    cleanUtm({
+      ...(link?.utmSource ? { utm_source: link.utmSource } : {}),
+      ...(link?.utmMedium ? { utm_medium: link.utmMedium } : {}),
+      ...(link?.utmCampaign ? { utm_campaign: link.utmCampaign } : {}),
+      ...Object.fromEntries(Object.entries(input.utm ?? {}).filter(([, v]) => v)),
+    }),
+    linkIg,
+    cameFromInstagram(meta.userAgent, input.referrer),
+  );
   const channel = input.embed ? "embed" : "link";
   const now = new Date();
 
@@ -366,7 +385,7 @@ export async function submitQuiz(slug: string, raw: unknown, meta: { ip: string 
     { name, phone: who.phone, email: who.email, instagram: who.instagram, answers: leadAnswers, custom, productText: null, preferredAt: null, preferredText: null, utm, channel: "crmlabs_quiz" },
     {
       ...routeToIngest(route, link?.sourceId),
-      touchpointNote: `Respondeu “${def.settings.title}”${link ? ` (${link.label})` : channel === "embed" ? " (site)" : ""}.`,
+      touchpointNote: `Respondeu “${def.settings.title}”${link ? ` (${link.label})` : channel === "embed" ? " (site)" : ""}.${igFromLink ? ` Instagram @${linkIg} identificado pelo link.` : ""}`,
       afterInsert: async (tx, r) => {
         const sub = await recordSubmission(tx, { contactId: r.contactId, leadId: r.lead.id, duplicateOf: null });
         submissionId = sub.id;

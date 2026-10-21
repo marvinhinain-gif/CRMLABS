@@ -714,3 +714,18 @@ export function originLabel(channel: string, utmSource: string | null | undefine
   return channel === "embed" ? "Site (incorporado)" : "Link direto";
 }
 
+
+// ---------- Enviar para uma pessoa (Direct, resposta privada) ----------
+
+/**
+ * Formulários publicados para mandar a alguém pelo Direct. Qualquer pessoa da equipe pode enviar o link;
+ * o link personalizado (?ig=@) é montado na tela. Usa o link de origem "Direct", se houver um.
+ */
+export async function shareableForms(ctx: Ctx) {
+  const rows = await db
+    .select({ id: quizForms.id, name: quizForms.name, slug: quizForms.slug, links: quizForms.links })
+    .from(quizForms)
+    .where(and(eq(quizForms.orgId, ctx.orgId), eq(quizForms.status, "published")))
+    .orderBy(desc(quizForms.updatedAt));
+  return rows.map((r) => ({ id: r.id, name: r.name, url: publicUrl(r.slug), origem: (r.links ?? []).find((l) => l.kind === "direct")?.key ?? null }));
+}

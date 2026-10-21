@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Check, CircleAlert, LoaderCircle, Maximize2, Pencil } from "lucide-react";
 import { checkAnswer, displayValue, isEmpty, visibleQuestionIds } from "@/lib/quiz/engine";
+import { IG_PARAM } from "@/lib/quiz/instagramLink";
 import type { AnswerValue, Answers, Appearance, PublicDefinition, PublicQuestion } from "@/lib/quiz/types";
 
 const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "fbclid", "gclid", "ad_id", "ad_name", "adset_name", "campaign_name", "form_name", "platform"];
@@ -150,7 +151,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
     } catch {
       session.current = newSessionId();
     }
-    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "view", embed, utmSource: utm().utm_source, origem: origem() }) }).catch(() => {});
+    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "view", embed, utmSource: utm().utm_source, origem: origem(), ig: ig(), referrer: document.referrer.slice(0, 500) || undefined }) }).catch(() => {});
     // Retoma de onde parou (atualizou a página, voltou de outra aba).
     const saved = loadState(slug);
     if (saved) {
@@ -201,7 +202,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
   const markStarted = useCallback(() => {
     if (!live || started.current) return;
     started.current = true;
-    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "start", embed, utmSource: utm().utm_source, origem: origem() }) }).catch(() => {});
+    void fetch(`/api/public/quiz/${slug}/event`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: session.current, kind: "start", embed, utmSource: utm().utm_source, origem: origem(), ig: ig(), referrer: document.referrer.slice(0, 500) || undefined }) }).catch(() => {});
   }, [live, slug, embed]);
 
   const setValue = (id: string, v: AnswerValue) => {
@@ -273,7 +274,7 @@ export function QuizRunner({ definition: def, slug, orgName, mode = "live", embe
       const res = await fetch(`/api/public/quiz/${slug}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: session.current, answers: payload, consent: { notice, marketing }, utm: utm(), origem: origem(), referrer: document.referrer || undefined, embed, website, startedAt: startedAt.current }),
+        body: JSON.stringify({ sessionId: session.current, answers: payload, consent: { notice, marketing }, utm: utm(), origem: origem(), ig: ig(), referrer: document.referrer.slice(0, 500) || undefined, embed, website, startedAt: startedAt.current }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -507,6 +508,12 @@ function origem() {
   if (typeof window === "undefined") return undefined;
   const v = new URLSearchParams(window.location.search).get("origem");
   return v && /^[a-z0-9-]{1,40}$/i.test(v) ? v.toLowerCase() : undefined;
+}
+
+/** @ do Instagram no link personalizado (?ig=fulano), gerado pelo CRM no Direct. */
+function ig() {
+  if (typeof window === "undefined") return undefined;
+  return new URLSearchParams(window.location.search).get(IG_PARAM)?.slice(0, 100) || undefined;
 }
 
 function utm() {
