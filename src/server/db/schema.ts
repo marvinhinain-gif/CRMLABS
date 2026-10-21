@@ -1406,3 +1406,19 @@ export const engagementSettings = pgTable("engagement_settings", {
   updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
   updatedAt: updatedAt(),
 });
+
+/**
+ * Classificação de ICP feita pela equipe no Top Engajados, por identidade (IGSID ou "contact:<id>").
+ * Quem é marcado como "não é ICP" sai do ranking (a vaga passa para a próxima pessoa); dá para desfazer.
+ */
+export const engagementIcp = pgTable(
+  "engagement_icp",
+  {
+    orgId: orgRef(),
+    actorKey: text("actor_key").notNull(),
+    isIcp: boolean("is_icp").notNull(),
+    decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: ts("decided_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.orgId, t.actorKey] })],
+);
