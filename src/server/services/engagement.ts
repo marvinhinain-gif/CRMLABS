@@ -11,7 +11,7 @@
 import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { channelIdentities, contacts, conversations, engagementEvents, engagementSettings, messages, socialComments, socialPosts, users } from "../db/schema";
+import { channelIdentities, contacts, conversations, engagementEvents, engagementIcp, engagementSettings, messages, socialComments, socialPosts, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { can, commentScope, conversationScope } from "../permissions";
 import { AppError, forbidden, notFound } from "../errors";
@@ -249,9 +249,11 @@ export const rankingSchema = z.object({
   period: z.enum(PERIODS).default("week"),
   kind: z.enum(KIND_FILTERS).default("all"),
   q: z.string().trim().max(80).optional(),
+  /** in: ranking normal (sem quem não é ICP) · out: só quem foi marcado como "não é ICP". */
+  icp: z.enum(["in", "out"]).default("in"),
 });
 
-type Totals = { people: number; interactions: number; comments: number; directs: number };
+type Totals = { people: number; interactions: number; comments: number; directs: number; outOfIcp: number };
 
 export type RankedPerson = {
   key: string;
@@ -268,7 +270,11 @@ export type RankedPerson = {
   ownerId: string | null;
   ownerName: string | null;
   status: CrmStatus;
+  /** ICP marcado pela equipe: "yes" é ICP, "no" não é (fica fora do ranking), null ainda não classificado. */
+  icp: IcpMark;
 };
+
+export type IcpMark = "yes" | "no" | null;
 
 function periodStart(period: EngagementPeriod, tz: string) {
   const unit = { today: "day", week: "week", month: "month" }[period];
@@ -282,7 +288,7 @@ function periodStart(period: EngagementPeriod, tz: string) {
  *  3. ordena pelo score das ações do filtro escolhido.
  * Interações apagadas pelo remetente e comentários ocultos/excluídos pela conta não pontuam.
  */
-async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q?: string; personKey?: string; limit: number }) {
+async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q?: string; personKey?: string; limit: number; outOfIcp?: boolean }) {
   const cfg = await getEngagementConfig(ctx.orgId);
   const tz = ctx.org.timezone;
   const chosen = KINDS_BY_FILTER[f.kind];
@@ -313,10 +319,11 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
         and (e.comment_id is null or (sc.deleted_at is null and sc.hidden_at is null))
     ),
     per_actor as (
-      select actor_key, max(occurred_at) as last_at,
+      select ev.actor_key, max(occurred_at) as last_at,
+        (select ei.is_icp from engagement_icp ei where ei.org_id = ${ctx.orgId} and ei.actor_key = ev.actor_key) as is_icp,
         (array_agg(username order by occurred_at desc) filter (where username is not null))[1] as username,
         ${sql.join(kindCols, sql`, `)}, ${sql.join(cappedCols, sql`, `)}
-      from ev group by actor_key
+      from ev group by ev.actor_key
     ),
     mapped as (
       -- Identidade oficial → contato (pelo índice de channel_identities); conversa sem identidade → "contact:<id>".
@@ -337,6 +344,8 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
       select person_key, max(contact_id::text)::uuid as contact_id, max(last_at) as last_at,
         (array_agg(username order by last_at desc) filter (where username is not null))[1] as username,
         array_agg(actor_key) as actor_keys,
+        -- "Não é ICP" em qualquer identidade da pessoa prevalece.
+        case when bool_or(is_icp = false) then 'no' when bool_or(is_icp) then 'yes' end as icp,
         ${sql.join(sumCols, sql`, `)}, ${sql.join(cappedSums, sql`, `)}
       from mapped group by person_key
     ),
@@ -344,7 +353,7 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
       select p.*, (${fScore}) as f_score, (${fCount}) as f_count, (${fCapped}) as f_capped,
         row_number() over (order by (${fScore}) desc, (${fCount}) desc, p.last_at desc, p.person_key) as pos
       from people p
-      where (${fScore}) > 0
+      where (${fScore}) > 0 and ${f.outOfIcp ? sql`p.icp = 'no'` : sql`p.icp is distinct from 'no'`}
     ),
     lim as (
       select r.*, c.name, c.username as contact_username, c.avatar_url, c.owner_id
@@ -376,7 +385,8 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
         'people', count(*),
         'interactions', coalesce(sum(${sql.join(TRACKED_KINDS.map((k) => sql.raw(`n_${k}`)), sql` + `)}), 0),
         'comments', coalesce(sum(n_comment), 0),
-        'directs', coalesce(sum(n_dm + n_dm_share + n_story_reply + n_story_mention), 0)
+        'directs', coalesce(sum(n_dm + n_dm_share + n_story_reply + n_story_mention), 0),
+        'outOfIcp', count(*) filter (where icp = 'no' and (${fScore}) > 0)
       ) from people) as totals,
       (select coalesce(json_agg(t order by t.pos), '[]'::json) from top t) as rows`);
   }).catch((e) => {
@@ -399,9 +409,11 @@ async function rank(ctx: Ctx, f: { period: EngagementPeriod; kind: KindFilter; q
     ownerId: (r.owner_id as string | null) ?? null,
     ownerName: (r.owner_name as string | null) ?? null,
     status: (CRM_STATUSES as readonly string[]).includes(String(r.status)) ? (r.status as CrmStatus) : "none",
+    icp: r.icp === "yes" || r.icp === "no" ? r.icp : null,
     actorKeys: (r.actor_keys as string[]) ?? [],
   }));
-  return { cfg, totals: { people: Number(row.totals.people), interactions: Number(row.totals.interactions), comments: Number(row.totals.comments), directs: Number(row.totals.directs) }, people };
+  const t = row.totals;
+  return { cfg, totals: { people: Number(t.people), interactions: Number(t.interactions), comments: Number(t.comments), directs: Number(t.directs), outOfIcp: Number(t.outOfIcp) }, people };
 }
 
 /**
@@ -414,12 +426,13 @@ function canTransform(ctx: Ctx, p: Pick<RankedPerson, "ownerId" | "status" | "co
   return can(ctx, "data.all") || !p.contactId || p.ownerId === ctx.userId;
 }
 
-export async function engagementRanking(ctx: Ctx, f: z.infer<typeof rankingSchema>) {
+export async function engagementRanking(ctx: Ctx, input: z.input<typeof rankingSchema>) {
+  const f = rankingSchema.parse(input);
   await assertCanView(ctx);
   await catchUp();
-  const { cfg, totals, people } = await rank(ctx, { ...f, limit: RANK_SIZE });
-  // "Potenciais oportunidades": do Top 15 do filtro (sem busca), quem ainda não é Lead.
-  const top = f.q ? (await rank(ctx, { period: f.period, kind: f.kind, limit: RANK_SIZE })).people : people;
+  const { cfg, totals, people } = await rank(ctx, { ...f, limit: RANK_SIZE, outOfIcp: f.icp === "out" });
+  // "Potenciais oportunidades": do Top 15 do filtro (sem busca, sem quem não é ICP), quem ainda não é Lead.
+  const top = f.q || f.icp === "out" ? (await rank(ctx, { period: f.period, kind: f.kind, limit: RANK_SIZE })).people : people;
   return {
     period: f.period,
     kind: f.kind,
@@ -428,17 +441,54 @@ export async function engagementRanking(ctx: Ctx, f: z.infer<typeof rankingSchem
     weights: Object.fromEntries(TRACKED_KINDS.map((k) => [k, cfg.weights[k]])),
     dailyCap: cfg.dailyCap,
     canConfigure: can(ctx, "org.settings"),
+    canClassifyIcp: canClassifyIcp(ctx),
   };
+}
+
+/** Quem trabalha a prospecção classifica ICP (administrador, gestor e social seller); closer não. */
+function canClassifyIcp(ctx: Ctx) {
+  return ctx.role !== "closer";
+}
+
+async function icpOf(ctx: Ctx, actorKeys: string[]): Promise<IcpMark> {
+  if (!actorKeys.length) return null;
+  const rows = await db.select({ isIcp: engagementIcp.isIcp }).from(engagementIcp).where(and(eq(engagementIcp.orgId, ctx.orgId), inArray(engagementIcp.actorKey, actorKeys)));
+  return rows.some((r) => !r.isIcp) ? "no" : rows.some((r) => r.isIcp) ? "yes" : null;
+}
+
+export const icpSchema = z.object({ key: z.string().min(1).max(200), value: z.enum(["yes", "no"]).nullable() });
+
+/**
+ * Marca a pessoa como ICP, "não é ICP" (sai do Top 15 e a próxima pessoa sobe) ou limpa a marcação.
+ * Vale para todas as identidades da pessoa e para qualquer período.
+ */
+export async function setEngagementIcp(ctx: Ctx, input: z.infer<typeof icpSchema>) {
+  await assertCanView(ctx);
+  if (!canClassifyIcp(ctx)) throw forbidden("Closers não classificam ICP no Top Engajados.");
+  const keys = await actorKeysFor(ctx, input.key);
+  const [known] = keys.length ? await db.select({ n: sql<number>`count(*)::int` }).from(engagementEvents).where(and(eq(engagementEvents.orgId, ctx.orgId), inArray(engagementEvents.actorKey, keys))) : [];
+  if (!known?.n) throw notFound("Nenhuma interação identificada para esta pessoa.");
+  await db.transaction(async (tx) => {
+    if (input.value === null) {
+      await tx.delete(engagementIcp).where(and(eq(engagementIcp.orgId, ctx.orgId), inArray(engagementIcp.actorKey, keys)));
+    } else {
+      const values = keys.map((actorKey) => ({ orgId: ctx.orgId, actorKey, isIcp: input.value === "yes", decidedBy: ctx.userId, decidedAt: new Date() }));
+      await tx.insert(engagementIcp).values(values).onConflictDoUpdate({ target: [engagementIcp.orgId, engagementIcp.actorKey], set: { isIcp: input.value === "yes", decidedBy: ctx.userId, decidedAt: new Date() } });
+    }
+    await audit(tx, ctx, "engagement.icp_set", "engagement_person", null, { key: input.key, value: input.value });
+  });
+  await publish({ orgId: ctx.orgId, topic: "engagement" });
+  return { key: input.key, icp: input.value };
 }
 
 // ---------- Perfil detalhado ----------
 
-export const personSchema = rankingSchema.omit({ q: true }).extend({ key: z.string().min(1).max(200) });
+export const personSchema = rankingSchema.omit({ q: true, icp: true }).extend({ key: z.string().min(1).max(200) });
 
 export async function engagementPerson(ctx: Ctx, f: z.infer<typeof personSchema>) {
   await assertCanView(ctx);
-  const { people } = await rank(ctx, { period: f.period, kind: f.kind, personKey: f.key, limit: 1 });
-  const person = people[0];
+  let [person] = (await rank(ctx, { period: f.period, kind: f.kind, personKey: f.key, limit: 1 })).people;
+  person ??= (await rank(ctx, { period: f.period, kind: f.kind, personKey: f.key, limit: 1, outOfIcp: true })).people[0];
   const actorKeys = person ? person.actorKeys : await actorKeysFor(ctx, f.key);
   if (!actorKeys.length) throw notFound("Nenhuma interação identificada para esta pessoa.");
   const base = person ?? (await describePerson(ctx, f.key));
@@ -514,10 +564,13 @@ export async function engagementPerson(ctx: Ctx, f: z.infer<typeof personSchema>
 
   return {
     ...base,
+    icp: await icpOf(ctx, actorKeys),
+    canClassifyIcp: canClassifyIcp(ctx),
     canTransform: canTransform(ctx, base),
     firstAt: span?.first ?? null,
     lastAt: span?.last ?? base.lastAt,
-    inRanking: !!person && person.position <= RANK_SIZE,
+    /** Posição entre quem conta no ranking (quem não é ICP não ocupa vaga). */
+    inRanking: !!person && person.icp !== "no" && person.position <= RANK_SIZE,
     activities,
   };
 }
@@ -554,6 +607,7 @@ async function describePerson(ctx: Ctx, key: string): Promise<RankedPerson> {
     ownerId: c?.ownerId ?? null,
     ownerName: c?.ownerName ?? null,
     status: "none",
+    icp: null,
   };
 }
 

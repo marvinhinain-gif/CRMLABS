@@ -11,7 +11,7 @@ import { handleCallback, startConnect } from "@/server/integrations/instagram/oa
 import { ingestWebhook, processPendingEvents } from "@/server/integrations/instagram/webhooks";
 import { syncAccount } from "@/server/integrations/instagram/sync";
 import { transformToLead } from "@/server/services/instagram";
-import { collectEngagement, engagementPerson, engagementRanking, prepareLeadContact, updateEngagementConfig } from "@/server/services/engagement";
+import { collectEngagement, engagementPerson, engagementRanking, prepareLeadContact, setEngagementIcp, updateEngagementConfig } from "@/server/services/engagement";
 import { buildMe } from "@/server/services/me";
 import { FakeInstagramApi, setupOrg } from "./helpers";
 
@@ -163,5 +163,49 @@ describe("Top Engajados", () => {
     const forOwner = await engagementPerson(ctx.seller2, { key: c.id, period: "today", kind: "all" });
     expect(forOwner.activities[0]).toMatchObject({ text: "Quero saber do programa", restricted: false });
     await expect(prepareLeadContact(ctx.seller, { key: c.id })).rejects.toThrow(/Rafael/);
+  });
+
+  it("quem não é ICP sai do Top 15 em todos os períodos e dá lugar ao próximo; dá para desfazer", async () => {
+    const { ctx } = await connected();
+    // 16 pessoas: a 1ª com 3 comentários, a 2ª com 2, as demais com 1. Só 15 cabem no ranking.
+    const changes = Array.from({ length: 16 }, (_, i) => Array.from({ length: i === 0 ? 3 : i === 1 ? 2 : 1 }, (_, j) => comment(`p${i}-${j}`, `igsid-p${i}`, `pessoa${i}`, `media-${j}`))).flat();
+    await deliver({ changes });
+    await collectEngagement();
+    let r = await engagementRanking(ctx.seller, { period: "today", kind: "all" });
+    expect(r.rows).toHaveLength(15);
+    expect(r.canClassifyIcp).toBe(true);
+    const out = r.rows[0];
+    const sixteenth = Array.from({ length: 16 }, (_, i) => `pessoa${i}`).find((u) => !r.rows.some((p) => p.username === u))!;
+    expect(out.username).toBe("pessoa0");
+
+    await setEngagementIcp(ctx.seller, { key: r.rows[1].key, value: "yes" });
+    await setEngagementIcp(ctx.seller, { key: out.key, value: "no" });
+    for (const period of ["today", "week", "month"] as const) {
+      r = await engagementRanking(ctx.seller, { period, kind: "all" });
+      expect(r.rows).toHaveLength(15);
+      expect(r.rows.some((p) => p.key === out.key)).toBe(false);
+      expect(r.rows[0]).toMatchObject({ username: "pessoa1", position: 1, icp: "yes" });
+      expect(r.rows.some((p) => p.username === sixteenth)).toBe(true); // o próximo subiu
+      expect(r.totals.outOfIcp).toBe(1);
+    }
+    // A busca também respeita a classificação; a lista "fora do ICP" mostra quem saiu.
+    expect((await engagementRanking(ctx.seller, { period: "today", kind: "all", q: "pessoa0" })).rows).toHaveLength(0);
+    const outList = await engagementRanking(ctx.seller, { period: "today", kind: "all", icp: "out" });
+    expect(outList.rows.map((p) => p.key)).toEqual([out.key]);
+    expect(outList.rows[0]).toMatchObject({ icp: "no", score: 15 });
+    expect(await engagementPerson(ctx.seller, { key: out.key, period: "today", kind: "all" })).toMatchObject({ icp: "no", inRanking: false, score: 15 });
+
+    // Desfazer: volta ao 1º lugar.
+    await setEngagementIcp(ctx.manager, { key: out.key, value: null });
+    r = await engagementRanking(ctx.seller, { period: "today", kind: "all" });
+    expect(r.rows[0]).toMatchObject({ key: out.key, position: 1, icp: null });
+    expect(r.rows.some((p) => p.username === sixteenth)).toBe(false);
+    expect(r.totals.outOfIcp).toBe(0);
+
+    // Closer não classifica; chave sem interações é recusada.
+    await updateEngagementConfig(ctx.admin, { closersCanView: true });
+    expect((await engagementRanking(ctx.closer, { period: "today", kind: "all" })).canClassifyIcp).toBe(false);
+    await expect(setEngagementIcp(ctx.closer, { key: out.key, value: "no" })).rejects.toThrow(/Closers/);
+    await expect(setEngagementIcp(ctx.seller, { key: "igsid:inexistente", value: "no" })).rejects.toThrow();
   });
 });
