@@ -14,6 +14,7 @@ import { Avatar, Button, cx, ErrorState, LoadingState, Select, Sheet, SheetClose
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { JourneySection, OriginTrail, type Journey } from "@/components/integrations/Journey";
+import { LEAD_CLASS, LEAD_CLASSES, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
 
 export const LEAD_STATUS = {
   new: { label: "Novo", cls: "bg-brand text-white" },
@@ -22,6 +23,18 @@ export const LEAD_STATUS = {
   scheduled: { label: "Reunião marcada", cls: "bg-success-soft text-success" },
   disqualified: { label: "Descartado", cls: "bg-[#eef2f1] text-[#46565f]" },
 } as const;
+
+/** Selo do lead score por produto (com os pontos do quiz, quando houver). */
+export function LeadClassBadge({ cls, score, manual, className }: { cls: LeadClass | null; score?: number | null; manual?: boolean; className?: string }) {
+  const c = cls ? LEAD_CLASS[cls] : null;
+  return (
+    <span className={cx("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold", c ? c.cls : UNCLASSIFIED.cls, className)} title={manual ? "Classificação ajustada pela equipe" : cls ? "Classificação pelo quiz de aplicação" : "Sem classificação ainda"}>
+      {c && <span className={cx("size-1.5 rounded-full", c.dot)} aria-hidden />}
+      {c ? c.label : UNCLASSIFIED.label}
+      {score != null && <span className="font-medium opacity-75">· {score} pts</span>}
+    </span>
+  );
+}
 
 const UTM_LABEL: Record<string, string> = {
   utm_source: "Origem",
@@ -65,7 +78,85 @@ type LeadDetail = {
   adName: string | null;
   customValues: { label: string; value: string }[];
   journey: Journey | null;
+  leadScore: LeadScore;
 };
+
+type LeadScore = {
+  class: LeadClass | null;
+  auto: LeadClass | null;
+  manual: { byName: string | null; at: string } | null;
+  application: { id: string; formId: string; formTitle: string; score: number | null; tierLabel: string | null; productLabel: string | null; needsReview: boolean; completedAt: string } | null;
+};
+
+/** Lead score por produto: classe valendo, de onde veio e troca manual. */
+function LeadScoreCard({ s, busy, onSet, isAdmin }: { s: LeadScore; busy: string | null; onSet: (c: LeadClass | null) => void; isAdmin: boolean }) {
+  const app = s.application;
+  return (
+    <section className="mt-4 rounded-[18px] border border-line p-4" aria-labelledby="lead-score-title">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 id="lead-score-title" className="text-[13px] font-semibold uppercase tracking-wide text-muted">
+          Lead score
+        </h3>
+        <LeadClassBadge cls={s.class} manual={!!s.manual} className="text-[13px]" />
+      </div>
+      {app ? (
+        <div className="mt-3 flex items-center gap-3">
+          {app.score != null && (
+            <span className="flex size-14 shrink-0 flex-col items-center justify-center rounded-[16px] bg-page leading-none">
+              <span className="text-[20px] font-semibold">{app.score}</span>
+              <span className="mt-0.5 text-[11px] text-muted">de 100</span>
+            </span>
+          )}
+          <span className="min-w-0 text-[13px] text-muted">
+            {app.tierLabel && <span className="block text-[14px] font-medium text-ink">{app.tierLabel}</span>}
+            Sugestão do quiz: <span className="font-medium text-ink">{app.productLabel ?? "sem sugestão"}</span>
+            <span className="block truncate">
+              {isAdmin ? (
+                <Link href={`/formularios/${app.formId}/respostas?resposta=${app.id}`} className="text-brand hover:underline">
+                  {app.formTitle}
+                </Link>
+              ) : (
+                app.formTitle
+              )}{" "}
+              · {relativeTime(app.completedAt)}
+            </span>
+          </span>
+        </div>
+      ) : (
+        <p className="mt-2 text-[13px] text-muted">Este lead ainda não respondeu o quiz de aplicação. Classifique depois da conversa.</p>
+      )}
+      {!s.manual && !s.class && app?.needsReview && <p className="mt-2 rounded-[12px] bg-warning-soft px-3 py-2 text-[12.5px] text-warning">O quiz pediu análise da equipe: escolha a classificação abaixo.</p>}
+      {s.manual && (
+        <p className="mt-2 text-[12.5px] text-muted">
+          Ajustado {s.manual.byName ? `por ${s.manual.byName} ` : ""}
+          {relativeTime(s.manual.at)}.{" "}
+          <button type="button" className="font-medium text-brand hover:underline disabled:opacity-50" disabled={!!busy} onClick={() => onSet(null)}>
+            Voltar para a classificação do quiz{s.auto ? ` (${LEAD_CLASS[s.auto].label})` : ""}
+          </button>
+        </p>
+      )}
+      <div className="mt-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Classificar lead">
+        {LEAD_CLASSES.map((c) => {
+          const active = s.class === c;
+          return (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={!!busy}
+              onClick={() => !active && onSet(c)}
+              className={cx("flex min-h-10 min-w-0 items-center justify-center gap-1.5 rounded-[12px] border px-2 py-1.5 text-center text-[12.5px] leading-tight sm:gap-2 sm:text-[13px] font-medium transition-colors disabled:opacity-60", active ? cx("border-transparent", LEAD_CLASS[c].cls) : "border-line bg-white text-ink hover:bg-page")}
+            >
+              <span className={cx("size-2 shrink-0 rounded-full", LEAD_CLASS[c].dot)} aria-hidden />
+              <span>{LEAD_CLASS[c].label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -124,7 +215,10 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           <p className="mt-0.5 text-[13px] text-muted">
             {l.formName ?? (l.channel === "webhook" ? "Recebido por integração" : "Formulário removido")} · {relativeTime(l.createdAt)}
           </p>
-          <span className={cx("mt-2 inline-block rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
+          <span className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
+            <LeadClassBadge cls={l.leadScore.class} score={l.leadScore.application?.score} manual={!!l.leadScore.manual} />
+          </span>
         </div>
         <SheetClose asChild>
           <button className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-page" aria-label="Fechar" onClick={onClose}>
@@ -153,6 +247,13 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
             <Mail className="size-5" aria-hidden /> E-mail
           </a>
         </div>
+
+        <LeadScoreCard
+          s={l.leadScore}
+          busy={busy}
+          isAdmin={me.user.role === "admin"}
+          onSet={(c) => patch({ scoreClass: c }, c ? `Lead classificado como ${LEAD_CLASS[c].label}.` : "Classificação do quiz restaurada.", "score")}
+        />
 
         {l.appointment && (
           <Link href={`/agendamentos?reuniao=${l.appointment.id}`} className="mt-4 flex items-center gap-3 rounded-[18px] border border-[#c9ebdc] bg-selected p-4 hover:brightness-[0.99]">

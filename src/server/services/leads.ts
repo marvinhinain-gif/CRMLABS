@@ -16,6 +16,8 @@ import {
   organizations,
   pipelineStages,
   products,
+  quizForms,
+  quizSubmissions,
   relationshipEntries,
   stageHistory,
   users,
@@ -29,6 +31,7 @@ import { logger } from "../logger";
 import { audit, cleanText, closerPipeline, getPipeline, normalizeHandle, notifyUser } from "./common";
 import { addToBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
+import { classFromProduct, LEAD_CLASSES, LEAD_CLASS_FILTERS, type LeadClass } from "@/lib/leadScore";
 
 // ---------- Normalização ----------
 
@@ -428,8 +431,28 @@ function fmtWhen(d: Date) {
 
 // ---------- Leads (operação) ----------
 
+// ---------- Lead score por produto ----------
+
+/**
+ * Última aplicação (quiz) do contato do lead: a do próprio lead primeiro, depois a mais recente.
+ * Assim um lead que entrou por outra integração herda a classe de quem já respondeu o quiz.
+ * Colunas com o nome da tabela escrito à mão (subconsulta em SELECT, ver Peculiaridades).
+ */
+const latestApplication = (cols: SQL) =>
+  sql`(select ${cols} from quiz_submissions s where s.contact_id = ${sql.raw('"leads"."contact_id"')} and s.anonymized_at is null order by (s.lead_id = ${sql.raw('"leads"."id"')}) desc nulls last, (s.duplicate_of is null) desc, s.completed_at desc limit 1)`;
+
+/** Produto final da aplicação (ajuste manual da resposta, senão a sugestão). Mesmas regras de `classFromProduct`. */
+const appProduct = sql`coalesce(s.override->>'productId', s.product_id, '') || ' ' || coalesce(s.override->>'productLabel', s.product_label, '')`;
+const autoClassSql = latestApplication(
+  sql`case when ${appProduct} ~* 'mentoria' then 'MENTORIA' when ${appProduct} ~* 'consultoria' then 'CONSULTORIA' when ${appProduct} ~* '(sess|sprint)' then 'SESSAO' when ${appProduct} ~* '(nutri|n[aã]o.{0,6}icp)' then 'NAO_ICP' end`,
+);
+/** Classe valendo: a escolhida à mão no lead, senão a do quiz. */
+export const leadClassSql = sql<LeadClass | null>`coalesce(${sql.raw('"leads"."score_class"')}, ${autoClassSql})`;
+
 export const listLeadsSchema = z.object({
   status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open"]).default("open"),
+  /** Lead score por produto (none = a classificar). */
+  classe: z.enum(LEAD_CLASS_FILTERS).optional(),
   formId: z.string().uuid().optional(),
   assignedTo: z.string().uuid().optional(),
   q: z.string().trim().max(100).optional(),
@@ -448,6 +471,13 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     const like = `%${f.q.replace(/[%_]/g, "")}%`;
     conds.push(or(ilike(leads.name, like), ilike(leads.email, like), ilike(leads.phone, like), ilike(leads.instagram, like))!);
   }
+  // Contagem por classe respeita os outros filtros (situação, responsável, busca).
+  const classCounts = await db
+    .select({ cls: leadClassSql, n: sql<number>`count(*)::int` })
+    .from(leads)
+    .where(and(...conds))
+    .groupBy(sql`1`);
+  if (f.classe) conds.push(f.classe === "none" ? sql`${leadClassSql} is null` : sql`${leadClassSql} = ${f.classe}`);
   const where = and(...conds);
   const rows = await db
     .select({
@@ -469,6 +499,9 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
       sourceColor: leadSources.color,
       productName: products.name,
       appointmentAt: appointments.startsAt,
+      scoreClass: leadClassSql,
+      scoreClassManual: sql<boolean>`${leads.scoreClass} is not null`,
+      score: sql<number | null>`${latestApplication(sql`s.score`)}`,
     })
     .from(leads)
     .leftJoin(users, eq(users.id, leads.assignedTo))
@@ -486,7 +519,14 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     .from(leads)
     .where(leadScope(ctx))
     .groupBy(leads.status);
-  return { rows, total, page: f.page, pageSize: PAGE, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Record<string, number> };
+  return {
+    rows,
+    total,
+    page: f.page,
+    pageSize: PAGE,
+    counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Record<string, number>,
+    classCounts: Object.fromEntries(classCounts.map((c) => [c.cls ?? "none", c.n])) as Record<string, number>,
+  };
 }
 
 async function getVisibleLead(ctx: Ctx, id: string) {
@@ -532,12 +572,46 @@ export async function getLead(ctx: Ctx, id: string) {
     productName: prod?.name ?? null,
     customValues: fieldRows.map((f) => ({ label: f.label, value: l.custom[f.id] })),
     journey: await contactJourney(ctx, l.contactId),
+    leadScore: await leadScoreOf(l),
+  };
+}
+
+/** Lead score do lead: classe valendo, sugestão do quiz e quem ajustou à mão. */
+async function leadScoreOf(l: typeof leads.$inferSelect) {
+  const [app] = await db
+    .select({
+      id: quizSubmissions.id,
+      formId: quizSubmissions.formId,
+      formTitle: quizForms.name,
+      score: quizSubmissions.score,
+      tierLabel: quizSubmissions.tierLabel,
+      productId: quizSubmissions.productId,
+      productLabel: quizSubmissions.productLabel,
+      override: quizSubmissions.override,
+      needsReview: sql<boolean>`coalesce((${quizSubmissions.recommendation}->>'needsReview')::boolean, false) and ${quizSubmissions.override} is null`,
+      completedAt: quizSubmissions.completedAt,
+    })
+    .from(quizSubmissions)
+    .innerJoin(quizForms, eq(quizForms.id, quizSubmissions.formId))
+    .where(and(eq(quizSubmissions.contactId, l.contactId), isNull(quizSubmissions.anonymizedAt)))
+    .orderBy(sql`(${quizSubmissions.leadId} = ${l.id}) desc nulls last`, sql`(${quizSubmissions.duplicateOf} is null) desc`, desc(quizSubmissions.completedAt))
+    .limit(1);
+  const productLabel = app ? (app.override?.productLabel ?? app.productLabel) : null;
+  const auto = app ? classFromProduct(app.override?.productId ?? app.productId, productLabel) : null;
+  const [by] = l.scoreClassBy ? await db.select({ name: users.name }).from(users).where(eq(users.id, l.scoreClassBy)) : [];
+  return {
+    class: (l.scoreClass as LeadClass | null) ?? auto,
+    auto,
+    manual: l.scoreClass ? { byName: by?.name ?? null, at: l.scoreClassAt } : null,
+    application: app ? { id: app.id, formId: app.formId, formTitle: app.formTitle, score: app.score, tierLabel: app.tierLabel, productLabel, needsReview: app.needsReview, completedAt: app.completedAt } : null,
   };
 }
 
 export const updateLeadSchema = z.object({
   status: z.enum(["new", "contacted", "no_answer", "disqualified"]).optional(),
   assignedTo: z.string().uuid().nullable().optional(),
+  /** Lead score por produto escolhido à mão; null = volta para a classificação do quiz. */
+  scoreClass: z.enum(LEAD_CLASSES).nullable().optional(),
 });
 
 export async function updateLead(ctx: Ctx, id: string, input: z.infer<typeof updateLeadSchema>) {
@@ -555,6 +629,11 @@ export async function updateLead(ctx: Ctx, id: string, input: z.infer<typeof upd
       if (!m) throw invalid("Responsável inválido.");
     }
     patch.assignedTo = input.assignedTo;
+  }
+  if (input.scoreClass !== undefined && input.scoreClass !== l.scoreClass) {
+    patch.scoreClass = input.scoreClass;
+    patch.scoreClassBy = input.scoreClass ? ctx.userId : null;
+    patch.scoreClassAt = input.scoreClass ? new Date() : null;
   }
   const [u] = await db.update(leads).set(patch).where(eq(leads.id, l.id)).returning();
   if (input.status === "contacted" || input.status === "no_answer") {

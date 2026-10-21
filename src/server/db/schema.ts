@@ -916,6 +916,10 @@ export const leads = pgTable(
     opportunityId: uuid("opportunity_id"),
     appointmentId: uuid("appointment_id"),
     contactedAt: ts("contacted_at"),
+    /** Lead score por produto escolhido à mão (MENTORIA, CONSULTORIA, SESSAO, NAO_ICP). null = segue o quiz. */
+    scoreClass: text("score_class"),
+    scoreClassBy: uuid("score_class_by").references(() => users.id, { onDelete: "set null" }),
+    scoreClassAt: ts("score_class_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
