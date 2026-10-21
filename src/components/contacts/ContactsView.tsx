@@ -29,7 +29,7 @@ type Row = {
 };
 type List = { rows: Row[]; total: number; page: number; pageSize: number };
 
-const SOURCES: Record<string, string> = { manual: "Manual", instagram_dm: "Direct", instagram_comment: "Comentário", import: "Importação" };
+const SOURCES: Record<string, string> = { manual: "Manual", instagram_dm: "Direct", instagram_comment: "Comentário", import: "Importação", lead_form: "Formulário", checkout: "Cakto" };
 
 type Preview = {
   rows: { line: number; data: { name: string; username: string | null; email: string | null }; errors: string[]; duplicateOf: { id: string; name: string } | null; duplicateInFile: number | null }[];

@@ -13,6 +13,7 @@ import { CountUp } from "@/components/motion/CountUp";
 import { IntegrationWizard } from "./IntegrationWizard";
 import { ConnectGuide } from "./ConnectGuide";
 import { GoogleCalendarSetup } from "./GoogleCalendarSetup";
+import { CaktoSetup } from "./CaktoSetup";
 import { PROVIDERS, ProviderIcon, providerOf, SourceChip, STATUS, useCatalog, type Integration, type ProviderId } from "./shared";
 
 type TestResult = {
@@ -416,6 +417,10 @@ export function IntegrationsView() {
             <p className="mt-3 text-[12.5px] text-muted">Outra ferramenta? Quase todas enviam por webhook — use o <b>Webhook CRMLABS</b>.</p>
           </section>
           {data.length === 0 && <Badge tone="info" className="self-start">Comece pelo Formulário CRMLABS ou pelo Webhook.</Badge>}
+          <section>
+            <h2 className="mb-3 text-[17px] font-semibold">Vendas</h2>
+            <CaktoSetup />
+          </section>
           <section>
             <h2 className="mb-3 text-[17px] font-semibold">Agenda</h2>
             <GoogleCalendarSetup />

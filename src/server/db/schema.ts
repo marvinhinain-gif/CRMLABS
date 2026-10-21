@@ -45,6 +45,7 @@ export const contactSourceEnum = pgEnum("contact_source", [
   "instagram_comment",
   "import",
   "lead_form",
+  "checkout",
 ]);
 export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "scheduled", "no_answer", "disqualified"]);
 export const pipelineKindEnum = pgEnum("pipeline_kind", ["relationship", "sales"]);
@@ -1082,6 +1083,86 @@ export const salesGoals = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex("sales_goals_org_month_uq").on(t.orgId, t.month)],
+);
+
+// ---------- Vendas de plataformas de pagamento (Cakto) ----------
+
+/** Conexão da organização com a plataforma de pagamento. Segredos sempre criptografados. */
+export const checkoutIntegrations = pgTable(
+  "checkout_integrations",
+  {
+    id: id(),
+    orgId: orgRef(),
+    /** cakto */
+    provider: text("provider").notNull().default("cakto"),
+    /** Token do endereço do webhook: hash para busca e cópia criptografada para o administrador ver de novo. */
+    tokenHash: text("token_hash").notNull(),
+    tokenEnc: text("token_enc").notNull(),
+    /** Segredo do webhook na Cakto (aprendido no primeiro envio ou colado pelo administrador). */
+    webhookSecretEnc: text("webhook_secret_enc"),
+    /** Chave da API da Cakto (opcional, para importar vendas antigas). */
+    apiClientIdEnc: text("api_client_id_enc"),
+    apiClientSecretEnc: text("api_client_secret_enc"),
+    lastEventAt: ts("last_event_at"),
+    lastImportAt: ts("last_import_at"),
+    lastErrorAt: ts("last_error_at"),
+    lastError: text("last_error"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("checkout_integrations_org_provider_uq").on(t.orgId, t.provider), uniqueIndex("checkout_integrations_token_uq").on(t.tokenHash)],
+);
+
+/**
+ * Pedidos recebidos da plataforma de pagamento (um por pedido; reenvios atualizam o mesmo registro).
+ * A origem é resolvida na chegada: UTM/sck do checkout ou, sem isso, a origem conhecida do contato no CRM.
+ */
+export const checkoutOrders = pgTable(
+  "checkout_orders",
+  {
+    id: id(),
+    orgId: orgRef(),
+    provider: text("provider").notNull().default("cakto"),
+    externalId: text("external_id").notNull(),
+    refId: text("ref_id"),
+    /** paid, waiting_payment, refused, refunded, chargedback, canceled, refund_requested… */
+    status: text("status").notNull(),
+    lastEvent: text("last_event"),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    customerName: text("customer_name"),
+    customerEmail: text("customer_email"),
+    customerPhone: text("customer_phone"),
+    productExternalId: text("product_external_id"),
+    productName: text("product_name"),
+    offerName: text("offer_name"),
+    /** main, upsell, downsell, orderbump */
+    offerType: text("offer_type"),
+    /** Valor pago pelo comprador. */
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull().default(0),
+    baseAmountCents: bigint("base_amount_cents", { mode: "number" }),
+    feesCents: bigint("fees_cents", { mode: "number" }),
+    currency: text("currency").notNull().default("BRL"),
+    paymentMethod: text("payment_method"),
+    installments: integer("installments"),
+    /** utm_source, utm_medium, utm_campaign, utm_term, utm_content, sck, src */
+    utm: jsonb("utm").$type<Record<string, string>>().notNull().default({}),
+    sourceId: uuid("source_id"),
+    /** utm (veio no link do checkout), crm (origem já conhecida do contato) ou null. */
+    sourceVia: text("source_via"),
+    campaign: text("campaign"),
+    orderedAt: ts("ordered_at"),
+    paidAt: ts("paid_at"),
+    refundedAt: ts("refunded_at"),
+    chargedbackAt: ts("chargedback_at"),
+    canceledAt: ts("canceled_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("checkout_orders_ext_uq").on(t.orgId, t.provider, t.externalId),
+    index("checkout_orders_org_paid_idx").on(t.orgId, t.paidAt),
+    index("checkout_orders_contact_idx").on(t.contactId),
+  ],
 );
 
 // ---------- Formulários & Quizzes ----------
