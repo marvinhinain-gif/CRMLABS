@@ -2,7 +2,7 @@
  * Tipos de notificação e as preferências que o usuário pode ligar/desligar.
  * Compartilhado entre servidor e interface.
  */
-export type NotifyPrefKey = "leads" | "leadStage" | "meeting" | "sale" | "messages" | "assignments" | "tasks" | "daily" | "access";
+export type NotifyPrefKey = "leads" | "leadStage" | "meeting" | "sale" | "messages" | "assignments" | "tasks" | "agenda" | "daily" | "access";
 
 export const NOTIFY_PREFS: { key: NotifyPrefKey; label: string; description: string; adminOnly?: boolean }[] = [
   { key: "leads", label: "Novos leads de anúncio", description: "Quando um lead chega para você confirmar a reunião." },
@@ -12,6 +12,7 @@ export const NOTIFY_PREFS: { key: NotifyPrefKey; label: string; description: str
   { key: "messages", label: "Novas mensagens", description: "Mensagens do Direct em conversas suas." },
   { key: "assignments", label: "Leads, tarefas e reuniões para você", description: "Quando um lead é encaminhado ou algo é atribuído a você." },
   { key: "tasks", label: "Lembretes de tarefas", description: "30 minutos antes do prazo e quando a tarefa atrasa." },
+  { key: "agenda", label: "Agenda da equipe", description: "Quando marcam, remarcam ou cancelam um compromisso com você, e o lembrete antes de começar." },
   { key: "daily", label: "Bom dia e boa noite", description: "Mensagens curtas às 9h e às 21h para organizar o dia." },
   { key: "access", label: "Pedidos de acesso", description: "Pessoas pedindo para entrar na equipe.", adminOnly: true },
 ];
@@ -32,6 +33,10 @@ export const TYPE_TO_PREF: Record<string, NotifyPrefKey> = {
   "member.requested": "access",
   "task.due_soon": "tasks",
   "task.overdue": "tasks",
+  "agenda.invited": "agenda",
+  "agenda.updated": "agenda",
+  "agenda.canceled": "agenda",
+  "agenda.reminder": "agenda",
   "daily.morning": "daily",
   "daily.evening": "daily",
 };

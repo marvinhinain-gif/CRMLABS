@@ -135,4 +135,6 @@ export async function scheduledNotificationsTick() {
   await runDailyNudges();
   const { taskReminders } = await import("./tasks");
   await taskReminders();
+  const { teamEventReminders } = await import("./teamAgenda");
+  await teamEventReminders();
 }
