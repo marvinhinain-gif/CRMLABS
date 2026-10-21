@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { ArrowUpRight, AtSign, CircleSlash, ExternalLink, Info, MessageCircle, Plus, Search, Send, Settings2, Share2, Sparkles, Trophy, UserRound, Users, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, AtSign, BadgeCheck, CircleSlash, ExternalLink, Info, MessageCircle, Plus, Search, Send, Settings2, Share2, Sparkles, ThumbsDown, Trophy, Undo2, UserRound, Users, X } from "lucide-react";
 import { api, ApiError, fetcher, qs } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useOpenContact } from "@/lib/nav";
@@ -42,11 +42,15 @@ type Person = {
   ownerName: string | null;
   status: CrmStatus;
   canTransform: boolean;
+  icp: IcpMark;
 };
 
+type IcpMark = "yes" | "no" | null;
+
 type Ranking = {
-  totals: { people: number; interactions: number; comments: number; directs: number; opportunities: number };
+  totals: { people: number; interactions: number; comments: number; directs: number; opportunities: number; outOfIcp: number };
   rows: Person[];
+  canClassifyIcp: boolean;
   weights: Record<EngagementKind, number>;
   dailyCap: number;
   canConfigure: boolean;
@@ -66,7 +70,7 @@ type Activity = {
   externalLabel: string | null;
 };
 
-type PersonDetail = Person & { firstAt: string | null; inRanking: boolean; activities: Activity[] };
+type PersonDetail = Person & { firstAt: string | null; inRanking: boolean; canClassifyIcp: boolean; activities: Activity[] };
 
 const PERIOD_ITEMS: { value: EngagementPeriod; label: string }[] = [
   { value: "today", label: "Hoje" },
@@ -88,6 +92,7 @@ const STATUS_TONE: Record<CrmStatus, "neutral" | "brand" | "info" | "success"> =
 const displayName = (p: Pick<Person, "name" | "username">) => (p.username ? `@${p.username}` : (p.name ?? "Pessoa do Instagram"));
 
 function Medal({ position }: { position: number }) {
+  if (!position) return <span className="w-8 shrink-0 text-center text-[14px] text-muted" aria-hidden>—</span>;
   const m = ["🥇", "🥈", "🥉"][position - 1];
   return m ? (
     <span className="w-8 shrink-0 text-center text-[22px] leading-none" aria-label={`${position}º lugar`}>
@@ -158,6 +163,71 @@ function StatusBadge({ p }: { p: Pick<Person, "status" | "ownerName"> }) {
   );
 }
 
+/** Classificação de ICP: "não é ICP" tira a pessoa do Top 15 e o próximo sobe; vale para todos os períodos. */
+function useIcp() {
+  const { mutate } = useSWRConfig();
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const refresh = () => mutate((k) => typeof k === "string" && k.startsWith("/api/instagram/engajados"));
+  const set = async (p: Person, value: IcpMark, opts: { undo?: boolean } = {}) => {
+    setBusyKey(p.key);
+    try {
+      await api.post("/api/instagram/engajados/icp", { key: p.key, value });
+      await refresh();
+      if (opts.undo) return;
+      const undo = { label: "Desfazer", onClick: () => set(p, p.icp, { undo: true }) };
+      const who = displayName(p);
+      if (value === "no") toast.success(`${who} saiu do Top 15 (não é ICP).`, { action: undo });
+      else if (value === "yes") toast.success(`${who} marcado como ICP.`, { action: undo });
+      else toast.success(p.icp === "no" ? `${who} voltou ao ranking.` : `${who} sem classificação de ICP.`, { action: undo });
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Não foi possível salvar a classificação.");
+    } finally {
+      setBusyKey(null);
+    }
+  };
+  return { set, busyKey };
+}
+
+function IcpControl({ p, busy, onSet, className }: { p: Person; busy: boolean; onSet: (v: IcpMark) => void; className?: string }) {
+  if (p.icp === "no")
+    return (
+      <Button variant="secondary" size="sm" icon={<Undo2 className="size-4" />} onClick={() => onSet(null)} disabled={busy} className={className}>
+        Voltar ao ranking
+      </Button>
+    );
+  return (
+    <div role="group" aria-label="Classificação de ICP" className={cx("inline-flex overflow-hidden rounded-full border border-line bg-white text-[12.5px] font-medium", className)}>
+      <button
+        type="button"
+        aria-pressed={p.icp === "yes"}
+        disabled={busy}
+        onClick={() => onSet(p.icp === "yes" ? null : "yes")}
+        title={p.icp === "yes" ? "Tirar a marcação de ICP" : "Marcar como meu ICP"}
+        className={cx("inline-flex h-8 grow items-center justify-center gap-1.5 px-3 transition-colors disabled:opacity-60", p.icp === "yes" ? "bg-selected text-brand" : "text-ink hover:bg-page")}
+      >
+        <BadgeCheck className="size-4" aria-hidden />
+        {p.icp === "yes" ? "Meu ICP" : "É meu ICP"}
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => onSet("no")}
+        title="Não é ICP: sai do Top 15 e dá lugar ao próximo"
+        className="inline-flex h-8 grow items-center justify-center gap-1.5 border-l border-line px-3 text-ink transition-colors hover:bg-page disabled:opacity-60"
+      >
+        <ThumbsDown className="size-4" aria-hidden />
+        Não é ICP
+      </button>
+    </div>
+  );
+}
+
+function IcpBadge({ p }: { p: Person }) {
+  if (p.icp === "yes") return <Badge tone="success">ICP</Badge>;
+  if (p.icp === "no") return <Badge tone="neutral">Fora do ICP</Badge>;
+  return null;
+}
+
 function TransformButton({ p, busy, onClick, className }: { p: Person; busy: boolean; onClick: () => void; className?: string }) {
   if (p.canTransform)
     return (
@@ -169,19 +239,22 @@ function TransformButton({ p, busy, onClick, className }: { p: Person; busy: boo
   return null;
 }
 
-function RankRow({ p, onOpen, onTransform, busy }: { p: Person; onOpen: () => void; onTransform: () => void; busy: boolean }) {
-  const podium = p.position <= 3;
+function RankRow({ p, onOpen, onTransform, busy, icp }: { p: Person; onOpen: () => void; onTransform: () => void; busy: boolean; icp: { busy: boolean; onSet: (v: IcpMark) => void } | null }) {
+  const podium = p.position <= 3 && p.icp !== "no";
   return (
     <li className={cx("anim-rise border-b border-line last:border-0", podium && "bg-[#f7fbf9]")} style={{ "--i": Math.min(p.position, 10) } as React.CSSProperties}>
       <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 px-4 py-4 sm:px-6 lg:grid-cols-[auto_minmax(0,1fr)_auto_auto] lg:items-center">
         <div className="flex items-center gap-3">
-          <Medal position={p.position} />
+          <Medal position={p.icp === "no" ? 0 : p.position} />
           <span className={cx("rounded-full", podium && "ring-2 ring-[#c9ebdc] ring-offset-2")}>
             <Avatar name={p.name ?? p.username} src={p.avatarUrl} size={48} />
           </span>
         </div>
         <button type="button" onClick={onOpen} className="min-w-0 text-left">
-          <p className="truncate text-[15px] font-semibold text-ink">{displayName(p)}</p>
+          <p className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[15px] font-semibold text-ink">{displayName(p)}</span>
+            <IcpBadge p={p} />
+          </p>
           {p.username && p.name && p.name !== `@${p.username}` && <p className="truncate text-[13px] text-muted">{p.name}</p>}
           <p className="mt-0.5 text-[12.5px] text-muted">
             {plural(p.interactions, "interação identificada", "interações identificadas")} · Última {relativeTime(p.lastAt).toLowerCase()}
@@ -201,7 +274,8 @@ function RankRow({ p, onOpen, onTransform, busy }: { p: Person; onOpen: () => vo
           <Button variant="secondary" size="sm" onClick={onOpen} className="max-lg:grow">
             Ver atividades
           </Button>
-          <TransformButton p={p} busy={busy} onClick={onTransform} className="max-lg:grow" />
+          {icp && <IcpControl p={p} busy={icp.busy} onSet={icp.onSet} className="max-lg:grow" />}
+          {p.icp !== "no" && <TransformButton p={p} busy={busy} onClick={onTransform} className="max-lg:grow" />}
         </div>
       </div>
     </li>
@@ -235,7 +309,7 @@ function dayHeader(at: string) {
   return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Bahia", weekday: "long", day: "2-digit", month: "long" }).format(new Date(at));
 }
 
-function PersonSheet({ personKey, period, kind, onClose, onTransform, busy }: { personKey: string; period: EngagementPeriod; kind: KindFilter; onClose: () => void; onTransform: (p: Person) => void; busy: boolean }) {
+function PersonSheet({ personKey, period, kind, onClose, onTransform, busy, icp }: { personKey: string; period: EngagementPeriod; kind: KindFilter; onClose: () => void; onTransform: (p: Person) => void; busy: boolean; icp: ReturnType<typeof useIcp> }) {
   const me = useMe();
   const openContact = useOpenContact();
   const { data, error, isLoading } = useSWR<PersonDetail>(`/api/instagram/engajados/pessoa${qs({ key: personKey, period, kind })}`, fetcher);
@@ -267,8 +341,9 @@ function PersonSheet({ personKey, period, kind, onClose, onTransform, busy }: { 
                     @{data.username} <ArrowUpRight className="size-3.5" aria-hidden />
                   </a>
                 )}
-                <div className="mt-1.5">
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   <StatusBadge p={data} />
+                  <IcpBadge p={data} />
                 </div>
               </div>
             </div>
@@ -276,7 +351,7 @@ function PersonSheet({ personKey, period, kind, onClose, onTransform, busy }: { 
             <dl className="grid grid-cols-2 gap-3">
               {[
                 { t: "Pontuação", v: `${data.score.toLocaleString("pt-BR")} pontos` },
-                { t: "Posição no ranking", v: data.position ? `${data.position}º ${PERIOD_TEXT[period]}` : "Fora do ranking" },
+                { t: "Posição no ranking", v: data.icp === "no" ? "Fora do ranking (não é ICP)" : data.inRanking ? `${data.position}º ${PERIOD_TEXT[period]}` : "Fora do Top 15" },
                 { t: "Primeira interação conhecida", v: data.firstAt ? formatDate(data.firstAt) : "—" },
                 { t: "Última interação", v: data.lastAt ? relativeTime(data.lastAt) : "—" },
               ].map((x) => (
@@ -288,7 +363,8 @@ function PersonSheet({ personKey, period, kind, onClose, onTransform, busy }: { 
             </dl>
 
             <div className="flex flex-wrap gap-2">
-              <TransformButton p={data} busy={busy} onClick={() => onTransform(data)} />
+              {data.canClassifyIcp && <IcpControl p={data} busy={icp.busyKey === data.key} onSet={(v) => icp.set(data, v)} />}
+              {data.icp !== "no" && <TransformButton p={data} busy={busy} onClick={() => onTransform(data)} />}
               {canOpenContact && (
                 <Button variant="secondary" size="sm" onClick={() => openContact(data.contactId!)}>
                   Ver contato
@@ -500,14 +576,19 @@ export function TopEngagedView({ connected }: { connected: boolean | null }) {
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const [scoreOpen, setScoreOpen] = useState(false);
+  const [outOfIcp, setOutOfIcp] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setTerm(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
-  const key = `/api/instagram/engajados${qs({ period, kind, q: term || undefined })}`;
+  const key = `/api/instagram/engajados${qs({ period, kind, q: term || undefined, icp: outOfIcp ? "out" : undefined })}`;
   const { data, error, isLoading, mutate } = useSWR<Ranking>(key, fetcher, { refreshInterval: 60_000, keepPreviousData: true });
   const transform = useTransform(() => mutate());
   const openPerson = useMemo(() => data?.rows.find((p) => p.key === open) ?? null, [data, open]);
+  const icp = useIcp();
+  useEffect(() => {
+    if (outOfIcp && data && !data.totals.outOfIcp && !isLoading) setOutOfIcp(false);
+  }, [outOfIcp, data, isLoading]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -548,6 +629,17 @@ export function TopEngagedView({ connected }: { connected: boolean | null }) {
             <Kpi i={4} icon={<Trophy />} label="Potenciais oportunidades" value={data.totals.opportunities} sub="Do Top 15 que ainda não são Leads" />
           </div>
 
+          {outOfIcp && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[14px] text-ink">
+                <span className="font-semibold">{plural(data.totals.outOfIcp, "pessoa marcada", "pessoas marcadas")} como fora do ICP</span>
+                <span className="text-muted"> · não entram no Top 15 em nenhum período</span>
+              </p>
+              <Button variant="secondary" size="sm" icon={<ArrowLeft className="size-4" />} onClick={() => setOutOfIcp(false)}>
+                Voltar ao Top 15
+              </Button>
+            </div>
+          )}
           <Card className="overflow-hidden">
             {data.rows.length === 0 ? (
               <EmptyState
@@ -564,11 +656,23 @@ export function TopEngagedView({ connected }: { connected: boolean | null }) {
             ) : (
               <ol aria-label="Top 15 engajados">
                 {data.rows.map((p) => (
-                  <RankRow key={p.key} p={p} onOpen={() => setOpen(p.key)} onTransform={() => transform.start(p)} busy={transform.busyKey === p.key} />
+                  <RankRow
+                    key={p.key}
+                    p={p}
+                    onOpen={() => setOpen(p.key)}
+                    onTransform={() => transform.start(p)}
+                    busy={transform.busyKey === p.key}
+                    icp={data.canClassifyIcp ? { busy: icp.busyKey === p.key, onSet: (v) => icp.set(p, v) } : null}
+                  />
                 ))}
               </ol>
             )}
           </Card>
+          {!outOfIcp && data.totals.outOfIcp > 0 && (
+            <button type="button" onClick={() => setOutOfIcp(true)} className="self-start text-[13px] font-medium text-brand hover:underline">
+              {plural(data.totals.outOfIcp, "pessoa fora do ICP", "pessoas fora do ICP")} não {data.totals.outOfIcp === 1 ? "aparece" : "aparecem"} no ranking · Ver
+            </button>
+          )}
           <p className="text-[12.5px] text-muted">
             Ranking com base apenas em ações que a API oficial atribui a uma pessoa. Engajamento não é intenção de compra: ninguém entra no Kanban sem a confirmação do Social Seller.
           </p>
@@ -576,7 +680,7 @@ export function TopEngagedView({ connected }: { connected: boolean | null }) {
         </>
       ) : null}
 
-      {open && <PersonSheet personKey={open} period={period} kind={kind} onClose={() => setOpen(null)} onTransform={(p) => transform.start(openPerson ?? p)} busy={transform.busyKey === open} />}
+      {open && <PersonSheet personKey={open} period={period} kind={kind} onClose={() => setOpen(null)} onTransform={(p) => transform.start(openPerson ?? p)} busy={transform.busyKey === open} icp={icp} />}
       {transform.dialog}
     </div>
   );

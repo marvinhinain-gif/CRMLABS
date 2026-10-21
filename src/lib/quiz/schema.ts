@@ -116,7 +116,7 @@ export const definitionSchema = z.object({
     .min(1, "Crie ao menos uma seção.")
     .max(20),
   appearance: z.object({
-    preset: z.enum(["clean", "dark", "axion", "custom"]),
+    preset: z.enum(["clean", "dark", "axion", "axion_card", "custom"]),
     primary: color,
     secondary: color,
     background: color,
@@ -132,6 +132,8 @@ export const definitionSchema = z.object({
     review: z.boolean(),
     finalStyle: z.enum(["simple", "celebration"]),
     counter: z.enum(["section", "question", "none"]).optional(),
+    frame: z.enum(["page", "card"]).optional(),
+    surface: color.optional(),
   }),
   settings: z.object({
     title: text(160),

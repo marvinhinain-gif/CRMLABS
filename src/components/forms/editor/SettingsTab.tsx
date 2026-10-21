@@ -234,7 +234,7 @@ export function SettingsTab({ draft, update, options, meta, setMeta, slugError }
           <Field label="Descrição" htmlFor="st-desc" className="sm:col-span-2">
             <Textarea id="st-desc" value={s.description ?? ""} maxLength={1000} onChange={(e) => setS("description", e.target.value || null)} />
           </Field>
-          <Field label="Mensagem de boas-vindas" htmlFor="st-welcome" hint="Com boas-vindas, descrição ou capa, o formulário abre com uma tela inicial." className="sm:col-span-2">
+          <Field label="Mensagem de boas-vindas" htmlFor="st-welcome" hint="Com boas-vindas, descrição ou capa, o formulário abre com uma tela inicial. No modelo Cartão, a frase aparece abaixo do botão (ex.: 11 perguntas · leva de 2 a 3 minutos)." className="sm:col-span-2">
             <Input id="st-welcome" value={s.welcome ?? ""} maxLength={600} onChange={(e) => setS("welcome", e.target.value || null)} />
           </Field>
           <Field label="Endereço personalizado" htmlFor="st-slug" error={slugError} hint="Letras minúsculas, números e hífen. Mudar o endereço desativa o link antigo." className="sm:col-span-2">

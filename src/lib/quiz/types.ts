@@ -131,7 +131,7 @@ export const SESSION_INTEREST_LABEL = { TRAFEGO: "Tráfego", EDICAO: "Edição",
 export type SessionInterest = keyof typeof SESSION_INTEREST_LABEL;
 
 export type Appearance = {
-  preset: "clean" | "dark" | "axion" | "custom";
+  preset: "clean" | "dark" | "axion" | "axion_card" | "custom";
   primary: string;
   secondary: string;
   background: string;
@@ -148,6 +148,10 @@ export type Appearance = {
   finalStyle: "simple" | "celebration";
   /** Contador no topo: "Etapa X de Y" (seções), "Pergunta X de N" ou nenhum. */
   counter?: "section" | "question" | "none";
+  /** "card": conteúdo num cartão centralizado, com a marca no topo; "page" (padrão antigo): página inteira. */
+  frame?: "page" | "card";
+  /** Cor do cartão (só no modo "card"). */
+  surface?: string;
 };
 
 export type ConsentSettings = {
