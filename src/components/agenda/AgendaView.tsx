@@ -6,10 +6,11 @@ import { CalendarDays, ChevronLeft, ChevronRight, List, Megaphone, Video } from 
 import { fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useQueryParam } from "@/lib/nav";
-import { dayKey, formatPhone, formatTime, TZ } from "@/lib/format";
+import { dayKey, formatPhone, formatTime } from "@/lib/format";
 import { Avatar, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Select, Tabs } from "@/components/ui";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { AgendaSheet, APPT_STATUS } from "./AgendaSheet";
+import { dayTitle, monthGrid, MONTHS, startIso, todayKey, WEEK } from "./calendarGrid";
 
 export type AgendaItem = {
   id: string;
@@ -28,34 +29,6 @@ export type AgendaItem = {
   leadId: string | null;
   fromLead: boolean;
 };
-
-const WEEK = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
-const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
-
-/** Dia de hoje no fuso da operação, como "YYYY-MM-DD". */
-const todayKey = () => dayKey(new Date());
-const keyOf = (y: number, m: number, d: number) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-const startIso = (key: string) => new Date(`${key}T00:00:00-03:00`).toISOString();
-
-function monthGrid(y: number, m: number) {
-  const first = new Date(Date.UTC(y, m, 1));
-  const startDow = first.getUTCDay();
-  const cells: { key: string; day: number; inMonth: boolean }[] = [];
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(Date.UTC(y, m, 1 - startDow + i));
-    cells.push({ key: keyOf(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()), day: d.getUTCDate(), inMonth: d.getUTCMonth() === m });
-  }
-  // Remove a última semana se ela estiver toda fora do mês.
-  return cells.slice(35).every((c) => !c.inMonth) ? cells.slice(0, 35) : cells;
-}
-
-function dayTitle(key: string) {
-  const d = new Date(`${key}T12:00:00-03:00`);
-  const label = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long", day: "numeric", month: "long" }).format(d);
-  const t = todayKey();
-  const tomorrow = dayKey(new Date(Date.now() + 86400000));
-  return key === t ? `Hoje · ${label}` : key === tomorrow ? `Amanhã · ${label}` : label.charAt(0).toUpperCase() + label.slice(1);
-}
 
 function MeetingRow({ a, i, onOpen }: { a: AgendaItem; i: number; onOpen: () => void }) {
   const st = APPT_STATUS[a.status];

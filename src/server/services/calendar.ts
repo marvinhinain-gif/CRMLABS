@@ -17,6 +17,7 @@ import { AppError, forbidden, invalid } from "../errors";
 import { assertCan, can } from "../permissions";
 import { logger } from "../logger";
 import { audit } from "./common";
+import { dayKey } from "@/lib/format";
 import { assertInstanceAdmin, loadInstanceSettings, setInstanceSetting } from "./instance";
 import { instanceCache } from "../env";
 
@@ -114,6 +115,8 @@ export async function updatePrefs(ctx: Ctx, input: { createMeet?: boolean }) {
 
 const icsEscape = (s: string) => s.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/[,;]/g, (m) => `\\${m}`);
 const icsDate = (d: Date) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+/** Dia (no fuso da operação) para eventos de dia inteiro: "20261020". */
+const icsDay = (d: Date) => dayKey(d).replace(/-/g, "");
 /** Linhas de no máximo 75 octetos (RFC 5545). */
 function fold(line: string) {
   const out: string[] = [];
@@ -177,6 +180,25 @@ export async function icsFeed(tokenWithExt: string) {
       ...(a.location ? [fold(`LOCATION:${icsEscape(a.location)}`)] : []),
       ...(a.location && /^https?:\/\//.test(a.location) ? [fold(`URL:${a.location}`)] : []),
       `STATUS:${a.status === "canceled" ? "CANCELLED" : "CONFIRMED"}`,
+      "END:VEVENT",
+    );
+  }
+  // Compromissos da agenda da equipe em que a pessoa está.
+  const { eventsOf } = await import("./teamAgenda");
+  for (const e of await eventsOf(c.orgId, c.userId, since, null, { includeCanceled: true, includeAllDay: true })) {
+    const desc = [e.description, `Abrir no CRMLABS: ${appUrl()}/agenda?compromisso=${e.id}`].filter(Boolean).join("\n\n");
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${e.id}@crmlabs-agenda`,
+      `DTSTAMP:${icsDate(e.updatedAt)}`,
+      `LAST-MODIFIED:${icsDate(e.updatedAt)}`,
+      `SEQUENCE:${Math.floor(e.updatedAt.getTime() / 1000)}`,
+      ...(e.allDay ? [`DTSTART;VALUE=DATE:${icsDay(e.startsAt)}`, `DTEND;VALUE=DATE:${icsDay(e.endsAt)}`] : [`DTSTART:${icsDate(e.startsAt)}`, `DTEND:${icsDate(e.endsAt)}`]),
+      fold(`SUMMARY:${icsEscape(`${e.canceledAt ? "[Cancelado] " : ""}${e.title}`)}`),
+      fold(`DESCRIPTION:${icsEscape(desc)}`),
+      ...(e.location ? [fold(`LOCATION:${icsEscape(e.location)}`)] : []),
+      ...(e.location && /^https?:\/\//.test(e.location) ? [fold(`URL:${e.location}`)] : []),
+      `STATUS:${e.canceledAt ? "CANCELLED" : "CONFIRMED"}`,
       "END:VEVENT",
     );
   }
@@ -399,6 +421,9 @@ export async function busyTimes(ctx: Ctx, input: z.infer<typeof busySchema>) {
     .select({ start: appointments.startsAt, end: appointments.endsAt, title: appointments.title, id: appointments.id })
     .from(appointments)
     .where(and(eq(appointments.orgId, ctx.orgId), eq(appointments.ownerId, input.ownerId), inArray(appointments.status, ["scheduled"]), lt(appointments.startsAt, to), gt(appointments.endsAt, from)));
+  // Compromissos da agenda da equipe também ocupam o horário.
+  const { eventsOf } = await import("./teamAgenda");
+  for (const e of await eventsOf(ctx.orgId, input.ownerId, from, to)) crm.push({ start: e.startsAt, end: e.endsAt, title: e.title, id: e.id });
   const excluded = crm.find((r) => r.id === input.excludeId);
   const busy: { start: string; end: string; source: "crm" | "google"; label?: string }[] = crm
     .filter((r) => r.id !== input.excludeId)

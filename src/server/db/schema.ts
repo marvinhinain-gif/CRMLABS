@@ -470,6 +470,40 @@ export const appointments = pgTable(
   (t) => [index("appointments_org_idx").on(t.orgId, t.startsAt)],
 );
 
+// ---------- Agenda da equipe ----------
+/** Compromisso interno marcado com uma ou mais pessoas da equipe (reunião interna, treinamento, alinhamento…). */
+export const teamEvents = pgTable(
+  "team_events",
+  {
+    id: id(),
+    orgId: orgRef(),
+    title: text("title").notNull(),
+    description: text("description"),
+    startsAt: ts("starts_at").notNull(),
+    endsAt: ts("ends_at").notNull(),
+    allDay: boolean("all_day").notNull().default(false),
+    location: text("location"),
+    /** Lead/contato relacionado (opcional). */
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    /** Minutos antes do início para o lembrete (null = sem lembrete). */
+    reminderMinutes: integer("reminder_minutes").default(30),
+    canceledAt: ts("canceled_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("team_events_org_idx").on(t.orgId, t.startsAt)],
+);
+
+export const teamEventParticipants = pgTable(
+  "team_event_participants",
+  {
+    eventId: uuid("event_id").notNull().references(() => teamEvents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.userId] }), index("team_event_participants_user_idx").on(t.userId)],
+);
+
 // ---------- Conversas ----------
 export const conversations = pgTable(
   "conversations",

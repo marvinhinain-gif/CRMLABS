@@ -27,6 +27,7 @@ import {
   UserRound,
   Megaphone,
   CalendarDays,
+  CalendarClock,
   Plug,
   CheckCheck,
   ClipboardList,
@@ -47,6 +48,7 @@ const NAV: { href: string; label: string; icon: typeof House | typeof InstagramN
   { href: "/social-seller", label: "Social Seller", icon: Users },
   { href: "/leads", label: "Leads", icon: Megaphone, badge: "leads" },
   { href: "/agendamentos", label: "Agendamentos", icon: CalendarDays },
+  { href: "/agenda", label: "Agenda da equipe", icon: CalendarClock },
   { href: "/instagram", label: "Instagram", icon: InstagramNavIcon, badge: "instagram" },
   { href: "/contatos", label: "Contatos", icon: SquareUser },
   { href: "/comercial", label: "Comercial", icon: ChartNoAxesColumn },
@@ -58,6 +60,7 @@ const NAV: { href: string; label: string; icon: typeof House | typeof InstagramN
 const TITLES: Record<string, string> = {
   "/dashboard": "Visão geral",
   "/social-seller": "Social Seller",
+  "/agenda": "Agenda da equipe",
   "/leads": "Leads",
   "/agendamentos": "Agendamentos",
   "/integracoes": "Integrações",
