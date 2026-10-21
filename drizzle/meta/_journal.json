@@ -127,6 +127,13 @@
       "when": 1792549211389,
       "tag": "0017_cakto_sales",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792609944437,
+      "tag": "0018_lead_score_class",
+      "breakpoints": true
     }
   ]
 }

@@ -11,7 +11,8 @@ import { formatPhone, longDayTime, relativeTime } from "@/lib/format";
 import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Select } from "@/components/ui";
 import { SourceChip } from "@/components/integrations/shared";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
-import { LeadSheet, LEAD_STATUS } from "./LeadSheet";
+import { LEAD_CLASS, LEAD_CLASS_FILTERS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
+import { LeadClassBadge, LeadSheet, LEAD_STATUS } from "./LeadSheet";
 
 export type LeadRow = {
   id: string;
@@ -32,8 +33,11 @@ export type LeadRow = {
   sourceColor: string | null;
   productName: string | null;
   appointmentAt: string | null;
+  scoreClass: LeadClass | null;
+  scoreClassManual: boolean;
+  score: number | null;
 };
-type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number> };
+type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; classCounts: Record<string, number> };
 
 const FILTERS = [
   { value: "open", label: "Para atender" },
@@ -66,6 +70,7 @@ function LeadCard({ l, i, onOpen }: { l: LeadRow; i: number; onOpen: () => void 
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="truncate text-[15.5px] font-semibold">{l.name}</span>
             <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
+            <LeadClassBadge cls={l.scoreClass} score={l.score} manual={l.scoreClassManual} />
           </span>
           <span className="mt-0.5 block truncate text-[13px] text-muted">
             {[formatPhone(l.phone), l.instagram && `@${l.instagram}`].filter(Boolean).join(" · ")}
@@ -102,20 +107,21 @@ function LeadList() {
   const team = useTeam();
   const [status, setStatus] = useQueryParam("status", "open");
   const [owner, setOwner] = useQueryParam("responsavel", "");
+  const [classe, setClasse] = useQueryParam("classe", "");
   const [, setLeadParam] = useQueryParam("lead", "");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const debounced = useDebounced(q);
-  const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, q: debounced, assignedTo: owner, page })}`, fetcher, { keepPreviousData: true });
-  useEffect(() => setPage(1), [status, debounced, owner]);
+  const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, q: debounced, assignedTo: owner, classe, page })}`, fetcher, { keepPreviousData: true });
+  useEffect(() => setPage(1), [status, debounced, owner, classe]);
   const counts = data?.counts ?? {};
   const countFor = (v: string) => (v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? Object.values(counts).reduce((a, b) => a + b, 0) : (counts[v] ?? 0));
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 scroll-thin lg:flex-1" role="tablist" aria-label="Situação">
+      <div className="flex flex-col gap-3">
+        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 scroll-thin" role="tablist" aria-label="Situação">
           {FILTERS.map((f) => {
             const active = status === f.value;
             return (
@@ -132,13 +138,21 @@ function LeadList() {
             );
           })}
         </div>
-        <div className="flex gap-2">
-          <div className="relative flex-1 lg:w-[260px]">
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          <div className="relative col-span-2 sm:flex-1">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted" aria-hidden />
             <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nome, WhatsApp, e-mail ou @" aria-label="Buscar leads" className="h-11 w-full rounded-[14px] border border-line bg-white pl-11 pr-3 text-[14px] focus:border-brand focus:outline-none focus:ring-4 focus:ring-[#008a65]/10" />
           </div>
+          <Select aria-label="Lead score" value={classe} onChange={(e) => setClasse(e.target.value)} className={cx("w-full bg-white sm:w-[220px]", !me.permissions.dataAll && "col-span-2")}>
+            <option value="">Todo lead score</option>
+            {LEAD_CLASS_FILTERS.map((c) => (
+              <option key={c} value={c}>
+                {c === "none" ? UNCLASSIFIED.label : LEAD_CLASS[c].label} ({data?.classCounts?.[c] ?? 0})
+              </option>
+            ))}
+          </Select>
           {me.permissions.dataAll && (
-            <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="w-[150px] sm:w-[190px] bg-white">
+            <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="w-full bg-white sm:w-[200px]">
               <option value="">Toda a equipe</option>
               {team
                 .filter((m) => m.status === "active")
