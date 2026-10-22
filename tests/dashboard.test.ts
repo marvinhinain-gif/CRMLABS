@@ -15,7 +15,7 @@ describe("Dashboard calculado", () => {
     const d = await getDashboard(ctx.admin, { period: "month" });
     expect(d.metrics).toEqual({ novosInteressados: 0, conversasAtivas: 0, reunioesAgendadas: 0, vendasFechadasCents: 0, vendasFechadasCount: 0 });
     expect(d.distribution.every((s) => s.n === 0)).toBe(true);
-    expect(d.distribution).toHaveLength(6);
+    expect(d.distribution).toHaveLength(7);
   });
 
   it("bate com registros de teste conhecidos", async () => {

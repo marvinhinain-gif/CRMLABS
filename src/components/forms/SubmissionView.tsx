@@ -11,7 +11,7 @@ import { Badge, Button, Dialog, ErrorState, Field, LoadingState, Select, Textare
 import { InstagramRelationship } from "@/components/integrations/InstagramRelationship";
 import { LEAD_STATUS_LABEL, TierBadge, type RecommendationView, type SubmissionDetail } from "./shared";
 
-const ROUTE_LABEL: Record<string, string> = { sales: "Comercial (closer)", relationship: "Social Seller", none: "Somente base de contatos" };
+const ROUTE_LABEL: Record<string, string> = { sales: "Comercial (closer)", relationship: "Leads (Social Seller pelo botão)", none: "Somente base de contatos" };
 const CONSENT_LABEL = (k: string) => (k === "processing_notice" ? "Aviso de tratamento de dados" : k === "marketing" ? "Marketing (opcional)" : k.startsWith("question:") ? "Pergunta de consentimento" : k);
 
 /** Uma resposta completa: dados, score, classificação, respostas, consentimentos e histórico. */
@@ -95,6 +95,13 @@ export function SubmissionView({ id, onOpenContact }: { id: string; onOpenContac
           <span className="text-muted">Responsável: </span>
           {s.lead?.assignedName ?? "—"}
         </div>
+        {s.lead && (
+          <div className="sm:col-span-2">
+            <a href={`/leads?lead=${s.lead.id}`} className="inline-flex items-center gap-1.5 font-semibold text-brand hover:underline">
+              <SquareUser className="size-4" aria-hidden /> Abrir o lead (para adicionar ao CRM do Social Seller)
+            </a>
+          </div>
+        )}
         {Object.entries(s.utm).filter(([, v]) => v).length > 0 && (
           <div className="sm:col-span-2">
             <span className="text-muted">UTMs: </span>

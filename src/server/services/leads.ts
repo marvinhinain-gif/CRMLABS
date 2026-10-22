@@ -28,8 +28,8 @@ import { can, leadScope } from "../permissions";
 import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
-import { audit, cleanText, closerPipeline, getPipeline, normalizeHandle, notifyUser } from "./common";
-import { addToBoard } from "./board";
+import { audit, cleanText, closerPipeline, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
+import { activeEntryFor, addToBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { classFromProduct, LEAD_CLASSES, LEAD_CLASS_FILTERS, type LeadClass } from "@/lib/leadScore";
 
@@ -336,18 +336,10 @@ export async function ingestLead(form: Integration, input: LeadInput, opts: Inge
           opportunityId = o.id;
         }
       }
-    } else if (locked.stageId) {
-      const [onBoard] = await tx.select({ id: relationshipEntries.id, autoCreated: relationshipEntries.autoCreated }).from(relationshipEntries).where(and(eq(relationshipEntries.contactId, contact.id), isNull(relationshipEntries.closedAt)));
-      // Um cartão automático antigo vira Lead de verdade quando o formulário chega.
-      if (onBoard?.autoCreated) await tx.update(relationshipEntries).set({ autoCreated: false, origin: "form" }).where(eq(relationshipEntries.id, onBoard.id));
-      if (!onBoard) {
-        try {
-          await addToBoard({ orgId: form.orgId, userId: null }, contact.id, locked.stageId, tx, `Lead · ${locked.name}`);
-        } catch (e) {
-          logger.warn("Etapa da integração indisponível; lead entrou sem cartão", e);
-        }
-      }
     }
+    // Social Seller: o lead NÃO entra sozinho no Kanban. A etapa da integração fica como sugestão
+    // e o cartão só é criado quando alguém aperta "Adicionar ao CRM do Social Seller" (addLeadToBoard).
+    const suggestedStageId = locked.pipelineKind !== "sales" ? (locked.stageId ?? null) : null;
 
     const [lead] = await tx
       .insert(leads)
@@ -373,6 +365,7 @@ export async function ingestLead(form: Integration, input: LeadInput, opts: Inge
         adName: locked.adName ?? input.utm.ad_name ?? input.utm.utm_content ?? null,
         productId,
         opportunityId,
+        suggestedStageId,
       })
       .returning();
     await tx.insert(contactTouchpoints).values({
@@ -418,9 +411,10 @@ export async function ingestLead(form: Integration, input: LeadInput, opts: Inge
     }
   }
   await publish({ orgId: form.orgId, topic: "leads", entityId: lead.id, ownerIds: [lead.assignedTo] });
-  const kind = routeOverride.pipelineKind ?? form.pipelineKind;
-  if (contactCreated || (routeOverride.stageId !== undefined ? routeOverride.stageId : form.stageId) || lead.opportunityId) {
-    await publish({ orgId: form.orgId, topic: kind === "sales" ? "opportunities" : "board", entityId: lead.contactId, ownerIds: [lead.assignedTo] });
+  if (lead.opportunityId) {
+    await publish({ orgId: form.orgId, topic: "opportunities", entityId: lead.contactId, ownerIds: [lead.assignedTo] });
+  } else if (contactCreated) {
+    await publish({ orgId: form.orgId, topic: "board", entityId: lead.contactId, ownerIds: [lead.assignedTo] });
   }
   return lead;
 }
@@ -561,6 +555,7 @@ export async function getLead(ctx: Ctx, id: string) {
   const [prod] = l.productId ? await db.select({ name: products.name }).from(products).where(eq(products.id, l.productId)) : [];
   const fieldIds = Object.keys(l.custom ?? {});
   const fieldRows = fieldIds.length ? await db.select({ id: customFields.id, label: customFields.label }).from(customFields).where(inArray(customFields.id, fieldIds)).orderBy(asc(customFields.position)) : [];
+  const leadScore = await leadScoreOf(l);
   return {
     ...l,
     formName: form?.name ?? null,
@@ -572,7 +567,8 @@ export async function getLead(ctx: Ctx, id: string) {
     productName: prod?.name ?? null,
     customValues: fieldRows.map((f) => ({ label: f.label, value: l.custom[f.id] })),
     journey: await contactJourney(ctx, l.contactId),
-    leadScore: await leadScoreOf(l),
+    leadScore,
+    board: await boardStatusOf(ctx, l, leadScore.class),
   };
 }
 
@@ -650,6 +646,59 @@ export async function updateLead(ctx: Ctx, id: string, input: z.infer<typeof upd
   await audit(db, ctx, "lead.updated", "lead", l.id, { ...input });
   await publish({ orgId: ctx.orgId, topic: "leads", entityId: l.id, ownerIds: [l.assignedTo, u.assignedTo] });
   return u;
+}
+
+// ---------- Entrada manual no CRM do Social Seller ----------
+
+/**
+ * Etapa sugerida para o botão "Adicionar ao CRM": lead "Não é nosso ICP" → "Fora do ICP";
+ * senão a etapa escolhida no formulário; senão "Novo interessado"; senão a primeira etapa.
+ */
+async function suggestedStageFor(ctx: Ctx, l: Pick<typeof leads.$inferSelect, "suggestedStageId">, cls: LeadClass | null) {
+  const p = await getPipeline(ctx.orgId, "relationship");
+  const stages = await db
+    .select({ id: pipelineStages.id, key: pipelineStages.key, name: pipelineStages.name })
+    .from(pipelineStages)
+    .where(and(eq(pipelineStages.pipelineId, p.id), isNull(pipelineStages.archivedAt)))
+    .orderBy(asc(pipelineStages.position));
+  const byKey = (k: string) => stages.find((s) => s.key === k);
+  return (cls === "NAO_ICP" ? byKey(FORA_DO_ICP_KEY) : undefined) ?? stages.find((s) => s.id === l.suggestedStageId) ?? byKey(NOVO_INTERESSADO_KEY) ?? stages[0] ?? null;
+}
+
+/** Situação do contato do lead no Kanban do Social Seller (cartão atual ou etapa sugerida). */
+async function boardStatusOf(ctx: Ctx, l: typeof leads.$inferSelect, cls: LeadClass | null) {
+  const entry = await activeEntryFor(l.contactId, ctx.orgId);
+  if (entry && !entry.autoCreated) return { inBoard: true as const, stageId: entry.stageId, stageName: entry.stageName, suggestedStageId: null };
+  const s = await suggestedStageFor(ctx, l, cls);
+  return { inBoard: false as const, stageId: null, stageName: null, suggestedStageId: s?.id ?? null };
+}
+
+export const addLeadToBoardSchema = z.object({ stageId: z.string().uuid().optional() });
+
+/** "Adicionar ao CRM do Social Seller": único caminho para um lead de formulário entrar no Kanban. */
+export async function addLeadToBoard(ctx: Ctx, id: string, input: z.infer<typeof addLeadToBoardSchema>) {
+  const l = await getVisibleLead(ctx, id);
+  const [form] = l.formId ? await db.select({ name: leadForms.name }).from(leadForms).where(eq(leadForms.id, l.formId)) : [];
+  const stageId = input.stageId ?? (await suggestedStageFor(ctx, l, (await leadScoreOf(l)).class))?.id;
+  if (!stageId) throw invalid("O Kanban do Social Seller não tem etapas.");
+  const entry = await db.transaction(async (tx) => {
+    const current = await activeEntryFor(l.contactId, ctx.orgId, tx);
+    if (current && !current.autoCreated) throw new AppError("conflict", `Este lead já está no CRM do Social Seller, em “${current.stageName}”.`);
+    if (current) {
+      // Cartão antigo que entrou sozinho (mensagem/comentário): vira Lead de verdade.
+      const [u] = await tx.update(relationshipEntries).set({ autoCreated: false, origin: "form", updatedAt: new Date() }).where(eq(relationshipEntries.id, current.id)).returning();
+      return u;
+    }
+    const e = await addToBoard(ctx, l.contactId, stageId, tx, `Adicionado ao CRM · ${form?.name ?? "Lead"}`, { origin: "form", productId: l.productId, createdBy: ctx.userId });
+    if (!e) throw new AppError("conflict", "Este lead já está no CRM do Social Seller.");
+    // O contato acompanha o responsável do lead quando ainda não tinha dono.
+    if (l.assignedTo) await tx.update(contacts).set({ ownerId: l.assignedTo }).where(and(eq(contacts.id, l.contactId), isNull(contacts.ownerId)));
+    return e;
+  });
+  await audit(db, ctx, "lead.added_to_board", "lead", l.id, { stageId: entry.stageId });
+  await publish({ orgId: ctx.orgId, topic: "board", entityId: l.contactId, ownerIds: [l.assignedTo] });
+  await publish({ orgId: ctx.orgId, topic: "leads", entityId: l.id, ownerIds: [l.assignedTo] });
+  return entry;
 }
 
 export const scheduleLeadSchema = z

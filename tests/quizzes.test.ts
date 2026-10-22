@@ -173,10 +173,11 @@ describe("Formulários & Quizzes — fluxo completo", () => {
     const subs = await db.select().from(quizSubmissions).orderBy(quizSubmissions.completedAt);
     expect(subs.map((s) => s.tierId)).toEqual(["icp_b", "icp_d"]);
 
-    const [b] = await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, subs[0].contactId!));
-    const [stage] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, b.stageId));
-    expect(stage.key).toBe("em-qualificacao");
+    // Não entra sozinho no Kanban: a etapa fica como sugestão para o botão "Adicionar ao CRM".
+    expect(await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, subs[0].contactId!))).toHaveLength(0);
     const [leadB] = await db.select().from(leads).where(eq(leads.id, subs[0].leadId!));
+    const [stage] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, leadB.suggestedStageId!));
+    expect(stage.key).toBe("em-qualificacao");
     expect([u.seller.id, u.seller2.id]).toContain(leadB.assignedTo);
 
     const [leadD] = await db.select().from(leads).where(eq(leads.id, subs[1].leadId!));

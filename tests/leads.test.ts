@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/server/db";
-import { appointments, contacts, leadForms, leads, notifications, relationshipEntries } from "@/server/db/schema";
-import { getLead, listLeads, normalizePhone, scheduleLead, submitPublicForm, updateLead } from "@/server/services/leads";
+import { appointments, contacts, leadForms, leads, notifications, pipelineStages, relationshipEntries } from "@/server/db/schema";
+import { addLeadToBoard, getLead, listLeads, normalizePhone, scheduleLead, submitPublicForm, updateLead } from "@/server/services/leads";
+import { getBoard } from "@/server/services/board";
 import { createForm, ingestWebhookLead, listForms, updateForm } from "@/server/services/integrations";
 import { listAppointments } from "@/server/services/commercial";
 import { setupOrg } from "./helpers";
@@ -47,10 +48,10 @@ describe("leads de anúncio", () => {
     expect(ana.utm).toEqual({ utm_source: "facebook", utm_campaign: "outubro" });
     expect(ana.preferredAt).toBeInstanceOf(Date);
 
-    // contato criado com dono = social seller e cartão em "Novo interessado"
+    // contato criado com dono = social seller; SEM cartão no Kanban até alguém apertar o botão
     const [c] = await db.select().from(contacts).where(eq(contacts.id, ana.contactId));
     expect(c).toMatchObject({ source: "lead_form", ownerId: ana.assignedTo });
-    expect(await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, c.id))).toHaveLength(1);
+    expect(await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, c.id))).toHaveLength(0);
 
     // notificação apenas para quem recebeu
     const sellerNotes = (await notesOf(ana.assignedTo!)).filter((n) => n.type === "lead.new");
@@ -151,5 +152,42 @@ describe("leads de anúncio", () => {
     expect(normalizePhone("+55 71 99999 1111")).toBe("+5571999991111");
     expect(normalizePhone("0055 71 3333 4444")).toBe("+557133334444");
     expect(normalizePhone("123")).toBeNull();
+  });
+
+  it("lead do formulário só entra no CRM do Social Seller pelo botão, e lead fora do ICP vai para “Fora do ICP”", async () => {
+    const { ctx, users: u } = await setupOrg();
+    const form = await formFor(ctx, { questions: [] });
+    await submitPublicForm(form.slug, { ...base, name: "Ana", phone: "71999991111" }, "3.3.3.1");
+    await submitPublicForm(form.slug, { ...base, name: "Beto", phone: "71999992222" }, "3.3.3.2");
+    const [ana, beto] = await db.select().from(leads).orderBy(leads.createdAt);
+    expect(await db.select().from(relationshipEntries)).toHaveLength(0);
+
+    const stages = await db.select().from(pipelineStages).where(eq(pipelineStages.orgId, ctx.admin.orgId));
+    const novo = stages.find((s) => s.key === "novo-interessado")!;
+    const fora = stages.find((s) => s.key === "fora-do-icp")!;
+    expect(fora).toMatchObject({ name: "Fora do ICP" });
+    expect(Math.max(...stages.filter((s) => s.pipelineId === fora.pipelineId).map((s) => s.position))).toBe(fora.position); // última coluna
+
+    // Sugestão: etapa do formulário; com "Não é nosso ICP", a coluna Fora do ICP.
+    const before = await getLead(ctx.admin, ana.id);
+    expect(before.board).toMatchObject({ inBoard: false, suggestedStageId: novo.id });
+    await updateLead(ctx.admin, beto.id, { scoreClass: "NAO_ICP" });
+    expect((await getLead(ctx.admin, beto.id)).board.suggestedStageId).toBe(fora.id);
+
+    // Botão: cria o cartão (sem etapa escolhida usa a sugestão) e não duplica.
+    const seller = u.seller.id === ana.assignedTo ? ctx.seller : ctx.seller2;
+    await addLeadToBoard(seller, ana.id, {});
+    await addLeadToBoard(ctx.admin, beto.id, {});
+    const entries = await db.select().from(relationshipEntries);
+    expect(entries.find((e) => e.contactId === ana.contactId)).toMatchObject({ stageId: novo.id, origin: "form", autoCreated: false });
+    expect(entries.find((e) => e.contactId === beto.contactId)!.stageId).toBe(fora.id);
+    await expect(addLeadToBoard(ctx.admin, ana.id, {})).rejects.toThrow(/já está no CRM/);
+    expect((await getLead(ctx.admin, ana.id)).board).toMatchObject({ inBoard: true, stageName: "Novo interessado" });
+    const board = await getBoard(ctx.admin, {});
+    expect(board.stages.find((s) => s.id === fora.id)!.cards.map((c) => c.name)).toEqual(["Beto"]);
+
+    // Preencher de novo não cria nem move cartão.
+    await submitPublicForm(form.slug, { ...base, name: "Ana", phone: "71999991111" }, "3.3.3.3");
+    expect(await db.select().from(relationshipEntries)).toHaveLength(2);
   });
 });
