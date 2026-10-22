@@ -39,6 +39,7 @@ import { ChannelBadge, InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { NewTaskDialog } from "@/components/tasks/TaskParts";
 import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { TransformLeadDialog } from "@/components/instagram/TransformLeadDialog";
+import { SendFormMenu } from "@/components/forms/SendFormMenu";
 import type { Stage } from "@/lib/types";
 
 type ConvRow = {
@@ -630,6 +631,7 @@ function ConversationPane({ id, onBack, panelOpen, onTogglePanel }: { id: string
                   ))}
                 </MenuContent>
               </Menu>
+              <SendFormMenu handle={data.contact.username} onPick={(link) => setText((t) => (t ? `${t}\n${link}` : link))} />
               <textarea
                 aria-label="Mensagem"
                 value={text}

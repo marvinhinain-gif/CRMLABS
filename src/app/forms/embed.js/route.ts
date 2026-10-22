@@ -2,13 +2,13 @@
  * Script de incorporação com ajuste automático de altura:
  *   <div data-crmlabs-form="SLUG"></div>
  *   <script src="https://DOMINIO/forms/embed.js" async></script>
- * Repassa as UTMs da página do site para o formulário (atribuição comercial).
+ * Repassa as UTMs (e o ?ig= do Instagram) da página do site para o formulário (atribuição comercial).
  * data-crmlabs-origem="stories" identifica o link de origem (ou ?origem= na página do site).
  */
 const SCRIPT = `(function () {
   var cur = document.currentScript;
   var base = cur ? new URL(cur.src).origin : "";
-  var KEYS = ["utm_source","utm_medium","utm_campaign","utm_content","utm_term","fbclid","gclid","ad_id","ad_name","adset_name","campaign_name","platform"];
+  var KEYS = ["utm_source","utm_medium","utm_campaign","utm_content","utm_term","fbclid","gclid","ad_id","ad_name","adset_name","campaign_name","platform","ig"];
   function params(el) {
     var sp = new URLSearchParams(window.location.search), out = new URLSearchParams({ embed: "1" });
     KEYS.forEach(function (k) { var v = sp.get(k); if (v) out.set(k, v); });

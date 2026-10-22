@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db } from "@/server/db";
-import { channelIdentities, connectedAccounts, contactTags, leadSources, leads, opportunities, pipelineStages, quizForms, quizScoreHistory, quizSubmissions, relationshipEntries, tags } from "@/server/db/schema";
-import { createForm, getForm, publishForm, saveDraft } from "@/server/services/quizzes";
+import { channelIdentities, connectedAccounts, contacts, contactTags, leadSources, leads, opportunities, pipelineStages, quizForms, quizScoreHistory, quizSubmissions, relationshipEntries, tags } from "@/server/db/schema";
+import { createForm, getForm, publishForm, saveDraft, shareableForms } from "@/server/services/quizzes";
 import { getPublicQuiz, recordEvent, scoreWith, submitQuiz } from "@/server/services/quizPublic";
 import { exportResponses, formAnalytics, getSubmission, listResponses, overrideRecommendation, responseFilterOptions } from "@/server/services/quizReports";
 import { instagramRelationship, refreshInstagramRelationship } from "@/server/services/igRelationship";
@@ -207,6 +207,38 @@ describe("Quiz de Aplicação AXION — no CRM", () => {
     await submitQuiz(form.slug, body(B, { origem: "bio" }), meta);
     const [s] = await db.select().from(quizSubmissions);
     expect(s).toMatchObject({ linkLabel: "Link da bio", productId: "CONSULTORIA" });
+  });
+
+  it("Instagram sem perguntar: @ do link personalizado (?ig=) e origem Instagram pelo app", async () => {
+    const { ctx, org, form } = await published();
+    // Pessoa que já conversou no Direct: a resposta cai no mesmo contato.
+    const [existing] = await db.insert(contacts).values({ orgId: org.id, name: "Ana do Direct", username: "ana.souza" }).returning();
+
+    await recordEvent(form.slug, { sessionId: randomUUID(), kind: "view", ig: "@Ana.Souza" }, "3.3.3.3");
+    await submitQuiz(form.slug, body(A, { ig: "@Ana.Souza" }), meta);
+    const [s1] = await db.select().from(quizSubmissions);
+    expect(s1).toMatchObject({ instagram: "ana.souza", contactId: existing.id });
+    expect(s1.utm).toEqual({ utm_source: "instagram", utm_medium: "direct" });
+    const shared = await shareableForms(ctx.closer);
+    expect(shared).toEqual([{ id: form.id, name: form.name, url: form.publicUrl, origem: null }]);
+
+    // Link do Stories com @: as UTMs do link continuam mandando.
+    await submitQuiz(form.slug, body({ ...B, whatsapp: "(11) 97777-1234" }, { origem: "stories", ig: "instagram.com/bruno_b" }), meta);
+    const [s2] = await db.select().from(quizSubmissions).where(eq(quizSubmissions.instagram, "bruno_b"));
+    expect(s2.utm).toMatchObject({ utm_source: "instagram", utm_medium: "stories" });
+
+    // Link comum aberto no app do Instagram: sem @, mas com origem Instagram.
+    const igUa = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Instagram 312.0.0.0";
+    await submitQuiz(form.slug, body({ ...D, full_name: "Carla", whatsapp: "(21) 97777-6666" }), { ...meta, userAgent: igUa });
+    const [s3] = await db.select().from(quizSubmissions).where(eq(quizSubmissions.name, "Carla"));
+    expect(s3.instagram).toBeNull();
+    expect(s3.utm).toEqual({ utm_source: "instagram" });
+
+    // Fora do Instagram e sem link: nada é inventado; valor inválido no ?ig= é ignorado.
+    await submitQuiz(form.slug, body({ ...D, full_name: "Davi", whatsapp: "(31) 96666-5555" }, { ig: "não é um @!" }), meta);
+    const [s4] = await db.select().from(quizSubmissions).where(eq(quizSubmissions.name, "Davi"));
+    expect(s4.instagram).toBeNull();
+    expect(s4.utm).toEqual({});
   });
 
   it("K: falha na integração com o CRM nunca vira sucesso e nada fica pela metade", async () => {
