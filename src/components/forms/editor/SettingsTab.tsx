@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { mutate } from "swr";
+import { toast } from "sonner";
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import { api } from "@/lib/api";
 import { allQuestions, sortedTiers } from "@/lib/quiz/engine";
 import { route as newRoute, uid } from "@/lib/quiz/templates";
 import { CHOICE_TYPES, type QuizDefinition, type Route, type Tier } from "@/lib/quiz/types";
@@ -217,6 +220,66 @@ function TierEditor({ tier, draft, update, options, onRemove }: { tier: Tier; dr
   );
 }
 
+const NEW_SOURCE = "__nova__";
+
+/** Origem do lead: uma existente ou uma nova com o nome que o usuário escolher. */
+function SourceField({ value, sources, onChange }: { value: string | null; sources: EditorProps["options"]["sources"]; onChange: (v: string | null) => void }) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const create = async () => {
+    setBusy(true);
+    try {
+      const row = await api.post<{ id: string; name: string }>("/api/forms/sources", { name });
+      await mutate("/api/forms/options");
+      onChange(row.id);
+      toast.success(`Origem “${row.name}” pronta. Salve o rascunho para usar.`);
+      setCreating(false);
+      setName("");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Field label="Origem do lead" htmlFor="st-source" hint="É o nome que aparece como origem do lead. Para uma origem por link (Stories, WhatsApp…), use Publicação → Links de origem.">
+      <div className="flex flex-col gap-2">
+        <Select
+          id="st-source"
+          value={creating ? NEW_SOURCE : (value ?? "")}
+          onChange={(e) => {
+            if (e.target.value === NEW_SOURCE) return setCreating(true);
+            setCreating(false);
+            onChange(e.target.value || null);
+          }}
+        >
+          <option value="">Formulário (padrão)</option>
+          {sources.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
+          ))}
+          <option value={NEW_SOURCE}>+ Criar origem com nome próprio…</option>
+        </Select>
+        {creating && (
+          <div className="anim-fade flex flex-col gap-2">
+            <Input aria-label="Nome da nova origem" autoFocus value={name} maxLength={60} placeholder="Nome da origem. Ex.: Live de terça" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), name.trim().length >= 2 && create())} />
+            <div className="flex gap-2">
+              <Button size="sm" onClick={create} loading={busy} disabled={name.trim().length < 2}>
+                Criar origem
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setCreating(false)}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Field>
+  );
+}
+
 export function SettingsTab({ draft, update, options, meta, setMeta, slugError }: EditorProps & { meta: Meta; setMeta: (m: Partial<Meta>) => void; slugError?: string }) {
   const s = draft.settings;
   const setS = <K extends keyof QuizDefinition["settings"]>(k: K, v: QuizDefinition["settings"][K]) => update((d) => void (d.settings[k] = v));
@@ -285,16 +348,7 @@ export function SettingsTab({ draft, update, options, meta, setMeta, slugError }
 
       <Panel title="Destino no CRM" description="Cada envio cria ou atualiza o contato (sem duplicar por e-mail ou WhatsApp) e registra o lead com origem, data e hora.">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Origem do lead" htmlFor="st-source">
-            <Select id="st-source" value={s.sourceId ?? ""} onChange={(e) => setS("sourceId", e.target.value || null)}>
-              <option value="">Formulário (padrão)</option>
-              {options.sources.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <SourceField value={s.sourceId} sources={options.sources} onChange={(v) => setS("sourceId", v)} />
           <Field label="Produto de interesse" htmlFor="st-product">
             <Select id="st-product" value={s.productId ?? ""} onChange={(e) => setS("productId", e.target.value || null)}>
               <option value="">Nenhum</option>

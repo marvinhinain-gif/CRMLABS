@@ -590,6 +590,17 @@ export async function deleteForm(ctx: Ctx, id: string) {
 // ---------- Opções do editor ----------
 
 /** Etapas dos funis e pessoas da equipe para configurar destinos. */
+/** Origem com nome próprio criada pelo editor do formulário (reaproveita uma com o mesmo nome). */
+export async function createFormSource(ctx: Ctx, rawName: string) {
+  assertForms(ctx);
+  const name = rawName.trim().replace(/\s+/g, " ").slice(0, 60);
+  if (name.length < 2) throw invalid("Dê um nome à origem.");
+  const id = await sourceNamed(db, ctx.orgId, name);
+  const [row] = await db.select({ id: leadSources.id, name: leadSources.name, color: leadSources.color }).from(leadSources).where(eq(leadSources.id, id));
+  await audit(db, ctx, "lead_source.created", "lead_source", row.id, { name: row.name, via: "form" });
+  return row;
+}
+
 export async function editorOptions(ctx: Ctx) {
   assertForms(ctx);
   const rel = await getPipeline(ctx.orgId, "relationship");
