@@ -203,6 +203,8 @@ export type SourceLink = {
   kind: LinkKind;
   /** Origem do CRM atribuída ao lead (null = a do formulário). */
   sourceId: string | null;
+  /** Só no editor: nome de uma origem nova, criada ao salvar (o servidor troca por sourceId). */
+  newSourceName?: string | null;
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;

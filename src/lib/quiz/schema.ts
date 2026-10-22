@@ -100,6 +100,8 @@ export const linkSchema = z.object({
   label: z.string().trim().min(1, "Dê um nome ao link.").max(80),
   kind: z.enum(["stories", "whatsapp_group", "traffic", "bio", "direct", "other"]),
   sourceId: uuid.nullable(),
+  /** Nome de uma origem nova (criada ao salvar; vira sourceId). */
+  newSourceName: z.string().trim().max(60).nullable().optional(),
   utmSource: z.string().trim().max(120).nullable(),
   utmMedium: z.string().trim().max(120).nullable(),
   utmCampaign: z.string().trim().max(160).nullable(),

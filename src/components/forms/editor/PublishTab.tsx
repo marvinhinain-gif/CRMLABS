@@ -27,6 +27,18 @@ const ACTION_LABEL: Record<string, string> = {
   "form.exported": "Respostas exportadas",
 };
 
+const NEW_SOURCE = "__nova__";
+
+/** Origem usada quando o link fica em "Padrão do tipo" (igual ao servidor). */
+const DEFAULT_SOURCE_NAME: Record<LinkKind, string> = {
+  stories: "Stories",
+  whatsapp_group: "Grupo de WhatsApp",
+  traffic: "Tráfego Pago",
+  bio: "Conteúdo Orgânico",
+  direct: "Conteúdo Orgânico",
+  other: "a do formulário",
+};
+
 const KIND_UTM: Record<LinkKind, [string, string]> = {
   stories: ["instagram", "stories"],
   whatsapp_group: ["whatsapp", "grupo"],
@@ -90,7 +102,7 @@ function LinksPanel({ form, links, setLinks, sources }: { form: FormDetail; link
           return (
             <li key={i} className="flex flex-col gap-3 rounded-[18px] border border-line p-3">
               <div className="grid gap-3 sm:grid-cols-[1fr_190px_auto]">
-                <Field label="Nome" htmlFor={`lk-l-${i}`}>
+                <Field label="Nome do link" htmlFor={`lk-l-${i}`}>
                   <Input id={`lk-l-${i}`} value={l.label} maxLength={80} onChange={(e) => set(i, { label: e.target.value })} />
                 </Field>
                 <Field label="Tipo" htmlFor={`lk-k-${i}`}>
@@ -100,7 +112,7 @@ function LinksPanel({ form, links, setLinks, sources }: { form: FormDetail; link
                     onChange={(e) => {
                       const kind = e.target.value as LinkKind;
                       const [src, med] = KIND_UTM[kind];
-                      set(i, { kind, sourceId: null, utmSource: l.utmSource || src || null, utmMedium: l.utmMedium || med || null });
+                      set(i, { kind, sourceId: null, newSourceName: null, utmSource: l.utmSource || src || null, utmMedium: l.utmMedium || med || null });
                     }}
                   >
                     {Object.entries(LINK_KIND_LABEL).map(([k, v]) => (
@@ -120,17 +132,35 @@ function LinksPanel({ form, links, setLinks, sources }: { form: FormDetail; link
                 <Field label="Chave no endereço" htmlFor={`lk-key-${i}`} hint="Aparece no link como ?origem=…">
                   <Input id={`lk-key-${i}`} value={l.key} maxLength={40} onChange={(e) => set(i, { key: keyOf(e.target.value) })} className="font-mono" />
                 </Field>
-                <Field label="Origem no CRM" htmlFor={`lk-s-${i}`} hint="Vazio usa a origem padrão do tipo (Grupo de WhatsApp é criada se não existir).">
-                  <Select id={`lk-s-${i}`} value={l.sourceId ?? ""} onChange={(e) => set(i, { sourceId: e.target.value || null })}>
-                    <option value="">Padrão do tipo</option>
+                <Field
+                  label="Origem no CRM"
+                  htmlFor={`lk-s-${i}`}
+                  hint={l.newSourceName != null ? "Escolha o nome abaixo. A origem é criada ao salvar." : "É o nome que aparece como origem do lead. Escolha uma existente ou crie com o seu nome."}
+                >
+                  <Select
+                    id={`lk-s-${i}`}
+                    value={l.newSourceName != null ? NEW_SOURCE : (l.sourceId ?? "")}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === NEW_SOURCE) set(i, { sourceId: null, newSourceName: l.label });
+                      else set(i, { sourceId: v || null, newSourceName: null });
+                    }}
+                  >
+                    <option value="">Padrão do tipo ({DEFAULT_SOURCE_NAME[l.kind]})</option>
                     {sources.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
                       </option>
                     ))}
+                    <option value={NEW_SOURCE}>+ Criar origem com nome próprio…</option>
                   </Select>
                 </Field>
               </div>
+              {l.newSourceName != null && (
+                <Field label="Nome da nova origem" htmlFor={`lk-n-${i}`} hint="Ex.: Live de terça, Parceria com @fulano. Se já existir uma origem com esse nome, ela é usada.">
+                  <Input id={`lk-n-${i}`} value={l.newSourceName} maxLength={60} autoFocus placeholder="Como quer chamar essa origem?" onChange={(e) => set(i, { newSourceName: e.target.value })} />
+                </Field>
+              )}
               <div className="grid gap-3 sm:grid-cols-3">
                 <Field label="utm_source" htmlFor={`lk-us-${i}`}>
                   <Input id={`lk-us-${i}`} value={l.utmSource ?? ""} maxLength={120} onChange={(e) => set(i, { utmSource: e.target.value || null })} />
