@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db } from "@/server/db";
 import { channelIdentities, connectedAccounts, contacts, contactTags, leadSources, leads, opportunities, pipelineStages, quizForms, quizScoreHistory, quizSubmissions, relationshipEntries, tags } from "@/server/db/schema";
-import { createForm, getForm, publishForm, saveDraft, shareableForms } from "@/server/services/quizzes";
+import { createForm, createFormSource, getForm, publishForm, saveDraft, shareableForms } from "@/server/services/quizzes";
 import { getPublicQuiz, recordEvent, scoreWith, submitQuiz } from "@/server/services/quizPublic";
 import { exportResponses, formAnalytics, getSubmission, listResponses, overrideRecommendation, responseFilterOptions } from "@/server/services/quizReports";
 import { instagramRelationship, refreshInstagramRelationship } from "@/server/services/igRelationship";
@@ -223,6 +223,20 @@ describe("Quiz de Aplicação AXION — no CRM", () => {
     expect(again.links[0].sourceId).toBe(src.id);
     expect(await db.select().from(leadSources).where(and(eq(leadSources.orgId, org.id), eq(leadSources.name, "Live de terça")))).toHaveLength(1);
     await submitQuiz(form.slug, body(B, { origem: "stories" }), meta);
+    const [l] = await db.select().from(leads).where(eq(leads.orgId, org.id));
+    expect(l.sourceId).toBe(src.id);
+  });
+
+  it("Configurações: origem do lead com nome próprio criada pelo editor", async () => {
+    const { ctx, org, form } = await published();
+    await expect(createFormSource(ctx.admin, " ")).rejects.toMatchObject({ code: "invalid" });
+    const src = await createFormSource(ctx.admin, "  Parceria   Fulano ");
+    expect(src.name).toBe("Parceria Fulano");
+    expect((await createFormSource(ctx.admin, "parceria fulano")).id).toBe(src.id);
+    const f = await getForm(ctx.admin, form.id);
+    await saveDraft(ctx.admin, form.id, { draft: { ...f.draft, settings: { ...f.draft.settings, sourceId: src.id } } });
+    await publishForm(ctx.admin, form.id);
+    await submitQuiz(form.slug, body(B), meta);
     const [l] = await db.select().from(leads).where(eq(leads.orgId, org.id));
     expect(l.sourceId).toBe(src.id);
   });
