@@ -36,7 +36,7 @@ export function FormEditor({ id }: { id: string }) {
   const router = useRouter();
   const allowed = me.permissions.forms;
   const { data: form, error, mutate } = useSWR<FormDetail>(allowed ? `/api/forms/${id}` : null, fetcher, { revalidateOnFocus: false });
-  const { data: options } = useSWR<EditorOptions>(allowed ? "/api/forms/options" : null, fetcher, { revalidateOnFocus: false });
+  const { data: options, mutate: mutateOptions } = useSWR<EditorOptions>(allowed ? "/api/forms/options" : null, fetcher, { revalidateOnFocus: false });
   const [tab, setTab] = useQueryParam("aba", "perguntas");
   const [draft, setDraft] = useState<QuizDefinition | null>(null);
   const [meta, setMetaState] = useState<Meta>({ name: "", slug: "" });
@@ -105,6 +105,7 @@ export function FormEditor({ id }: { id: string }) {
         setMetaState({ name: f.name, slug: f.slug });
         setDomainsState(f.allowedDomains);
         setLinksState(stripUrls(f.links));
+        if (links.some((l) => l.newSourceName != null)) void mutateOptions();
         setDirty(false);
         if (!quiet) toast.success("Rascunho salvo. O que está no ar só muda ao publicar.");
         return f;
@@ -120,7 +121,7 @@ export function FormEditor({ id }: { id: string }) {
         setSaving(false);
       }
     },
-    [draft, form, meta, domains, links, base, mutate, hydrate],
+    [draft, form, meta, domains, links, base, mutate, mutateOptions, hydrate],
   );
 
   const publish = async () => {

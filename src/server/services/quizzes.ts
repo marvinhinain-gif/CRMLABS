@@ -332,14 +332,33 @@ async function defaultSourceFor(tx: DbOrTx, orgId: string, kind: LinkKind) {
   return row?.id ?? null;
 }
 
+/** Origem com o nome que o usuário escolheu: reaproveita uma com o mesmo nome ou cria. */
+async function sourceNamed(tx: DbOrTx, orgId: string, name: string) {
+  const [hit] = await tx.select({ id: leadSources.id, archivedAt: leadSources.archivedAt }).from(leadSources).where(and(eq(leadSources.orgId, orgId), sql`lower(${leadSources.name}) = ${name.toLowerCase()}`)).orderBy(sql`${leadSources.archivedAt} is not null`).limit(1);
+  if (hit) {
+    if (hit.archivedAt) await tx.update(leadSources).set({ archivedAt: null }).where(eq(leadSources.id, hit.id));
+    return hit.id;
+  }
+  const base = slugify(name).slice(0, 40) || "origem";
+  const [{ max }] = await tx.select({ max: sql<number>`coalesce(max(${leadSources.position}), 0)::int` }).from(leadSources).where(eq(leadSources.orgId, orgId));
+  for (let n = 1; n <= 50; n++) {
+    const [row] = await tx.insert(leadSources).values({ orgId, key: n === 1 ? base : `${base}-${n}`, name, color: "gray", position: max + 1 }).onConflictDoNothing().returning({ id: leadSources.id });
+    if (row) return row.id;
+  }
+  throw invalid(`Não foi possível criar a origem “${name}”.`);
+}
+
 /** Valida os links, confere as origens e preenche a origem padrão de cada tipo. */
 async function prepareLinks(tx: DbOrTx, orgId: string, raw: unknown): Promise<SourceLink[]> {
   const r = linksSchema.safeParse(raw);
   if (!r.success) throw invalid(r.error.issues[0]?.message ?? "Links de origem inválidos.");
   const out: SourceLink[] = [];
-  for (const l of r.data) {
+  for (const { newSourceName, ...l } of r.data) {
     let sourceId = l.sourceId;
-    if (sourceId) {
+    if (newSourceName != null) {
+      if (newSourceName.length < 2) throw invalid(`Dê um nome à origem do link “${l.label}”.`);
+      sourceId = await sourceNamed(tx, orgId, newSourceName);
+    } else if (sourceId) {
       const [s] = await tx.select({ id: leadSources.id }).from(leadSources).where(and(eq(leadSources.id, sourceId), eq(leadSources.orgId, orgId)));
       if (!s) throw invalid(`A origem escolhida para o link “${l.label}” não existe mais.`);
     } else sourceId = await defaultSourceFor(tx, orgId, l.kind);

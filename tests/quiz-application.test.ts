@@ -209,6 +209,24 @@ describe("Quiz de Aplicação AXION — no CRM", () => {
     expect(s).toMatchObject({ linkLabel: "Link da bio", productId: "CONSULTORIA" });
   });
 
+  it("links: origem com nome próprio é criada ao salvar, reaproveitada e vai para o lead", async () => {
+    const { ctx, org, form } = await published();
+    const links = form.links.map(({ url: _u, ...l }) => l);
+    await expect(saveDraft(ctx.admin, form.id, { links: [{ ...links[0], newSourceName: " " }] })).rejects.toMatchObject({ code: "invalid" });
+    const saved = await saveDraft(ctx.admin, form.id, { links: [{ ...links[0], newSourceName: "Live de terça" }, ...links.slice(1)] });
+    const [src] = await db.select().from(leadSources).where(and(eq(leadSources.orgId, org.id), eq(leadSources.name, "Live de terça")));
+    expect(src).toMatchObject({ key: "live-de-terca" });
+    expect(saved.links[0]).toMatchObject({ key: "stories", sourceId: src.id });
+    expect(saved.links[0]).not.toHaveProperty("newSourceName");
+    // Mesmo nome (sem diferenciar maiúsculas) usa a mesma origem, sem duplicar.
+    const again = await saveDraft(ctx.admin, form.id, { links: [{ ...links[0], newSourceName: "live de TERÇA" }, ...links.slice(1)] });
+    expect(again.links[0].sourceId).toBe(src.id);
+    expect(await db.select().from(leadSources).where(and(eq(leadSources.orgId, org.id), eq(leadSources.name, "Live de terça")))).toHaveLength(1);
+    await submitQuiz(form.slug, body(B, { origem: "stories" }), meta);
+    const [l] = await db.select().from(leads).where(eq(leads.orgId, org.id));
+    expect(l.sourceId).toBe(src.id);
+  });
+
   it("Instagram sem perguntar: @ do link personalizado (?ig=) e origem Instagram pelo app", async () => {
     const { ctx, org, form } = await published();
     // Pessoa que já conversou no Direct: a resposta cai no mesmo contato.
