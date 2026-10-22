@@ -24,12 +24,12 @@ export function RouteEditor({ value, onChange, options, idPrefix }: { value: Rou
       <Field label="Destino no CRM" htmlFor={`${idPrefix}-mode`}>
         <Select id={`${idPrefix}-mode`} value={value.mode} onChange={(e) => set({ mode: e.target.value as Route["mode"], assignMode: e.target.value === "none" ? "none" : value.assignMode === "none" ? "round_robin" : value.assignMode, assigneeIds: [], fixedAssigneeId: null })}>
           <option value="sales">Comercial (fila do closer)</option>
-          <option value="relationship">Social Seller (Kanban de relacionamento)</option>
+          <option value="relationship">Social Seller (entra no Kanban pelo botão no lead)</option>
           <option value="none">Somente base de contatos</option>
         </Select>
       </Field>
       {value.mode === "relationship" && (
-        <Field label="Etapa do Social Seller" htmlFor={`${idPrefix}-stage`}>
+        <Field label="Etapa sugerida no Social Seller" htmlFor={`${idPrefix}-stage`}>
           <Select id={`${idPrefix}-stage`} value={value.stageId ?? ""} onChange={(e) => set({ stageId: e.target.value || null })}>
             <option value="">Etapa de entrada padrão</option>
             {options.relationshipStages.map((s) => (

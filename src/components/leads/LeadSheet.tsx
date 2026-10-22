@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Ban, CalendarCheck, CalendarClock, Check, ExternalLink, Mail, MessageCircle, Phone, PhoneOff, Send, SquareUser, X } from "lucide-react";
+import { Ban, CalendarCheck, CalendarClock, Check, ExternalLink, LayoutDashboard, Mail, MessageCircle, Phone, PhoneOff, Plus, Send, SquareUser, X } from "lucide-react";
 import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { LeadTasks } from "@/components/tasks/TaskParts";
 import { api, fetcher } from "@/lib/api";
@@ -15,6 +15,7 @@ import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { JourneySection, OriginTrail, type Journey } from "@/components/integrations/Journey";
 import { LEAD_CLASS, LEAD_CLASSES, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
+import type { Stage } from "@/lib/types";
 
 export const LEAD_STATUS = {
   new: { label: "Novo", cls: "bg-brand text-white" },
@@ -79,7 +80,51 @@ type LeadDetail = {
   customValues: { label: string; value: string }[];
   journey: Journey | null;
   leadScore: LeadScore;
+  board: LeadBoard;
 };
+
+type LeadBoard = { inBoard: boolean; stageId: string | null; stageName: string | null; suggestedStageId: string | null };
+
+/** CRM do Social Seller: o lead do formulário só entra no Kanban por este botão. */
+function BoardCard({ b, busy, onAdd }: { b: LeadBoard; busy: boolean; onAdd: (stageId: string) => void }) {
+  const { data: stages } = useSWR<Stage[]>(b.inBoard ? null : "/api/stages?kind=relationship", fetcher);
+  const [picked, setPicked] = useState<string | null>(null);
+  const stageId = picked ?? b.suggestedStageId ?? stages?.[0]?.id ?? "";
+  if (b.inBoard) {
+    return (
+      <Link href="/social-seller" className="mt-4 flex items-center gap-3 rounded-[18px] border border-[#c9ebdc] bg-selected p-4 hover:brightness-[0.99]">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-[14px] bg-white text-brand" aria-hidden>
+          <LayoutDashboard className="size-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[14.5px] font-semibold text-brand-dark">No CRM do Social Seller</span>
+          <span className="block truncate text-[12.5px] text-brand-dark/80">Etapa: {b.stageName}</span>
+        </span>
+        <ExternalLink className="size-4 text-brand" aria-hidden />
+      </Link>
+    );
+  }
+  return (
+    <section className="mt-4 rounded-[18px] border border-line p-4" aria-labelledby="lead-board-title">
+      <h3 id="lead-board-title" className="text-[13px] font-semibold uppercase tracking-wide text-muted">
+        CRM do Social Seller
+      </h3>
+      <p className="mt-1 text-[13px] text-muted">Este lead ainda não está no Kanban. Ele só entra quando você adicionar.</p>
+      <div className="mt-3 flex flex-col gap-2">
+        <Select aria-label="Etapa do Kanban" value={stageId} onChange={(e) => setPicked(e.target.value)} disabled={!stages}>
+          {stages?.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </Select>
+        <Button variant="secondary" loading={busy} disabled={!stageId} icon={<Plus className="size-4" />} onClick={() => onAdd(stageId)}>
+          Adicionar ao CRM do Social Seller
+        </Button>
+      </div>
+    </section>
+  );
+}
 
 type LeadScore = {
   class: LeadClass | null;
@@ -253,6 +298,24 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           busy={busy}
           isAdmin={me.user.role === "admin"}
           onSet={(c) => patch({ scoreClass: c }, c ? `Lead classificado como ${LEAD_CLASS[c].label}.` : "Classificação do quiz restaurada.", "score")}
+        />
+
+        <BoardCard
+          b={l.board}
+          busy={busy === "board"}
+          onAdd={async (stageId) => {
+            setBusy("board");
+            try {
+              await api.post(`/api/leads/${l.id}/board`, { stageId });
+              await refresh();
+              await globalMutate((k) => typeof k === "string" && k.startsWith("/api/board"));
+              toast.success("Lead adicionado ao CRM do Social Seller.");
+            } catch (e) {
+              toast.error((e as Error).message);
+            } finally {
+              setBusy(null);
+            }
+          }}
         />
 
         {l.appointment && (

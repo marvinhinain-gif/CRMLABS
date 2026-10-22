@@ -53,7 +53,7 @@ describe("Kanban de relacionamento", () => {
   it("editar e reordenar etapas persiste; nomes aprovados por padrão", async () => {
     const { ctx } = await setupOrg();
     const stages = await listStages(ctx.admin, "relationship");
-    expect(stages.map((s) => s.name)).toEqual(["Engajado #1", "Seguidor Engajado #2", "Em relacionamento", "Novo interessado", "Em qualificação", "Encaminhado ao closer"]);
+    expect(stages.map((s) => s.name)).toEqual(["Engajado #1", "Seguidor Engajado #2", "Em relacionamento", "Novo interessado", "Em qualificação", "Encaminhado ao closer", "Fora do ICP"]);
     await updateStage(ctx.manager, stages[2].id, { name: "Conversando", color: "orange" });
     await reorderStages(ctx.manager, "relationship", [stages[1].id, stages[0].id, ...stages.slice(2).map((s) => s.id)]);
     const after = await listStages(ctx.admin, "relationship");

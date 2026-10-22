@@ -339,14 +339,14 @@ export function IntegrationWizard({
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Pipeline" htmlFor="ig-pipe">
                 <Select id="ig-pipe" value={v.pipelineKind} onChange={(e) => set("pipelineKind", e.target.value as Draft["pipelineKind"])}>
-                  <option value="relationship">Social Seller (relacionamento)</option>
+                  <option value="relationship">Social Seller (entra no Kanban pelo botão no lead)</option>
                   <option value="sales">Comercial (direto para o closer)</option>
                 </Select>
               </Field>
-              <Field label="Etapa inicial" htmlFor="ig-stage">
+              <Field label={v.pipelineKind === "relationship" ? "Etapa sugerida (o lead entra pelo botão)" : "Etapa inicial"} htmlFor="ig-stage">
                 {v.pipelineKind === "relationship" ? (
                   <Select id="ig-stage" value={v.stageId ?? ""} onChange={(e) => set("stageId", e.target.value || null)}>
-                    <option value="">Não criar cartão no quadro</option>
+                    <option value="">Sem sugestão de etapa</option>
                     {relStages?.filter((s) => !s.archivedAt).map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}

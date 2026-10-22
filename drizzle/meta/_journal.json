@@ -134,6 +134,13 @@
       "when": 1792609944437,
       "tag": "0018_lead_score_class",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792613948792,
+      "tag": "0019_fora_do_icp_e_entrada_manual",
+      "breakpoints": true
     }
   ]
 }

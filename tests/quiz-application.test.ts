@@ -155,8 +155,9 @@ describe("Quiz de Aplicação AXION — no CRM", () => {
     await submitQuiz(form.slug, body({ ...A, full_name: "Bruno", whatsapp: "(11) 98888-7777", investment_capacity: "B6" }, { origem: "grupo-whatsapp" }), meta);
     const [se] = await db.select().from(quizSubmissions).where(eq(quizSubmissions.linkKey, "grupo-whatsapp"));
     expect(se.productId).toBe("ANALISE_MANUAL");
-    const [entry] = await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, se.contactId!));
-    const [stage] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, entry.stageId));
+    expect(await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, se.contactId!))).toHaveLength(0);
+    const [le] = await db.select().from(leads).where(eq(leads.id, se.leadId!));
+    const [stage] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, le.suggestedStageId!));
     expect(stage.key).toBe("em-qualificacao");
 
     // D sem link → Nutrição, sem aviso; origem desconhecida é ignorada.
