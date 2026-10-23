@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { CalendarCheck, ChevronRight, Inbox, Plug, Search } from "lucide-react";
+import { CalendarCheck, ChevronRight, Inbox, Plug, Search, Trophy } from "lucide-react";
 import { fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useQueryParam, useSetQueryParams } from "@/lib/nav";
@@ -11,7 +11,7 @@ import { formatPhone, longDayTime, relativeTime } from "@/lib/format";
 import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Select } from "@/components/ui";
 import { SourceChip } from "@/components/integrations/shared";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
-import { LEAD_CLASS, LEAD_CLASS_FILTERS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
+import { LEAD_CLASS, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
 import { LEAD_PERIOD_LABEL, LEAD_PERIODS, NO_SOURCE, type LeadPeriod } from "@/lib/leadSources";
 import { LeadClassBadge, LeadSheet, LEAD_STATUS } from "./LeadSheet";
 import { LeadSourceChart, useLeadSourceStats } from "./LeadSourceChart";
@@ -38,13 +38,16 @@ export type LeadRow = {
   scoreClass: LeadClass | null;
   scoreClassManual: boolean;
   score: number | null;
+  /** Faixa de faturamento respondida na aplicação (id da alternativa). */
+  revenue: string | null;
 };
-type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; classCounts: Record<string, number> };
+type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; topCount: number; classCounts: Record<string, number> };
 
 const FILTERS = [
   { value: "open", label: "Para atender" },
   { value: "new", label: "Novos" },
   { value: "scheduled", label: "Agendados" },
+  { value: "top20", label: "TOP 20 Leads" },
   { value: "disqualified", label: "Descartados" },
   { value: "all", label: "Todos" },
 ] as const;
@@ -58,12 +61,17 @@ function useDebounced<T>(v: T, ms = 300) {
   return d;
 }
 
-function LeadCard({ l, i, onOpen }: { l: LeadRow; i: number; onOpen: () => void }) {
+function LeadCard({ l, i, rank, onOpen }: { l: LeadRow; i: number; rank?: number; onOpen: () => void }) {
   const st = LEAD_STATUS[l.status];
   const fresh = l.status === "new" && Date.now() - new Date(l.createdAt).getTime() < 30 * 60000;
   return (
     <li className="anim-fade" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
       <button onClick={onOpen} className="group flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-page/60 active:bg-page sm:items-center sm:px-5">
+        {rank && (
+          <span className={cx("mt-3 w-7 shrink-0 text-center text-[15px] font-bold tabular-nums sm:mt-0", rank <= 3 ? "text-brand" : "text-muted")} aria-label={`${rank}º lugar`}>
+            {rank}º
+          </span>
+        )}
         <span className="relative shrink-0">
           <Avatar name={l.name} size={46} />
           {fresh && <span className="absolute -right-0.5 -top-0.5 size-3.5 rounded-full border-2 border-white bg-brand-accent animate-[crm-pulse_1.4s_ease-in-out_infinite]" aria-label="Chegou agora" />}
@@ -81,6 +89,7 @@ function LeadCard({ l, i, onOpen }: { l: LeadRow; i: number; onOpen: () => void 
             {l.sourceName && <SourceChip name={l.sourceName} color={l.sourceColor} />}
             {l.formName && <span className="rounded-full bg-page px-2.5 py-0.5 text-muted">{l.formName}</span>}
             {l.productName && <span className="rounded-full bg-page px-2.5 py-0.5 text-ink">Interesse: {l.productName}</span>}
+            {rank && l.revenue && REVENUE_OPTIONS[l.revenue] && <span className="rounded-full bg-success-soft px-2.5 py-0.5 font-medium text-success">Faturamento: {REVENUE_OPTIONS[l.revenue].label}</span>}
           </span>
           <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
             <span className="text-muted">{relativeTime(l.createdAt)}</span>
@@ -125,7 +134,8 @@ function LeadList() {
   const pickSource = (id: string) => (fonte === id ? setFonte(null) : setParams({ fonte: id, status: "all" }, { status: "open" }));
   const sourceOptions = stats?.sources ?? [];
   const counts = data?.counts ?? {};
-  const countFor = (v: string) => (v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? Object.values(counts).reduce((a, b) => a + b, 0) : (counts[v] ?? 0));
+  const top = status === "top20";
+  const countFor = (v: string) => (v === "top20" ? (data?.topCount ?? 0) : v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? Object.values(counts).reduce((a, b) => a + b, 0) : (counts[v] ?? 0));
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
   return (
@@ -159,6 +169,7 @@ function LeadList() {
                 onClick={() => setStatus(f.value)}
                 className={cx("inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-[14px] font-medium transition-colors", active ? "border-[#c9ebdc] bg-selected text-brand" : "border-line bg-white text-ink hover:bg-page")}
               >
+                {f.value === "top20" && <Trophy className="size-4" aria-hidden />}
                 {f.label}
                 <span className={cx("rounded-full px-2 text-[12px]", active ? "bg-white" : "bg-page")}>{countFor(f.value)}</span>
               </button>
@@ -202,6 +213,11 @@ function LeadList() {
         </div>
       </div>
 
+      {top && (
+        <p className="text-[13.5px] text-muted">
+          Os 20 melhores leads para entrar em contato agora: maior pontuação no quiz, faturamento de R$ 10 mil por mês para cima e fora de &quot;Não é nosso ICP&quot;. Agendados e descartados saem da lista e o próximo sobe.
+        </p>
+      )}
       <Card className="overflow-hidden">
         {error && !data ? (
           <ErrorState error={error} onRetry={() => mutate()} />
@@ -210,14 +226,14 @@ function LeadList() {
         ) : !data?.rows.length ? (
           <EmptyState
             icon={<Inbox />}
-            title={status === "open" ? "Nenhum lead esperando atendimento" : "Nenhum lead encontrado"}
-            description={me.user.role === "admin" ? "Leads chegam pelas integrações (formulários, quizzes, webhooks). Configure em Integrações." : "Quando um novo lead chegar para você, ele aparece aqui e você recebe uma notificação."}
+            title={top ? "Nenhum lead no TOP 20 agora" : status === "open" ? "Nenhum lead esperando atendimento" : "Nenhum lead encontrado"}
+            description={top ? "Entram aqui os leads que responderam a aplicação com faturamento de R$ 10 mil por mês ou mais." : me.user.role === "admin" ? "Leads chegam pelas integrações (formulários, quizzes, webhooks). Configure em Integrações." : "Quando um novo lead chegar para você, ele aparece aqui e você recebe uma notificação."}
           />
         ) : (
           <>
             <ul className="divide-y divide-line">
               {data.rows.map((l, i) => (
-                <LeadCard key={l.id} l={l} i={i} onOpen={() => setLeadParam(l.id)} />
+                <LeadCard key={l.id} l={l} i={i} rank={top ? (data.page - 1) * data.pageSize + i + 1 : undefined} onOpen={() => setLeadParam(l.id)} />
               ))}
             </ul>
             {pages > 1 && (

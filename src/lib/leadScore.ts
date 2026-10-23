@@ -32,3 +32,24 @@ export function classFromProduct(productId: string | null | undefined, productLa
   if (/nutri|n[aã]o.{0,6}icp/.test(p)) return "NAO_ICP";
   return null;
 }
+
+/**
+ * TOP 20 Leads: potencial financeiro = faturamento mensal declarado na aplicação.
+ * Entram as faixas de R$ 10 mil para cima (Quiz de Aplicação: R1–R4; Diagnóstico: R$ 20 mil+).
+ */
+export const TOP_LEADS_LIMIT = 20;
+export const REVENUE_QUESTION_IDS = ["monthly_revenue_range", "faturamento"] as const;
+export const REVENUE_OPTIONS: Record<string, { label: string; top: boolean }> = {
+  R1: { label: "R$ 150 mil ou mais", top: true },
+  R2: { label: "R$ 60 mil a R$ 149.999", top: true },
+  R3: { label: "R$ 30 mil a R$ 59.999", top: true },
+  R4: { label: "R$ 10 mil a R$ 29.999", top: true },
+  R5: { label: "Abaixo de R$ 10 mil", top: false },
+  R6: { label: "Ainda não fatura", top: false },
+  fat_100k_mais: { label: "Acima de R$ 100 mil", top: true },
+  fat_50_100k: { label: "R$ 50 mil a R$ 100 mil", top: true },
+  fat_20_50k: { label: "R$ 20 mil a R$ 50 mil", top: true },
+  fat_5_20k: { label: "R$ 5 mil a R$ 20 mil", top: false },
+  fat_ate_5k: { label: "Abaixo de R$ 5 mil", top: false },
+};
+export const TOP_REVENUE_OPTIONS = Object.keys(REVENUE_OPTIONS).filter((k) => REVENUE_OPTIONS[k].top);

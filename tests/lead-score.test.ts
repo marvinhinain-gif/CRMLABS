@@ -98,4 +98,34 @@ describe("Lead score por produto nos Leads", () => {
     expect(zeca).toMatchObject({ scoreClass: null, score: null });
     expect((await getLead(ctx.admin, zeca.id)).leadScore).toEqual({ class: null, auto: null, manual: null, application: null });
   });
+
+  it("TOP 20 Leads: faturamento de R$ 10 mil+, sem Não é ICP, só para atender, por pontuação", async () => {
+    const { ctx } = await setupOrg();
+    const created = await createForm(ctx.admin, { name: "Aplicação AXION", template: "axion-aplicacao" });
+    await publishForm(ctx.admin, created.id);
+    const form = await getForm(ctx.admin, created.id);
+    await submitQuiz(form.slug, body({ ...C, ...person("Carla", "(71) 99999-3333") }), meta); // R4, menor score
+    await submitQuiz(form.slug, body({ ...A, ...person("Ana", "(71) 99999-1111") }), meta); // R2
+    await submitQuiz(form.slug, body({ ...B, ...person("Bruno", "(71) 99999-2222") }), meta); // R3
+    await submitQuiz(form.slug, body({ ...D, ...person("Davi", "(71) 99999-4444") }), meta); // R6: fora
+    await submitQuiz(form.slug, body({ ...B, monthly_revenue_range: "R5", ...person("Gil", "(71) 99999-6666") }), meta); // < 10 mil: fora
+    await submitQuiz(form.slug, body({ ...A, ...person("Hugo", "(71) 99999-7777") }), meta);
+
+    const top = () => listLeads(ctx.admin, { status: "top20", page: 1 });
+    let res = await top();
+    const names = res.rows.map((r) => r.name);
+    expect(new Set(names.slice(0, 2))).toEqual(new Set(["Ana", "Hugo"]));
+    expect(names.slice(2)).toEqual(["Bruno", "Carla"]);
+    const scores = res.rows.map((r) => r.score ?? 0);
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    expect(byName(res.rows, "Carla").revenue).toBe("R4");
+    expect(res.topCount).toBe(4);
+
+    // Marcado como Não é ICP ou agendado/descartado: sai e o próximo sobe.
+    await updateLead(ctx.admin, byName(res.rows, "Hugo").id, { scoreClass: "NAO_ICP" });
+    await updateLead(ctx.admin, byName(res.rows, "Bruno").id, { status: "disqualified" });
+    res = await top();
+    expect(res.rows.map((r) => r.name)).toEqual(["Ana", "Carla"]);
+    expect(res.topCount).toBe(2);
+  });
 });

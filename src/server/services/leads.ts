@@ -32,7 +32,7 @@ import { audit, cleanText, closerPipeline, FORA_DO_ICP_KEY, getPipeline, normali
 import { activeEntryFor, addToBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
-import { classFromProduct, LEAD_CLASSES, LEAD_CLASS_FILTERS, type LeadClass } from "@/lib/leadScore";
+import { classFromProduct, LEAD_CLASSES, LEAD_CLASS_FILTERS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, type LeadClass } from "@/lib/leadScore";
 
 // ---------- Normalização ----------
 
@@ -444,8 +444,21 @@ const autoClassSql = latestApplication(
 /** Classe valendo: a escolhida à mão no lead, senão a do quiz. */
 export const leadClassSql = sql<LeadClass | null>`coalesce(${sql.raw('"leads"."score_class"')}, ${autoClassSql})`;
 
+/** Faixa de faturamento respondida na aplicação (id da alternativa). */
+const revenueSql = latestApplication(sql`coalesce(s.answers->>'monthly_revenue_range', s.answers->>'faturamento')`);
+/**
+ * TOP 20 Leads: para atender, faturamento de R$ 10 mil para cima e fora de "Não é nosso ICP".
+ * Ordem: maior pontuação do quiz primeiro.
+ */
+const topLeadsConds = () => [
+  inArray(leads.status, ["new", "contacted", "no_answer"]),
+  sql`${revenueSql} in (${sql.join(TOP_REVENUE_OPTIONS.map((o) => sql`${o}`), sql`, `)})`,
+  sql`${leadClassSql} is distinct from 'NAO_ICP'`,
+];
+
 export const listLeadsSchema = z.object({
-  status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open"]).default("open"),
+  /** top20 = TOP 20 Leads (melhores para entrar em contato). */
+  status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open", "top20"]).default("open"),
   /** Lead score por produto (none = a classificar). */
   classe: z.enum(LEAD_CLASS_FILTERS).optional(),
   formId: z.string().uuid().optional(),
@@ -471,7 +484,9 @@ const PAGE = 30;
 
 export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
   const conds: SQL[] = [leadScope(ctx)];
+  const top = f.status === "top20";
   if (f.status === "open") conds.push(inArray(leads.status, ["new", "contacted", "no_answer"]));
+  else if (f.status === "top20") conds.push(...topLeadsConds());
   else if (f.status !== "all") conds.push(eq(leads.status, f.status));
   if (f.formId) conds.push(eq(leads.formId, f.formId));
   if (f.assignedTo && can(ctx, "data.all")) conds.push(eq(leads.assignedTo, f.assignedTo));
@@ -512,6 +527,7 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
       scoreClass: leadClassSql,
       scoreClassManual: sql<boolean>`${leads.scoreClass} is not null`,
       score: sql<number | null>`${latestApplication(sql`s.score`)}`,
+      revenue: sql<string | null>`${revenueSql}`,
     })
     .from(leads)
     .leftJoin(users, eq(users.id, leads.assignedTo))
@@ -520,21 +536,26 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     .leftJoin(leadSources, eq(leadSources.id, leads.sourceId))
     .leftJoin(products, eq(products.id, leads.productId))
     .where(where)
-    .orderBy(desc(leads.createdAt))
-    .limit(PAGE)
-    .offset((f.page - 1) * PAGE);
+    .orderBy(...(top ? [sql`${latestApplication(sql`s.score`)} desc nulls last`, desc(leads.createdAt)] : [desc(leads.createdAt)]))
+    .limit(top ? TOP_LEADS_LIMIT : PAGE)
+    .offset(top ? 0 : (f.page - 1) * PAGE);
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(leads).where(where);
   const counts = await db
     .select({ status: leads.status, n: sql<number>`count(*)::int` })
     .from(leads)
     .where(leadScope(ctx))
     .groupBy(leads.status);
+  const [{ top20 }] = await db
+    .select({ top20: sql<number>`count(*)::int` })
+    .from(leads)
+    .where(and(leadScope(ctx), ...topLeadsConds()));
   return {
     rows,
-    total,
-    page: f.page,
-    pageSize: PAGE,
+    total: top ? Math.min(total, TOP_LEADS_LIMIT) : total,
+    page: top ? 1 : f.page,
+    pageSize: top ? TOP_LEADS_LIMIT : PAGE,
     counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Record<string, number>,
+    topCount: Math.min(top20, TOP_LEADS_LIMIT),
     classCounts: Object.fromEntries(classCounts.map((c) => [c.cls ?? "none", c.n])) as Record<string, number>,
   };
 }
