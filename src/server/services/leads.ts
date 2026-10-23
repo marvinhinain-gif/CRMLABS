@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, lt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbOrTx } from "../db";
 import {
@@ -31,6 +31,7 @@ import { logger } from "../logger";
 import { audit, cleanText, closerPipeline, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
 import { activeEntryFor, addToBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
+import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
 import { classFromProduct, LEAD_CLASSES, LEAD_CLASS_FILTERS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, type LeadClass } from "@/lib/leadScore";
 
 // ---------- Normalização ----------
@@ -463,8 +464,21 @@ export const listLeadsSchema = z.object({
   formId: z.string().uuid().optional(),
   assignedTo: z.string().uuid().optional(),
   q: z.string().trim().max(100).optional(),
+  /** Fonte de tráfego (origem do lead) ou "none" (sem origem). */
+  fonte: z.union([z.string().uuid(), z.literal("none")]).optional(),
+  periodo: z.enum(LEAD_PERIODS).optional(),
   page: z.coerce.number().int().min(1).max(500).default(1),
 });
+
+/** Início do período (últimos N dias contando hoje, no fuso da organização); back=1 dá o período anterior. */
+function periodStartSql(periodo: Exclude<LeadPeriod, "all">, tz: string, back = 0) {
+  const days = PERIOD_DAYS[periodo] * (back + 1) - 1;
+  return sql`((date_trunc('day', now() at time zone ${tz}) - make_interval(days => ${days})) at time zone ${tz})`;
+}
+
+function sourceCond(fonte: string) {
+  return fonte === "none" ? isNull(leads.sourceId) : eq(leads.sourceId, fonte);
+}
 
 const PAGE = 30;
 
@@ -476,6 +490,8 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
   else if (f.status !== "all") conds.push(eq(leads.status, f.status));
   if (f.formId) conds.push(eq(leads.formId, f.formId));
   if (f.assignedTo && can(ctx, "data.all")) conds.push(eq(leads.assignedTo, f.assignedTo));
+  if (f.fonte) conds.push(sourceCond(f.fonte));
+  if (f.periodo && f.periodo !== "all") conds.push(gte(leads.createdAt, periodStartSql(f.periodo, ctx.org.timezone)));
   if (f.q) {
     const like = `%${f.q.replace(/[%_]/g, "")}%`;
     conds.push(or(ilike(leads.name, like), ilike(leads.email, like), ilike(leads.phone, like), ilike(leads.instagram, like))!);
@@ -541,6 +557,103 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Record<string, number>,
     topCount: Math.min(top20, TOP_LEADS_LIMIT),
     classCounts: Object.fromEntries(classCounts.map((c) => [c.cls ?? "none", c.n])) as Record<string, number>,
+  };
+}
+
+// ---------- Gráfico: leads por fonte de tráfego ----------
+
+export const leadSourceStatsSchema = z.object({
+  periodo: z.enum(LEAD_PERIODS).default("30d"),
+  classe: z.enum(LEAD_CLASS_FILTERS).optional(),
+  assignedTo: z.string().uuid().optional(),
+});
+
+type BucketUnit = "day" | "week" | "month";
+
+/**
+ * Quantos leads vieram de cada origem no período (com o período anterior para comparar)
+ * e a evolução no tempo, por origem. Respeita lead score e responsável; a situação do lead não entra.
+ */
+export async function leadSourceStats(ctx: Ctx, f: z.infer<typeof leadSourceStatsSchema>) {
+  const tz = ctx.org.timezone;
+  const base: SQL[] = [leadScope(ctx)];
+  if (f.assignedTo && can(ctx, "data.all")) base.push(eq(leads.assignedTo, f.assignedTo));
+  if (f.classe) base.push(f.classe === "none" ? sql`${leadClassSql} is null` : sql`${leadClassSql} = ${f.classe}`);
+
+  let start: SQL | null = null;
+  let unit: BucketUnit = "day";
+  if (f.periodo !== "all") {
+    start = periodStartSql(f.periodo, tz);
+    if (f.periodo === "90d") unit = "week";
+  } else {
+    const [{ first }] = await db
+      .select({ first: sql<string | null>`min(${leads.createdAt})` })
+      .from(leads)
+      .where(and(...base));
+    if (first) {
+      const days = (Date.now() - new Date(first).getTime()) / 86400000;
+      unit = days <= 31 ? "day" : days <= 180 ? "week" : "month";
+      start = sql`${new Date(first).toISOString()}::timestamptz`;
+    }
+  }
+  const inPeriod = and(...base, ...(start ? [gte(leads.createdAt, start)] : []));
+
+  const bySource = await db
+    .select({ id: leads.sourceId, name: leadSources.name, color: leadSources.color, n: sql<number>`count(*)::int` })
+    .from(leads)
+    .leftJoin(leadSources, eq(leadSources.id, leads.sourceId))
+    .where(inPeriod)
+    .groupBy(leads.sourceId, leadSources.name, leadSources.color);
+
+  const previous = new Map<string, number>();
+  if (f.periodo !== "all") {
+    const prev = await db
+      .select({ id: leads.sourceId, n: sql<number>`count(*)::int` })
+      .from(leads)
+      .where(and(...base, gte(leads.createdAt, periodStartSql(f.periodo, tz, 1)), lt(leads.createdAt, periodStartSql(f.periodo, tz))))
+      .groupBy(leads.sourceId);
+    for (const p of prev) previous.set(p.id ?? NO_SOURCE.id, p.n);
+  }
+
+  const sources = bySource
+    .map((r) => ({
+      id: r.id ?? NO_SOURCE.id,
+      name: r.id ? (r.name ?? "Origem removida") : NO_SOURCE.name,
+      color: r.id ? (r.color ?? "gray") : NO_SOURCE.color,
+      n: r.n,
+      previous: f.periodo === "all" ? null : (previous.get(r.id ?? NO_SOURCE.id) ?? 0),
+    }))
+    .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, "pt-BR"));
+
+  // Evolução: um ponto por dia/semana/mês do período, inclusive os vazios.
+  const bucket = sql`date_trunc(${unit}, ${leads.createdAt} at time zone ${tz})`;
+  const series: { t: string; total: number; bySource: Record<string, number> }[] = [];
+  if (start) {
+    const slots = await db.execute<{ t: string }>(
+      sql`select to_char(g, 'YYYY-MM-DD') as t from generate_series(date_trunc(${unit}, ${start} at time zone ${tz}), date_trunc(${unit}, now() at time zone ${tz}), ${`1 ${unit}`}::interval) g`,
+    );
+    const counts = await db
+      .select({ t: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`, id: leads.sourceId, n: sql<number>`count(*)::int` })
+      .from(leads)
+      .where(inPeriod)
+      .groupBy(sql`1`, leads.sourceId);
+    const at = new Map(slots.map((s) => [s.t, { t: s.t, total: 0, bySource: {} as Record<string, number> }]));
+    for (const c of counts) {
+      const p = at.get(c.t);
+      if (!p) continue;
+      p.total += c.n;
+      p.bySource[c.id ?? NO_SOURCE.id] = c.n;
+    }
+    series.push(...at.values());
+  }
+
+  return {
+    periodo: f.periodo,
+    unit,
+    total: sources.reduce((a, s) => a + s.n, 0),
+    previousTotal: f.periodo === "all" ? null : [...previous.values()].reduce((a, b) => a + b, 0),
+    sources,
+    series,
   };
 }
 

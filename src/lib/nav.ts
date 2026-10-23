@@ -36,3 +36,22 @@ export function useQueryParam(name: string, fallback = "") {
   );
   return [value, set] as const;
 }
+
+/** Atualiza vários parâmetros da URL de uma vez (dois setters seguidos perderiam o primeiro). */
+export function useSetQueryParams() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
+  return useCallback(
+    (values: Record<string, string | null>, fallbacks: Record<string, string> = {}) => {
+      const next = new URLSearchParams(sp.toString());
+      for (const [k, v] of Object.entries(values)) {
+        if (v === null || v === "" || v === fallbacks[k]) next.delete(k);
+        else next.set(k, v);
+      }
+      const s = next.toString();
+      router.replace(s ? `${pathname}?${s}` : pathname, { scroll: false });
+    },
+    [router, pathname, sp],
+  );
+}
