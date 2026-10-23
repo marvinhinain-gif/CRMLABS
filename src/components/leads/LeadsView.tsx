@@ -6,13 +6,15 @@ import Link from "next/link";
 import { CalendarCheck, ChevronRight, Inbox, Plug, Search } from "lucide-react";
 import { fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
-import { useQueryParam } from "@/lib/nav";
+import { useQueryParam, useSetQueryParams } from "@/lib/nav";
 import { formatPhone, longDayTime, relativeTime } from "@/lib/format";
 import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Select } from "@/components/ui";
 import { SourceChip } from "@/components/integrations/shared";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { LEAD_CLASS, LEAD_CLASS_FILTERS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
+import { LEAD_PERIOD_LABEL, LEAD_PERIODS, NO_SOURCE, type LeadPeriod } from "@/lib/leadSources";
 import { LeadClassBadge, LeadSheet, LEAD_STATUS } from "./LeadSheet";
+import { LeadSourceChart, useLeadSourceStats } from "./LeadSourceChart";
 
 export type LeadRow = {
   id: string;
@@ -108,18 +110,43 @@ function LeadList() {
   const [status, setStatus] = useQueryParam("status", "open");
   const [owner, setOwner] = useQueryParam("responsavel", "");
   const [classe, setClasse] = useQueryParam("classe", "");
+  const [fonte, setFonte] = useQueryParam("fonte", "");
+  const [periodoParam, setPeriodo] = useQueryParam("periodo", "30d");
+  const periodo: LeadPeriod = (LEAD_PERIODS as readonly string[]).includes(periodoParam) ? (periodoParam as LeadPeriod) : "30d";
+  const setParams = useSetQueryParams();
   const [, setLeadParam] = useQueryParam("lead", "");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const debounced = useDebounced(q);
-  const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, q: debounced, assignedTo: owner, classe, page })}`, fetcher, { keepPreviousData: true });
-  useEffect(() => setPage(1), [status, debounced, owner, classe]);
+  const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, q: debounced, assignedTo: owner, classe, fonte, periodo, page })}`, fetcher, { keepPreviousData: true });
+  const { data: stats } = useLeadSourceStats({ periodo, classe, owner });
+  useEffect(() => setPage(1), [status, debounced, owner, classe, fonte, periodo]);
+  // Clicar numa fonte do gráfico mostra todos os leads dela no período (qualquer situação), para bater com o número do gráfico.
+  const pickSource = (id: string) => (fonte === id ? setFonte(null) : setParams({ fonte: id, status: "all" }, { status: "open" }));
+  const sourceOptions = stats?.sources ?? [];
   const counts = data?.counts ?? {};
   const countFor = (v: string) => (v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? Object.values(counts).reduce((a, b) => a + b, 0) : (counts[v] ?? 0));
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1 scroll-thin" role="radiogroup" aria-label="Período">
+        <span className="shrink-0 text-[13px] font-medium text-muted">Período</span>
+        <div className="inline-flex shrink-0 rounded-full border border-line bg-white p-1">
+          {LEAD_PERIODS.map((p) => (
+            <button
+              key={p}
+              role="radio"
+              aria-checked={periodo === p}
+              onClick={() => setPeriodo(p)}
+              className={cx("h-8 rounded-full px-3.5 text-[13.5px] font-medium transition-colors", periodo === p ? "bg-brand text-white shadow-sm" : "text-ink hover:bg-page")}
+            >
+              {LEAD_PERIOD_LABEL[p]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <LeadSourceChart periodo={periodo} classe={classe} owner={owner} fonte={fonte} onPickSource={pickSource} />
       <div className="flex flex-col gap-3">
         <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 scroll-thin" role="tablist" aria-label="Situação">
           {FILTERS.map((f) => {
@@ -143,7 +170,16 @@ function LeadList() {
             <Search className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted" aria-hidden />
             <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nome, WhatsApp, e-mail ou @" aria-label="Buscar leads" className="h-11 w-full rounded-[14px] border border-line bg-white pl-11 pr-3 text-[14px] focus:border-brand focus:outline-none focus:ring-4 focus:ring-[#008a65]/10" />
           </div>
-          <Select aria-label="Lead score" value={classe} onChange={(e) => setClasse(e.target.value)} className={cx("w-full bg-white sm:w-[220px]", !me.permissions.dataAll && "col-span-2")}>
+          <Select aria-label="Fonte de tráfego" value={fonte} onChange={(e) => setFonte(e.target.value)} className="w-full bg-white sm:w-[200px]">
+            <option value="">Toda fonte</option>
+            {sourceOptions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.n})
+              </option>
+            ))}
+            {fonte && !sourceOptions.some((s) => s.id === fonte) && <option value={fonte}>{fonte === NO_SOURCE.id ? NO_SOURCE.name : "Fonte escolhida"} (0)</option>}
+          </Select>
+          <Select aria-label="Lead score" value={classe} onChange={(e) => setClasse(e.target.value)} className="w-full bg-white sm:w-[220px]">
             <option value="">Todo lead score</option>
             {LEAD_CLASS_FILTERS.map((c) => (
               <option key={c} value={c}>
@@ -152,7 +188,7 @@ function LeadList() {
             ))}
           </Select>
           {me.permissions.dataAll && (
-            <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="w-full bg-white sm:w-[200px]">
+            <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="col-span-2 w-full bg-white sm:w-[200px]">
               <option value="">Toda a equipe</option>
               {team
                 .filter((m) => m.status === "active")
