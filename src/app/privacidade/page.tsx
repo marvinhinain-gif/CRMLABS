@@ -21,7 +21,17 @@ export default async function PrivacyPage({ searchParams }: { searchParams: Prom
         <p>Notas internas nunca são enviadas ao Instagram. Senhas do Instagram nunca são solicitadas.</p>
       </div>
 
-      <h2 id="formularios" className="mt-12 text-[22px] font-bold">Formulários e diagnósticos</h2>
+      <h2 id="google" className="mt-12 text-[22px] font-bold">Google Agenda</h2>
+      <div className="mt-4 flex flex-col gap-4 text-[15px] leading-relaxed text-[#33444d]">
+        <p>Membros da equipe podem conectar a própria conta Google ao CRMLABS. Com essa autorização, o CRMLABS acessa apenas: o seu endereço de e-mail (para identificar a conta conectada), a consulta de horários livres e ocupados da sua agenda (para evitar conflitos ao marcar reuniões) e a criação, alteração e cancelamento dos eventos de reuniões marcadas pelo próprio CRMLABS, incluindo o link do Google Meet.</p>
+        <p>O CRMLABS não lê o conteúdo de outros eventos da sua agenda, não vende nem compartilha dados do Google com terceiros, não usa esses dados para publicidade e não os utiliza para treinar modelos de inteligência artificial. O token de acesso fica guardado de forma criptografada.</p>
+        <p>O uso e a transferência de informações recebidas das APIs do Google seguem a <a className="underline" href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer">Política de Dados do Usuário dos Serviços de API do Google</a>, incluindo os requisitos de Uso Limitado.</p>
+        <p>Você pode desconectar o Google Agenda a qualquer momento nas configurações do CRMLABS ou em <a className="underline" href="https://myaccount.google.com/permissions" target="_blank" rel="noreferrer">myaccount.google.com/permissions</a>. Ao desconectar, o acesso é revogado no Google e o token é apagado.</p>
+      </div>
+
+      <p className="mt-8 text-[14px] text-[#5b6b73]">Veja também os <a className="underline" href="/termos">Termos de Serviço</a>. Contato: marvinhinain@gmail.com</p>
+
+      <h2 id="formularios"className="mt-12 text-[22px] font-bold">Formulários e diagnósticos</h2>
       <div className="mt-4 flex flex-col gap-4 text-[15px] leading-relaxed text-[#33444d]">
         <p>Quando você responde um formulário, usamos seus dados para analisar a sua solicitação e entrar em contato sobre ela. Guardamos as respostas, a data e a hora do envio, a página de origem e a versão do aviso que você aceitou.</p>
         <p>O consentimento para receber conteúdos e ofertas é separado e opcional: você pode responder sem aceitá-lo e pode revogá-lo quando quiser.</p>
