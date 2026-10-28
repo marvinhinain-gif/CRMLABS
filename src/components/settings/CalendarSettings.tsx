@@ -24,7 +24,7 @@ export function CalendarSettings() {
   const [busy, setBusy] = useState<string | null>(null);
   useEffect(() => {
     const st = sp.get("agenda");
-    if (st === "conectada") toast.success("Google Agenda conectado! As reuniões já vão aparecer lá.");
+    if (st === "conectada") toast.success("Google Agenda conectado! Suas reuniões e compromissos já vão aparecer lá.");
     else if (st === "erro") toast.error(sp.get("motivo") ?? "Não foi possível conectar o Google Agenda.");
   }, [sp]);
   if (!data) return <LoadingState rows={3} />;
@@ -65,7 +65,7 @@ export function CalendarSettings() {
       <div id="agenda" className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-[18px] font-semibold">Minha agenda</h2>
-          <p className="mt-1 text-[13.5px] text-muted">Suas reuniões do CRMLABS direto na sua agenda do celular e do computador.</p>
+          <p className="mt-1 text-[13.5px] text-muted">Suas reuniões e compromissos do CRMLABS direto na sua agenda do celular e do computador.</p>
         </div>
         <Badge tone={g.connected ? "success" : "neutral"} className="self-start">
           {g.connected ? "Google Agenda conectado" : "Agenda não conectada"}
@@ -85,7 +85,7 @@ export function CalendarSettings() {
                   {g.email} · {g.lastSyncAt ? `sincronizado ${relativeTime(g.lastSyncAt).toLowerCase()}` : "aguardando a primeira reunião"}
                 </p>
                 <ul className="mt-2 flex flex-col gap-1 text-[13px]">
-                  {["Reunião marcada no CRM entra na sua agenda na hora", "Remarcar ou cancelar atualiza o evento", "Ao marcar, o CRM avisa se você já tem compromisso no horário"].map((t) => (
+                  {["Reuniões e compromissos marcados para você entram na sua agenda na hora", "Remarcar, cancelar ou tirar você do compromisso atualiza o evento", "Ao marcar, o CRM avisa se você já tem compromisso no horário"].map((t) => (
                     <li key={t} className="flex items-center gap-1.5">
                       <CircleCheck className="size-4 text-success" aria-hidden /> {t}
                     </li>

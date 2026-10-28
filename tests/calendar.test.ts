@@ -3,7 +3,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@/server/db";
 import { appointments, calendarConnections } from "@/server/db/schema";
 import { encryptSecret } from "@/server/crypto";
-import { busyTimes, handleGoogleCallback, icsFeed, myCalendar, regenerateFeed, saveGoogleClient, startGoogleConnect, syncAppointment } from "@/server/services/calendar";
+import { busyTimes, handleGoogleCallback, icsFeed, myCalendar, regenerateFeed, saveGoogleClient, startGoogleConnect, syncAppointment, syncTeamEvent, syncUpcoming, teamEventGoogleId } from "@/server/services/calendar";
+import { cancelTeamEvent, createTeamEvent, updateTeamEvent } from "@/server/services/teamAgenda";
 import { createAppointment, updateAppointment } from "@/server/services/commercial";
 import { createContact } from "@/server/services/contacts";
 import { loadInstanceSettings } from "@/server/services/instance";
@@ -96,6 +97,66 @@ describe("agenda do closer", () => {
     expect(calls.filter((x) => x.method === "PATCH").at(-1)!.body).toContain("cancelled");
     [row] = await db.select().from(appointments).where(eq(appointments.id, a.id));
     expect(row.calendarSyncedAt).toBeInstanceOf(Date);
+  });
+
+  it("Google: compromisso da agenda da equipe entra, muda e sai da agenda de cada participante", async () => {
+    const { ctx, users: u } = await setupOrg();
+    await saveGoogleClient(ctx.admin, { clientId: "123456-abc.apps.googleusercontent.com", clientSecret: "segredo-google" });
+    // Mariana (seller) e Carla (closer) conectadas; Rafael (seller2) não.
+    for (const id of [u.seller.id, u.closer.id]) {
+      await myCalendar(id === u.seller.id ? ctx.seller : ctx.closer);
+      await db.update(calendarConnections).set({ googleRefreshEnc: encryptSecret(`RT-${id}`), googleEmail: `${id}@g.com` }).where(eq(calendarConnections.userId, id));
+    }
+    // Calendário falso: guarda os eventos por token de acesso (= pessoa).
+    const store = new Map<string, Record<string, unknown>>();
+    mockGoogle((u2, init) => {
+      if (u2.includes("oauth2.googleapis.com/token")) return { body: { access_token: `AT-${new URLSearchParams(String(init.body)).get("refresh_token")}` } };
+      const who = new Headers(init.headers).get("Authorization")!;
+      if (init.method === "POST") {
+        const b = JSON.parse(String(init.body));
+        store.set(`${who}|${b.id}`, b);
+        return { body: b };
+      }
+      const id = u2.split("/events/")[1]?.split("?")[0];
+      const cur = store.get(`${who}|${id}`);
+      if (!cur) return { status: 404, body: { error: { message: "Not Found" } } };
+      Object.assign(cur, JSON.parse(String(init.body)));
+      return { body: cur };
+    });
+    const gid = (eventId: string) => teamEventGoogleId(eventId);
+    const at = (userId: string, eventId: string) => store.get(`Bearer AT-RT-${userId}|${gid(eventId)}`);
+
+    const e = await createTeamEvent(ctx.manager, { title: "Alinhamento", startsAt: tomorrowAt(10), endsAt: tomorrowAt(11), allDay: false, participantIds: [u.seller.id, u.seller2.id], reminderMinutes: 10 });
+    await syncTeamEvent(e.id);
+    expect(at(u.seller.id, e.id)).toMatchObject({ summary: "Alinhamento", status: "confirmed", start: { dateTime: tomorrowAt(10).toISOString() }, reminders: { useDefault: false, overrides: [{ method: "popup", minutes: 10 }] } });
+    expect(String(at(u.seller.id, e.id)!.description)).toContain(`/agenda?compromisso=${e.id}`);
+    expect(gid(e.id)).toMatch(/^[a-v0-9]{5,1024}$/);
+    // Quem não conectou não gera chamada ao Google.
+    expect(calls.filter((c) => c.url.includes("/events")).length).toBe(2);
+
+    // Remarca e troca Mariana por Carla: Mariana perde o evento, Carla ganha.
+    await updateTeamEvent(ctx.manager, e.id, { startsAt: tomorrowAt(14), endsAt: tomorrowAt(15), participantIds: [u.seller2.id, u.closer.id] });
+    await syncTeamEvent(e.id, { removedUserIds: [u.seller.id] });
+    expect(at(u.seller.id, e.id)).toMatchObject({ status: "cancelled" });
+    expect(at(u.closer.id, e.id)).toMatchObject({ status: "confirmed", start: { dateTime: tomorrowAt(14).toISOString() } });
+
+    // Volta para o compromisso: o evento cancelado é restaurado.
+    await updateTeamEvent(ctx.manager, e.id, { participantIds: [u.seller.id, u.closer.id] });
+    await syncTeamEvent(e.id);
+    expect(at(u.seller.id, e.id)).toMatchObject({ status: "confirmed", start: { dateTime: tomorrowAt(14).toISOString() } });
+
+    // Cancelado no CRM: cancelado na agenda de todos.
+    await cancelTeamEvent(ctx.manager, e.id);
+    await syncTeamEvent(e.id);
+    expect(at(u.seller.id, e.id)).toMatchObject({ status: "cancelled" });
+    expect(at(u.closer.id, e.id)).toMatchObject({ status: "cancelled" });
+
+    // Dia inteiro vira evento de data; ao conectar, compromissos futuros entram.
+    const d = await createTeamEvent(ctx.manager, { title: "Imersão", startsAt: tomorrowAt(0), endsAt: new Date(tomorrowAt(0).getTime() + 86400000), allDay: true, participantIds: [u.closer.id], reminderMinutes: null });
+    await syncUpcoming(u.closer.id);
+    const ev = at(u.closer.id, d.id)!;
+    expect(ev.start).toEqual({ date: tomorrowAt(12).toISOString().slice(0, 10) });
+    expect(ev.reminders).toEqual({ useDefault: false, overrides: [] });
   });
 
   it("horários ocupados juntam CRM e Google; seller só consulta closer", async () => {

@@ -108,6 +108,12 @@ async function notifyPeople(ctx: Ctx, userIds: string[], alert: { type: string; 
 
 const first = (name: string) => name.split(" ")[0];
 
+/** Google Agenda de cada participante conectado (em segundo plano). */
+async function googleSync(eventId: string, removedUserIds: string[] = []) {
+  const { syncTeamEventSoon } = await import("./calendar");
+  syncTeamEventSoon(eventId, removedUserIds);
+}
+
 export async function listTeamAgenda(ctx: Ctx, f: z.infer<typeof teamAgendaSchema>): Promise<TeamAgendaItem[]> {
   if (f.to.getTime() - f.from.getTime() > 62 * 86400000) throw invalid("Período longo demais.");
   const eventConds: SQL[] = [eq(teamEvents.orgId, ctx.orgId), lt(teamEvents.startsAt, f.to), gt(teamEvents.endsAt, f.from)];
@@ -251,6 +257,7 @@ export async function createTeamEvent(ctx: Ctx, input: z.infer<typeof teamEventI
     await audit(tx, ctx, "team_event.created", "team_event", row.id, { participants: participantIds });
     return row;
   });
+  await googleSync(e.id);
   await notifyPeople(ctx, participantIds, {
     type: "agenda.invited",
     title: `📅 ${first(ctx.userName)} marcou um compromisso com você`,
@@ -288,6 +295,7 @@ export async function updateTeamEvent(ctx: Ctx, id: string, input: z.infer<typeo
     if (added.length) await tx.insert(teamEventParticipants).values(added.map((userId) => ({ eventId: id, userId })));
     await audit(tx, ctx, "team_event.updated", "team_event", id, { added, removed });
   });
+  await googleSync(id, removed);
   // Mudou o que importa para quem já estava: horário, local ou nome.
   const timeChanged = next.startsAt.getTime() !== e.startsAt.getTime() || next.endsAt.getTime() !== e.endsAt.getTime() || next.allDay !== e.allDay;
   const relevant = timeChanged || next.location !== e.location || next.title !== e.title;
@@ -309,6 +317,7 @@ export async function cancelTeamEvent(ctx: Ctx, id: string) {
   if (e.canceledAt) return getTeamEvent(ctx, id);
   await db.update(teamEvents).set({ canceledAt: new Date(), updatedAt: new Date() }).where(eq(teamEvents.id, id));
   await audit(db, ctx, "team_event.canceled", "team_event", id);
+  await googleSync(id);
   await notifyPeople(ctx, e.participantIds, { type: "agenda.canceled", title: `❌ Compromisso cancelado: ${e.title}`, body: `${when(e)} · por ${ctx.userName}`, link: eventLink(id) });
   return getTeamEvent(ctx, id);
 }
