@@ -28,7 +28,7 @@ export function GoogleCalendarSetup() {
     try {
       mutate(await api.put<Setup>("/api/calendar/google/setup", { clientId, clientSecret: secret }), { revalidate: false });
       setSecret("");
-      toast.success("Google ligado. Agora cada closer conecta a própria agenda em Configurações → Perfil.");
+      toast.success("Google ligado. Agora cada pessoa conecta a própria agenda em Agenda ou em Configurações → Perfil.");
     } catch (err) {
       setFields((err as ApiError).fields);
       toast.error((err as Error).message);
@@ -44,12 +44,12 @@ export function GoogleCalendarSetup() {
             <CalendarCheck className="size-5" />
           </span>
           <div>
-            <h2 className="text-[17px] font-semibold">Agenda dos closers (Google Agenda)</h2>
-            <p className="text-[13.5px] text-muted">Reuniões entram na agenda de quem vai atender, com link do Meet e aviso de conflito de horário.</p>
+            <h2 className="text-[17px] font-semibold">Agenda da equipe (Google Agenda)</h2>
+            <p className="text-[13.5px] text-muted">Reuniões e compromissos entram no Google Agenda de cada pessoa, com link do Meet e aviso de conflito de horário.</p>
           </div>
         </div>
         <Badge tone={data.configured ? "success" : "warning"} className="self-start">
-          {data.configured ? "Pronto para os closers" : "Falta ligar o Google"}
+          {data.configured ? "Pronto para a equipe" : "Falta ligar o Google"}
         </Badge>
       </div>
       <p className="mt-3 rounded-[14px] bg-page/70 px-4 py-3 text-[13px] text-muted">
@@ -69,7 +69,7 @@ export function GoogleCalendarSetup() {
               , crie um projeto e ative a <b>Google Calendar API</b>.
             </li>
             <li>
-              2. Em <b>Tela de consentimento OAuth</b>, escolha <b>Externo</b>, preencha nome e e-mail e adicione os closers como <b>usuários de teste</b>.
+              2. Em <b>Tela de consentimento OAuth</b>, escolha <b>Externo</b>, preencha nome e e-mail e depois clique em <b>Publicar app</b> (em modo de teste o Google desconecta a agenda a cada 7 dias). Ao conectar, o Google avisa que o app não foi verificado: clique em <b>Avançado → Acessar</b>.
             </li>
             <li>
               3. Em <b>Credenciais → Criar credenciais → ID do cliente OAuth</b>, tipo <b>Aplicativo da Web</b>, com estes dados:

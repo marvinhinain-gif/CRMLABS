@@ -14,6 +14,7 @@ import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { dayTitle, monthGrid, MONTHS, nextKey, startIso, todayKey, WEEK } from "../calendarGrid";
 import { EventDialog } from "./EventDialog";
 import { EventSheet } from "./EventSheet";
+import { GoogleAgendaHint } from "./GoogleAgendaHint";
 import { isLink, type TeamItem } from "./types";
 
 const ALL = "equipe";
@@ -166,6 +167,8 @@ export function TeamAgendaView() {
           </>
         }
       />
+
+      <GoogleAgendaHint />
 
       {/* De quem é a agenda: cada pessoa tem a sua. */}
       <nav aria-label="Agenda de quem" className="anim-rise -mx-4 overflow-x-auto px-4 scroll-thin sm:mx-0 sm:px-0">

@@ -9,7 +9,7 @@
 import { and, eq, gt, gte, inArray, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { appointments, calendarConnections, contacts, memberships, oauthStates, users } from "../db/schema";
+import { appointments, calendarConnections, contacts, memberships, oauthStates, teamEventParticipants, teamEvents, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { decryptSecret, encryptSecret, randomToken, sha256 } from "../crypto";
 import { appUrl } from "../env";
@@ -389,7 +389,88 @@ export async function syncAppointment(appointmentId: string) {
   }
 }
 
-/** Ao conectar: leva as reuniões futuras já marcadas. */
+// ---------- Google: compromissos da agenda da equipe ----------
+
+/** Mesmo id em todas as agendas: cada participante tem a própria cópia do compromisso. */
+export const teamEventGoogleId = (teamEventId: string) => `crmt${teamEventId.replace(/-/g, "")}`;
+
+type TeamEventRow = typeof teamEvents.$inferSelect;
+
+/** Corpo do evento no Google: dia inteiro usa datas; o lembrete escolhido no CRM vira o lembrete do Google. */
+export function teamEventBody(e: Pick<TeamEventRow, "id" | "title" | "description" | "startsAt" | "endsAt" | "allDay" | "location" | "reminderMinutes">, people: string[], url: string) {
+  const desc = [e.description, people.length > 1 ? `Com: ${people.join(", ")}` : null, `Abrir no CRMLABS: ${url}`].filter(Boolean).join("\n\n");
+  return {
+    summary: e.title,
+    description: desc,
+    start: e.allDay ? { date: dayKey(e.startsAt) } : { dateTime: e.startsAt.toISOString(), timeZone: TZ },
+    end: e.allDay ? { date: dayKey(e.endsAt) } : { dateTime: e.endsAt.toISOString(), timeZone: TZ },
+    location: e.location ?? undefined,
+    status: "confirmed",
+    transparency: e.allDay ? "transparent" : "opaque",
+    source: { title: "CRMLABS", url },
+    extendedProperties: { private: { crmlabsTeamEventId: e.id } },
+    reminders: e.reminderMinutes == null ? { useDefault: false, overrides: [] } : { useDefault: false, overrides: [{ method: "popup", minutes: e.reminderMinutes }] },
+  };
+}
+
+const httpStatus = (e: unknown) => (e as { httpStatus?: number }).httpStatus;
+
+/** Cria ou atualiza o evento na agenda de uma pessoa (ou cancela, se `remove`). */
+async function pushTeamEvent(userId: string, e: TeamEventRow, people: string[], remove: boolean) {
+  const auth = await accessTokenFor(userId);
+  if (!auth) return null;
+  const { token, conn } = auth;
+  const id = teamEventGoogleId(e.id);
+  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(conn.googleCalendarId)}/events`;
+  const json = { "Content-Type": "application/json" };
+  try {
+    if (remove) {
+      try {
+        await googleFetch(`${base}/${id}?sendUpdates=none`, { method: "PATCH", token, headers: json, body: JSON.stringify({ status: "cancelled" }) });
+      } catch (err) {
+        // Nunca chegou ao Google (ou a pessoa já apagou): nada a fazer.
+        if (httpStatus(err) !== 404 && httpStatus(err) !== 410) throw err;
+      }
+    } else {
+      const body = teamEventBody(e, people, `${appUrl()}/agenda?compromisso=${e.id}`);
+      try {
+        await googleFetch(`${base}/${id}?sendUpdates=none`, { method: "PATCH", token, headers: json, body: JSON.stringify(body) });
+      } catch (err) {
+        if (httpStatus(err) !== 404 && httpStatus(err) !== 410) throw err;
+        await googleFetch(`${base}?sendUpdates=none`, { method: "POST", token, headers: json, body: JSON.stringify({ ...body, id }) });
+      }
+    }
+    await db.update(calendarConnections).set({ lastSyncAt: new Date(), lastError: null }).where(eq(calendarConnections.userId, userId));
+    return true;
+  } catch (err) {
+    await db.update(calendarConnections).set({ lastError: (err as Error).message.slice(0, 300) }).where(eq(calendarConnections.userId, userId));
+    logger.warn("Falha ao sincronizar compromisso com o Google Agenda", err);
+    return false;
+  }
+}
+
+/**
+ * Leva o compromisso para o Google Agenda de cada participante conectado.
+ * `removedUserIds`: quem saiu do compromisso (o evento é cancelado na agenda dessa pessoa).
+ * `onlyUserId`: sincroniza só uma pessoa (ao conectar a conta).
+ */
+export async function syncTeamEvent(teamEventId: string, opts: { removedUserIds?: string[]; onlyUserId?: string } = {}) {
+  const [e] = await db.select().from(teamEvents).where(eq(teamEvents.id, teamEventId));
+  if (!e) return null;
+  const parts = await db
+    .select({ userId: teamEventParticipants.userId, name: users.name })
+    .from(teamEventParticipants)
+    .innerJoin(users, eq(users.id, teamEventParticipants.userId))
+    .where(eq(teamEventParticipants.eventId, teamEventId));
+  const people = parts.map((p) => p.name).sort((a, b) => a.localeCompare(b));
+  const targets = [...parts.map((p) => ({ userId: p.userId, remove: !!e.canceledAt })), ...(opts.removedUserIds ?? []).map((userId) => ({ userId, remove: true }))].filter(
+    (t) => !opts.onlyUserId || t.userId === opts.onlyUserId,
+  );
+  for (const t of targets) await pushTeamEvent(t.userId, e, people, t.remove);
+  return true;
+}
+
+/** Ao conectar: leva as reuniões e os compromissos futuros já marcados. */
 export async function syncUpcoming(userId: string) {
   const rows = await db
     .select({ id: appointments.id })
@@ -397,12 +478,25 @@ export async function syncUpcoming(userId: string) {
     .where(and(eq(appointments.ownerId, userId), gt(appointments.startsAt, new Date()), eq(appointments.status, "scheduled")))
     .limit(100);
   for (const r of rows) await syncAppointment(r.id);
+  const events = await db
+    .select({ id: teamEvents.id })
+    .from(teamEvents)
+    .innerJoin(teamEventParticipants, eq(teamEventParticipants.eventId, teamEvents.id))
+    .where(and(eq(teamEventParticipants.userId, userId), gt(teamEvents.endsAt, new Date()), isNull(teamEvents.canceledAt)))
+    .limit(200);
+  for (const r of events) await syncTeamEvent(r.id, { onlyUserId: userId });
 }
 
 /** Dispara a sincronização sem atrasar a resposta. */
 export function syncSoon(appointmentId: string) {
   if (process.env.VITEST === "true") return;
   setTimeout(() => void syncAppointment(appointmentId).catch((e) => logger.warn("Sincronização de agenda falhou", e)), 50);
+}
+
+/** Igual a `syncSoon`, para compromissos da agenda da equipe. */
+export function syncTeamEventSoon(teamEventId: string, removedUserIds: string[] = []) {
+  if (process.env.VITEST === "true") return;
+  setTimeout(() => void syncTeamEvent(teamEventId, { removedUserIds }).catch((e) => logger.warn("Sincronização de compromisso falhou", e)), 50);
 }
 
 // ---------- Horários ocupados ----------
