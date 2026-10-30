@@ -109,7 +109,8 @@ function LeadCard({ l, i, rank, onOpen }: { l: LeadRow; i: number; rank?: number
           </span>
         </span>
       </button>
-      <span className="flex shrink-0 items-center gap-1 pr-3 pt-3.5 sm:pr-4 sm:pt-0">
+      {/* Faixa da direita também abre o lead (o botão do WhatsApp não propaga o clique). */}
+      <span onClick={onOpen} className="flex shrink-0 cursor-pointer items-center gap-1 self-stretch pr-3 pt-3.5 sm:pr-4 sm:pt-0">
         <WhatsAppButton variant="icon" phone={l.phone} name={l.name} className="size-11" />
         <ChevronRight className="pointer-events-none size-5 shrink-0 text-muted transition-transform group-hover:translate-x-0.5" aria-hidden />
       </span>
