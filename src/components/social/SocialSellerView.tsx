@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import * as Popover from "@radix-ui/react-popover";
-import { Funnel, LayoutDashboard, MessageCircle, Plus, Search, Send, ShieldAlert, SlidersHorizontal, UserRound } from "lucide-react";
+import { Eraser, Funnel, LayoutDashboard, MessageCircle, PhoneCall, Plus, Search, Send, ShieldAlert, SlidersHorizontal, UserRound } from "lucide-react";
 import { fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useOpenContact, useQueryParam } from "@/lib/nav";
@@ -12,11 +12,13 @@ import { Button, cx, DemoBadge, Field, PageHeader, Select, Tabs } from "@/compon
 import { KanbanBoard } from "./KanbanBoard";
 import { EditStagesDialog } from "./EditStagesDialog";
 import { LeadReviewDialog } from "./LeadReviewDialog";
+import { CadenceView } from "./CadenceView";
+import { BoardCleanupDialog } from "./BoardCleanupDialog";
 import { AccountPill, useActiveAccount } from "./AccountPill";
 import { NewContactDialog } from "@/components/contacts/NewContactDialog";
 import { useRouter } from "next/navigation";
 
-type Tab = "kanban" | "direct" | "comentarios";
+type Tab = "kanban" | "cadencia" | "direct" | "comentarios";
 
 export function SocialSellerView() {
   const me = useMe();
@@ -43,6 +45,8 @@ export function SocialSellerView() {
   const isAdmin = me.user.role === "admin";
   const { data: ig } = useSWR<{ autoLeadsToReview: number }>(isAdmin ? "/api/instagram" : null, fetcher);
   const [review, setReview] = useState(false);
+  const canCleanup = me.permissions.orgSettings;
+  const [cleanup, setCleanup] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(q.trim()), 300);
@@ -68,9 +72,10 @@ export function SocialSellerView() {
       />
       <Tabs
         value={tab as Tab}
-        onChange={(v) => (v === "kanban" ? setTab(v) : router.push(v === "direct" ? "/instagram?aba=directs" : "/instagram?aba=comentarios"))}
+        onChange={(v) => (v === "kanban" || v === "cadencia" ? setTab(v) : router.push(v === "direct" ? "/instagram?aba=directs" : "/instagram?aba=comentarios"))}
         items={[
           { value: "kanban", label: "Kanban", icon: <LayoutDashboard /> },
+          { value: "cadencia", label: "Cadência", icon: <PhoneCall /> },
           { value: "direct", label: "Direct", icon: <Send /> },
           { value: "comentarios", label: "Comentários", icon: <MessageCircle /> },
         ]}
@@ -109,7 +114,12 @@ export function SocialSellerView() {
               <Search className="pointer-events-none absolute left-4 top-1/2 size-[18px] -translate-y-1/2 text-muted" aria-hidden />
               <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar no funil..." aria-label="Buscar no funil por nome ou @" className="h-12 w-full rounded-[14px] border border-line bg-white pl-11 pr-4 text-[14.5px] focus:border-brand focus:outline-none focus:ring-4 focus:ring-[#008a65]/10" />
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
+              {canCleanup && (
+                <Button variant="secondary" className="h-12 rounded-[14px] flex-1 sm:flex-none" icon={<Eraser className="size-5" />} onClick={() => setCleanup(true)}>
+                  Limpar quadro
+                </Button>
+              )}
               {me.permissions.pipelineEdit && (
                 <Button variant="secondary" className="h-12 rounded-[14px] flex-1 sm:flex-none" icon={<SlidersHorizontal className="size-5" />} onClick={() => setEditStages(true)}>
                   Editar etapas
@@ -175,10 +185,12 @@ export function SocialSellerView() {
         </>
       )}
 
+      {tab === "cadencia" && <CadenceView />}
 
       <NewContactDialog open={newStage !== undefined} onOpenChange={(v) => !v && setNewStage(undefined)} defaultStageId={newStage ?? undefined} onCreated={openContact} />
       <EditStagesDialog open={editStages} onOpenChange={setEditStages} />
       {isAdmin && <LeadReviewDialog open={review} onOpenChange={setReview} />}
+      {canCleanup && <BoardCleanupDialog open={cleanup} onOpenChange={setCleanup} />}
     </div>
   );
 }

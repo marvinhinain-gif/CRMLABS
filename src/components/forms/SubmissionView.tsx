@@ -5,9 +5,10 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { ArrowDownRight, CheckCircle2, CircleAlert, CircleSlash, PencilLine, SquareUser, TriangleAlert, XCircle } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
-import { formatDateTime, formatPhone } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { SESSION_INTEREST_LABEL, type SessionInterest } from "@/lib/quiz/types";
 import { Badge, Button, Dialog, ErrorState, Field, LoadingState, Select, Textarea } from "@/components/ui";
+import { PhoneWhatsAppLink, WhatsAppButton } from "@/components/ui/WhatsApp";
 import { InstagramRelationship } from "@/components/integrations/InstagramRelationship";
 import { LEAD_STATUS_LABEL, TierBadge, type RecommendationView, type SubmissionDetail } from "./shared";
 
@@ -28,11 +29,16 @@ export function SubmissionView({ id, onOpenContact }: { id: string; onOpenContac
         <h2 className="mt-1 text-[22px] font-bold tracking-tight">{s.name ?? "Sem nome"}</h2>
         <div className="mt-1 flex flex-col gap-0.5 text-[13.5px] text-muted">
           {s.email && <span>{s.email}</span>}
-          {s.phone && <span>{formatPhone(s.phone)}</span>}
+          {s.phone && (
+            <span>
+              <PhoneWhatsAppLink phone={s.phone} name={s.name} />
+            </span>
+          )}
           {s.instagram && <span>@{s.instagram}</span>}
           {s.company && <span>{s.company}</span>}
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {!s.anonymizedAt && <WhatsAppButton phone={s.phone} name={s.name} label="Chamar no WhatsApp" />}
           {s.anonymizedAt && <Badge tone="neutral">Anonimizada em {formatDateTime(s.anonymizedAt)}</Badge>}
           {s.duplicateOf && <Badge tone="warning">Envio repetido (não criou novo lead)</Badge>}
           {s.contactId && onOpenContact && (

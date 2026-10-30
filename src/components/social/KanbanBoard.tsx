@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -18,7 +18,9 @@ import {
   type Announcements,
   type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
-import { ArrowRightLeft, Clock, Ellipsis, MessageCircle, Plus, Send, SquarePen, UserRound, X } from "lucide-react";
+import { ArrowRightLeft, Clock, Ellipsis, MessageCircle, PhoneCall, Play, Plus, Send, SquarePen, UserRound, X } from "lucide-react";
+import { STATUS_LABEL } from "@/lib/cadence";
+import { ChannelGlyph, STATUS_TONE } from "./cadenceUi";
 import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { api, ApiError, fetcher, qs } from "@/lib/api";
 import { useMe } from "@/lib/me";
@@ -58,6 +60,21 @@ function CardBody({ card, menu }: { card: BoardCard; menu?: React.ReactNode }) {
         </div>
         {menu}
       </div>
+      {card.cadenceStatus && (
+        <p className="mt-2">
+          {card.cadenceStatus === "active" ? (
+            <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-info-soft px-2.5 py-0.5 text-[12px] font-medium text-info" title={`Cadência: ${card.cadenceStepName ?? ""}`}>
+              <ChannelGlyph channel={card.cadenceStepChannel} className="size-3.5" />
+              <span className="truncate">{card.cadenceStepName ?? "Em cadência"}</span>
+            </span>
+          ) : (
+            <span className={cx("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-medium", STATUS_TONE[card.cadenceStatus])}>
+              <PhoneCall className="size-3.5" aria-hidden />
+              {STATUS_LABEL[card.cadenceStatus]}
+            </span>
+          )}
+        </p>
+      )}
       {card.summary && <p className="mt-2.5 line-clamp-2 text-[13.5px] text-[#4b5b64]">{card.summary}</p>}
       {card.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
@@ -87,7 +104,7 @@ function CardBody({ card, menu }: { card: BoardCard; menu?: React.ReactNode }) {
   );
 }
 
-function DraggableCard({ card, stages, onMove, onOpen, onRemove, onForward }: { card: BoardCard; stages: Board["stages"]; onMove: (card: BoardCard, toStageId: string) => void; onOpen: () => void; onRemove: () => void; onForward: () => void }) {
+function DraggableCard({ card, stages, onMove, onOpen, onRemove, onForward, onCadence }: { card: BoardCard; stages: Board["stages"]; onMove: (card: BoardCard, toStageId: string) => void; onOpen: () => void; onRemove: () => void; onForward: () => void; onCadence: (card: BoardCard) => void }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: card.entryId, data: { card } });
   return (
     <article
@@ -137,6 +154,9 @@ function DraggableCard({ card, stages, onMove, onOpen, onRemove, onForward }: { 
                     ))}
                   </MenuSubContent>
                 </MenuSub>
+                <MenuItem icon={card.cadenceStatus === "active" ? <PhoneCall /> : <Play />} onSelect={() => onCadence(card)}>
+                  {card.cadenceStatus === "active" ? "Registrar na cadência" : card.cadenceStatus ? "Recomeçar cadência" : "Iniciar cadência"}
+                </MenuItem>
                 <MenuItem icon={<Send />} onSelect={onForward}>
                   Encaminhar para Closer
                 </MenuItem>
@@ -161,6 +181,7 @@ function Column({
   onOpen,
   onRemove,
   onForward,
+  onCadence,
   onAdd,
   onEditStages,
   canEdit,
@@ -172,6 +193,7 @@ function Column({
   onOpen: (contactId: string) => void;
   onRemove: (card: BoardCard) => void;
   onForward: (card: BoardCard) => void;
+  onCadence: (card: BoardCard) => void;
   onAdd: (stageId: string) => void;
   onEditStages: () => void;
   canEdit: boolean;
@@ -225,7 +247,7 @@ function Column({
       </header>
       <div className="flex min-h-[80px] flex-col gap-3">
         {cards.map((card) => (
-          <DraggableCard key={card.entryId} card={card} stages={stages} onMove={onMove} onOpen={() => onOpen(card.contactId)} onRemove={() => onRemove(card)} onForward={() => onForward(card)} />
+          <DraggableCard key={card.entryId} card={card} stages={stages} onMove={onMove} onOpen={() => onOpen(card.contactId)} onRemove={() => onRemove(card)} onForward={() => onForward(card)} onCadence={onCadence} />
         ))}
         {cards.length === 0 && <p className="px-2 py-6 text-center text-[13px] text-muted">Nenhum contato nesta etapa.</p>}
         {cards.length < stage.total && (
@@ -313,6 +335,19 @@ export function KanbanBoard({ filters, onAdd, onEditStages }: { filters: BoardFi
     }
   };
 
+  const { mutate: gm } = useSWRConfig();
+  const cadence = async (card: BoardCard) => {
+    if (card.cadenceStatus === "active") return openContact(card.contactId, { tab: "cadencia" });
+    try {
+      await api.post(`/api/contacts/${card.contactId}/cadence`, { action: "start" });
+      toast.success(`Cadência ${card.cadenceStatus ? "recomeçada" : "iniciada"} para ${card.name}.`);
+      mutate();
+      gm((k) => typeof k === "string" && (k.startsWith("/api/cadence") || k === `/api/contacts/${card.contactId}/cadence`));
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   const onDragStart = (e: DragStartEvent) => setActive((e.active.data.current as { card: BoardCard }).card);
   const onDragEnd = (e: DragEndEvent) => {
     setActive(null);
@@ -344,7 +379,7 @@ export function KanbanBoard({ filters, onAdd, onEditStages }: { filters: BoardFi
       <div className="-mx-4 sm:mx-0 overflow-x-auto scroll-thin pb-3">
         <div className="flex snap-x snap-mandatory gap-4 px-4 sm:px-0 sm:snap-none items-start">
           {data.stages.map((s) => (
-            <Column key={s.id} stage={s} stages={data.stages} filters={filters} onMove={move} onOpen={openContact} onRemove={remove} onForward={setForwarding} onAdd={onAdd} onEditStages={onEditStages} canEdit={me.permissions.pipelineEdit} />
+            <Column key={s.id} stage={s} stages={data.stages} filters={filters} onMove={move} onOpen={openContact} onRemove={remove} onForward={setForwarding} onCadence={cadence} onAdd={onAdd} onEditStages={onEditStages} canEdit={me.permissions.pipelineEdit} />
           ))}
         </div>
       </div>

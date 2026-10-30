@@ -61,6 +61,8 @@ export async function createOrganization(input: { name: string; isDemo?: boolean
   const { DEFAULT_SOURCES, DEFAULT_CUSTOM_FIELDS } = await import("./integrations");
   await tx.insert(leadSources).values(DEFAULT_SOURCES.map((x, i) => ({ ...x, orgId: org.id, position: i }))).onConflictDoNothing();
   await tx.insert(customFields).values(DEFAULT_CUSTOM_FIELDS.map((x, i) => ({ ...x, orgId: org.id, position: i }))).onConflictDoNothing();
+  const { seedDefaultCadenceSteps } = await import("./cadence");
+  await seedDefaultCadenceSteps(org.id, tx);
   return org;
 }
 
