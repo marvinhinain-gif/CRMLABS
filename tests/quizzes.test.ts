@@ -26,7 +26,7 @@ import { archiveForm, createForm, deleteForm, duplicateForm, getForm, listForms,
 import { getPublicQuiz, recordEvent, submitQuiz } from "@/server/services/quizPublic";
 import { anonymizeContactSubmissions, contactSubmissions, exportResponses, formAnalytics, getSubmission, listResponses, recalculate } from "@/server/services/quizReports";
 import { listIntegrations } from "@/server/services/integrations";
-import { getPublicForm } from "@/server/services/leads";
+import { forwardLeadToKanban, getPublicForm } from "@/server/services/leads";
 import { classify, computeScore, maxPoints, validateAnswers } from "@/lib/quiz/engine";
 import { axionDefinition } from "@/lib/quiz/templates";
 import type { Answers, QuizDefinition } from "@/lib/quiz/types";
@@ -178,7 +178,7 @@ describe("Formulários & Quizzes — fluxo completo", () => {
     const [leadB] = await db.select().from(leads).where(eq(leads.id, subs[0].leadId!));
     const [stage] = await db.select().from(pipelineStages).where(eq(pipelineStages.id, leadB.suggestedStageId!));
     expect(stage.key).toBe("em-qualificacao");
-    expect([u.seller.id, u.seller2.id]).toContain(leadB.assignedTo);
+    expect(leadB.assignedTo).toBeNull(); // fila: quem encaminhar para o próprio Kanban vira responsável
 
     const [leadD] = await db.select().from(leads).where(eq(leads.id, subs[1].leadId!));
     expect(leadD.assignedTo).toBeNull();
@@ -316,8 +316,10 @@ describe("Formulários & Quizzes — fluxo completo", () => {
     await submitQuiz(form.slug, body({ ...IDENT, ...HOT, investimento: "iv_10_20k" }), meta); // ICP B → social seller
     const [s] = await db.select().from(quizSubmissions);
     const [lead] = await db.select().from(leads).where(eq(leads.id, s.leadId!));
-    const owner = lead.assignedTo === u.seller.id ? ctx.seller : ctx.seller2;
-    const other = lead.assignedTo === u.seller.id ? ctx.seller2 : ctx.seller;
+    expect(lead.assignedTo).toBeNull();
+    await forwardLeadToKanban(ctx.seller, lead.id, {});
+    const owner = ctx.seller;
+    const other = ctx.seller2;
     expect(await contactSubmissions(owner, s.contactId!)).toHaveLength(1);
     expect((await getSubmission(owner, s.id)).tierLabel).toBe("ICP B — Lead qualificado");
     await expect(contactSubmissions(other, s.contactId!)).rejects.toMatchObject({ code: "not_found" });

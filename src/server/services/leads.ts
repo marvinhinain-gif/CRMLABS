@@ -250,7 +250,10 @@ export async function ingestLead(form: Integration, input: LeadInput, opts: Inge
   const { lead, contactCreated, returning, sourceName, productName } = await db.transaction(async (tx) => {
     const [row] = await tx.select().from(leadForms).where(eq(leadForms.id, form.id)).for("update");
     const locked: Integration = { ...row, ...routeOverride };
-    const { pool, fixed } = noAssign ? { pool: [] as string[], fixed: true } : await candidates(tx, locked);
+    // Leads do Social Seller chegam sem responsável: ficam na fila de todos os SDRs e só ganham dono
+    // quando alguém encaminha para o próprio Kanban. Distribuição automática só no funil do closer.
+    const skipAssign = noAssign || locked.pipelineKind !== "sales";
+    const { pool, fixed } = skipAssign ? { pool: [] as string[], fixed: true } : await candidates(tx, locked);
     let contact = await findContact(tx, form.orgId, input);
     const returning = !!contact;
 
@@ -265,7 +268,7 @@ export async function ingestLead(form: Integration, input: LeadInput, opts: Inge
 
     // Distribuição: cliente que volta fica com o mesmo responsável (se ativo e no funil social seller).
     let assignedTo: string | null = null;
-    if (!noAssign && !fixed && contact?.ownerId && locked.pipelineKind !== "sales") {
+    if (!skipAssign && !fixed && contact?.ownerId && locked.pipelineKind !== "sales") {
       const [m] = await tx.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.orgId, form.orgId), eq(memberships.userId, contact.ownerId), eq(memberships.status, "active")));
       if (m) assignedTo = contact.ownerId;
     }
@@ -405,8 +408,14 @@ export async function ingestLead(form: Integration, input: LeadInput, opts: Inge
     // Destino sem prioridade comercial: ninguém é avisado.
   } else if (lead.assignedTo) {
     await notifyUser({ orgId: form.orgId, userId: lead.assignedTo, type: "lead.new", title: returning ? `Lead voltou: ${lead.name}` : `Novo lead: ${lead.name}`, body, link: `/leads?lead=${lead.id}` }).catch((e) => logger.warn("Falha ao avisar o responsável", e));
+  } else if (!lead.opportunityId) {
+    // Lead na fila (sem responsável): avisa os SDRs; quem encaminhar para o próprio Kanban assume.
+    const sdrs = await db.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.orgId, form.orgId), inArray(memberships.role, ["admin", "manager", "seller"]), eq(memberships.status, "active")));
+    for (const a of sdrs) {
+      await notifyUser({ orgId: form.orgId, userId: a.userId, type: "lead.new", title: returning ? `Lead voltou: ${lead.name}` : `Novo lead: ${lead.name}`, body, link: `/leads?lead=${lead.id}` }).catch((e) => logger.warn("Falha ao avisar os SDRs", e));
+    }
   } else {
-    // Ninguém para receber: avisa os administradores para o lead não se perder.
+    // Funil do closer sem ninguém para receber: avisa os administradores para o lead não se perder.
     const admins = await db.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.orgId, form.orgId), eq(memberships.role, "admin"), eq(memberships.status, "active")));
     for (const a of admins) {
       await notifyUser({ orgId: form.orgId, userId: a.userId, type: "lead.unassigned", title: `Lead sem responsável: ${lead.name}`, body: `${form.name} · ninguém ativo para receber`, link: `/leads?lead=${lead.id}` }).catch(() => {});
@@ -1020,6 +1029,6 @@ export async function newLeadCount(ctx: Ctx) {
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(leads)
-    .where(and(leadScope(ctx), eq(leads.status, "new"), sql`not ${inKanbanSql}`, can(ctx, "data.all") ? undefined : eq(leads.assignedTo, ctx.userId)));
+    .where(and(leadScope(ctx), eq(leads.status, "new"), sql`not ${inKanbanSql}`, can(ctx, "data.all") ? undefined : or(eq(leads.assignedTo, ctx.userId), isNull(leads.assignedTo))));
   return n;
 }
