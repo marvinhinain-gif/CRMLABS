@@ -52,6 +52,15 @@ export type BoardCard = {
   tags: { id: string; name: string; color: string }[];
 };
 
+/** Um Kanban por SDR (GET /api/board/sdrs): o funil é o mesmo, filtrado pelo responsável do contato. */
+export type SdrBoard = { userId: string; name: string; role: Exclude<Role, "closer">; avatarUrl: string | null; total: number };
+
+/** Resposta de POST /api/leads/{id}/kanban. */
+export type ForwardToKanbanResult = { entryId: string; stageId: string; stageName: string; sdrId: string; sdrName: string };
+
+/** Valor da URL (?responsavel=todos) para ver o Kanban de toda a equipe (vazio = o meu). */
+export const ALL_SDRS = "todos";
+
 export type Board = { stages: (Stage & { total: number; cards: BoardCard[] })[]; pageSize: number };
 
 export const ROLE_LABEL: Record<Role, string> = { admin: "Administrador", manager: "Gestor", seller: "Social seller", closer: "Closer" };

@@ -5,6 +5,7 @@ import {
   appointments,
   contactTouchpoints,
   contacts,
+  conversations,
   customFields,
   integrationLogs,
   leadForms,
@@ -28,7 +29,7 @@ import { can, leadScope } from "../permissions";
 import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
-import { audit, cleanText, closerPipeline, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
+import { audit, cleanText, closerPipeline, CONTATO_KEY, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
 import { activeEntryFor, addToBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
@@ -446,19 +447,24 @@ export const leadClassSql = sql<LeadClass | null>`coalesce(${sql.raw('"leads"."s
 
 /** Faixa de faturamento respondida na aplicação (id da alternativa). */
 const revenueSql = latestApplication(sql`coalesce(s.answers->>'monthly_revenue_range', s.answers->>'faturamento')`);
+/** O contato do lead tem cartão ativo (não automático) no Kanban do Social Seller: o lead "saiu" de Leads e está com um SDR. */
+const inKanbanSql = sql`exists (select 1 from relationship_entries re where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created)`;
+const WORK_STATUSES = ["new", "contacted", "no_answer"] as const;
+
 /**
  * TOP 20 Leads: para atender, faturamento de R$ 10 mil para cima e fora de "Não é nosso ICP".
  * Ordem: maior pontuação do quiz primeiro.
  */
 const topLeadsConds = () => [
-  inArray(leads.status, ["new", "contacted", "no_answer"]),
+  inArray(leads.status, [...WORK_STATUSES]),
+  sql`not ${inKanbanSql}`,
   sql`${revenueSql} in (${sql.join(TOP_REVENUE_OPTIONS.map((o) => sql`${o}`), sql`, `)})`,
   sql`${leadClassSql} is distinct from 'NAO_ICP'`,
 ];
 
 export const listLeadsSchema = z.object({
   /** top20 = TOP 20 Leads (melhores para entrar em contato). */
-  status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open", "top20"]).default("open"),
+  status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open", "top20", "kanban"]).default("open"),
   /** Lead score por produto (none = a classificar). */
   classe: z.enum(LEAD_CLASS_FILTERS).optional(),
   formId: z.string().uuid().optional(),
@@ -485,8 +491,10 @@ const PAGE = 30;
 export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
   const conds: SQL[] = [leadScope(ctx)];
   const top = f.status === "top20";
-  if (f.status === "open") conds.push(inArray(leads.status, ["new", "contacted", "no_answer"]));
+  if (f.status === "open") conds.push(inArray(leads.status, [...WORK_STATUSES]), sql`not ${inKanbanSql}`);
   else if (f.status === "top20") conds.push(...topLeadsConds());
+  else if (f.status === "kanban") conds.push(inKanbanSql);
+  else if (f.status === "new" || f.status === "contacted" || f.status === "no_answer") conds.push(eq(leads.status, f.status), sql`not ${inKanbanSql}`);
   else if (f.status !== "all") conds.push(eq(leads.status, f.status));
   if (f.formId) conds.push(eq(leads.formId, f.formId));
   if (f.assignedTo && can(ctx, "data.all")) conds.push(eq(leads.assignedTo, f.assignedTo));
@@ -528,6 +536,8 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
       scoreClassManual: sql<boolean>`${leads.scoreClass} is not null`,
       score: sql<number | null>`${latestApplication(sql`s.score`)}`,
       revenue: sql<string | null>`${revenueSql}`,
+      boardOwnerName: sql<string | null>`case when ${inKanbanSql} then (select u.name from contacts c join users u on u.id = c.owner_id where c.id = ${sql.raw('"leads"."contact_id"')}) end`,
+      boardStageName: sql<string | null>`case when ${inKanbanSql} then (select ps.name from relationship_entries re join pipeline_stages ps on ps.id = re.stage_id where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created limit 1) end`,
     })
     .from(leads)
     .leftJoin(users, eq(users.id, leads.assignedTo))
@@ -540,11 +550,23 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     .limit(top ? TOP_LEADS_LIMIT : PAGE)
     .offset(top ? 0 : (f.page - 1) * PAGE);
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(leads).where(where);
-  const counts = await db
-    .select({ status: leads.status, n: sql<number>`count(*)::int` })
+  // Quem está no Kanban sai das abas de trabalho (novo, contatado, sem resposta); continua em Agendados, Descartados e Todos.
+  const statusRows = await db
+    .select({ status: leads.status, kanban: sql<boolean>`${inKanbanSql}`, n: sql<number>`count(*)::int` })
     .from(leads)
     .where(leadScope(ctx))
-    .groupBy(leads.status);
+    .groupBy(leads.status, sql`2`);
+  const counts: { status: string; n: number }[] = [];
+  let kanbanCount = 0;
+  let allCount = 0;
+  for (const r of statusRows) {
+    allCount += r.n;
+    if (r.kanban) kanbanCount += r.n;
+    if (r.kanban && (WORK_STATUSES as readonly string[]).includes(r.status)) continue;
+    const c = counts.find((x) => x.status === r.status);
+    if (c) c.n += r.n;
+    else counts.push({ status: r.status, n: r.n });
+  }
   const [{ top20 }] = await db
     .select({ top20: sql<number>`count(*)::int` })
     .from(leads)
@@ -554,7 +576,9 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     total: top ? Math.min(total, TOP_LEADS_LIMIT) : total,
     page: top ? 1 : f.page,
     pageSize: top ? TOP_LEADS_LIMIT : PAGE,
-    counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Record<string, number>,
+    counts: { ...Object.fromEntries(counts.map((c) => [c.status, c.n])), kanban: kanbanCount } as Record<string, number>,
+    /** Todos os leads visíveis (a soma de `counts` não serve: `kanban` repete leads de outros status). */
+    allCount,
     topCount: Math.min(top20, TOP_LEADS_LIMIT),
     classCounts: Object.fromEntries(classCounts.map((c) => [c.cls ?? "none", c.n])) as Record<string, number>,
   };
@@ -802,9 +826,36 @@ async function suggestedStageFor(ctx: Ctx, l: Pick<typeof leads.$inferSelect, "s
 /** Situação do contato do lead no Kanban do Social Seller (cartão atual ou etapa sugerida). */
 async function boardStatusOf(ctx: Ctx, l: typeof leads.$inferSelect, cls: LeadClass | null) {
   const entry = await activeEntryFor(l.contactId, ctx.orgId);
-  if (entry && !entry.autoCreated) return { inBoard: true as const, stageId: entry.stageId, stageName: entry.stageName, suggestedStageId: null };
+  const contato = await contatoStageFor(ctx.orgId);
+  const [owner] = await db
+    .select({ id: users.id, name: users.name })
+    .from(contacts)
+    .leftJoin(users, eq(users.id, contacts.ownerId))
+    .where(eq(contacts.id, l.contactId));
+  const ownerId = owner?.id ?? null;
+  const ownerName = owner?.name ?? null;
+  const contatoStageId = contato?.id ?? null;
+  if (entry && !entry.autoCreated) return { inBoard: true as const, stageId: entry.stageId, stageName: entry.stageName, suggestedStageId: null, ownerId, ownerName, contatoStageId };
   const s = await suggestedStageFor(ctx, l, cls);
-  return { inBoard: false as const, stageId: null, stageName: null, suggestedStageId: s?.id ?? null };
+  return { inBoard: false as const, stageId: null, stageName: null, suggestedStageId: s?.id ?? null, ownerId, ownerName, contatoStageId };
+}
+
+/** Etapas ativas do Kanban do Social Seller, na ordem. */
+async function activeRelationshipStages(orgId: string, tx: DbOrTx = db) {
+  const p = await getPipeline(orgId, "relationship", tx);
+  return tx
+    .select()
+    .from(pipelineStages)
+    .where(and(eq(pipelineStages.pipelineId, p.id), isNull(pipelineStages.archivedAt)))
+    .orderBy(asc(pipelineStages.position));
+}
+
+const isContato = (s: { key: string; name: string }, byKey: boolean) => (byKey ? s.key === CONTATO_KEY : s.name.trim().toLowerCase() === "contato");
+
+/** Etapa "Contato": a de key `contato`, senão a de nome Contato (ativas). */
+async function contatoStageFor(orgId: string, tx: DbOrTx = db) {
+  const stages = await activeRelationshipStages(orgId, tx);
+  return stages.find((s) => isContato(s, true)) ?? stages.find((s) => isContato(s, false)) ?? null;
 }
 
 export const addLeadToBoardSchema = z.object({ stageId: z.string().uuid().optional() });
@@ -833,6 +884,92 @@ export async function addLeadToBoard(ctx: Ctx, id: string, input: z.infer<typeof
   await publish({ orgId: ctx.orgId, topic: "board", entityId: l.contactId, ownerIds: [l.assignedTo] });
   await publish({ orgId: ctx.orgId, topic: "leads", entityId: l.id, ownerIds: [l.assignedTo] });
   return entry;
+}
+
+export const forwardLeadSchema = z.object({ sdrId: z.string().uuid().optional(), stageId: z.string().uuid().optional() });
+
+/**
+ * "Encaminhar para o Kanban": o SDR (por padrão quem chama) assume o lead, que vai para a etapa Contato do
+ * Kanban do Social Seller, e deixa de aparecer nas abas de trabalho de Leads.
+ */
+export async function forwardLeadToKanban(ctx: Ctx, id: string, input: z.infer<typeof forwardLeadSchema>) {
+  const l = await getVisibleLead(ctx, id);
+  const sdrId = input.sdrId ?? ctx.userId;
+  const manager = can(ctx, "contacts.assign");
+  if (sdrId !== ctx.userId && !manager) throw forbidden("Somente gestores encaminham para o Kanban de outra pessoa.");
+  const [sdr] = await db
+    .select({ id: users.id, name: users.name })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, sdrId), eq(memberships.status, "active"), inArray(memberships.role, ["seller", "admin", "manager"])));
+  if (!sdr) throw invalid("Escolha um SDR da equipe.");
+  const stages = await activeRelationshipStages(ctx.orgId);
+  let stage = input.stageId ? stages.find((s) => s.id === input.stageId) : (stages.find((s) => isContato(s, true)) ?? stages.find((s) => isContato(s, false)) ?? stages.find((s) => s.key === NOVO_INTERESSADO_KEY) ?? stages[0]);
+  if (!stage) throw invalid(input.stageId ? "Etapa inválida." : "O Kanban do Social Seller não tem etapas.");
+  const [form] = l.formId ? await db.select({ name: leadForms.name }).from(leadForms).where(eq(leadForms.id, l.formId)) : [];
+  const now = new Date();
+
+  const out = await db.transaction(async (tx) => {
+    const [c] = await tx.select({ ownerId: contacts.ownerId }).from(contacts).where(eq(contacts.id, l.contactId)).for("update");
+    const previousOwner = c?.ownerId ?? null;
+    const current = await activeEntryFor(l.contactId, ctx.orgId, tx);
+    let entryId: string;
+    // Seller não toma o contato de outra pessoa (com ou sem cartão): só um gestor redistribui.
+    if (previousOwner && previousOwner !== sdrId && !manager) {
+      const [o] = await tx.select({ name: users.name }).from(users).where(eq(users.id, previousOwner));
+      const who = o?.name ?? "outra pessoa";
+      throw new AppError("conflict", current && !current.autoCreated ? `Este lead já está no Kanban de ${who}.` : `Este contato é de ${who}. Peça a um gestor para encaminhar.`);
+    }
+    if (current) {
+      entryId = current.id;
+      if (current.stageId !== stage.id || current.autoCreated) {
+        const from = stages.find((s) => s.id === current.stageId);
+        await tx
+          .update(relationshipEntries)
+          .set({ stageId: stage.id, version: current.version + 1, autoCreated: false, origin: current.origin ?? "form", updatedAt: now })
+          .where(eq(relationshipEntries.id, current.id));
+        await tx.insert(stageHistory).values({
+          orgId: ctx.orgId,
+          entityType: "relationship",
+          entityId: current.id,
+          contactId: l.contactId,
+          fromStageId: current.stageId,
+          toStageId: stage.id,
+          fromStageName: from?.name ?? current.stageName,
+          toStageName: stage.name,
+          actorId: ctx.userId,
+          reason: `Encaminhado para o Kanban de ${sdr.name}`,
+        });
+      }
+    } else {
+      const e = await addToBoard(ctx, l.contactId, stage.id, tx, `Encaminhado para o Kanban de ${sdr.name} · ${form?.name ?? "Lead"}`, { origin: "form", productId: l.productId, createdBy: ctx.userId });
+      if (!e) throw new AppError("conflict", "Este lead já está no Kanban.");
+      entryId = e.id;
+    }
+    // O SDR vira o responsável pelo contato (e pelas conversas que eram do anterior ou estavam sem dono).
+    if (previousOwner !== sdrId) {
+      await tx.update(contacts).set({ ownerId: sdrId, updatedAt: now }).where(eq(contacts.id, l.contactId));
+      await tx
+        .update(conversations)
+        .set({ ownerId: sdrId })
+        .where(and(eq(conversations.contactId, l.contactId), or(isNull(conversations.ownerId), previousOwner ? eq(conversations.ownerId, previousOwner) : undefined)));
+    }
+    const toContacted = l.status === "new" || l.status === "no_answer";
+    await tx
+      .update(leads)
+      .set({ assignedTo: sdrId, updatedAt: now, ...(toContacted ? { status: "contacted" as const, contactedAt: l.contactedAt ?? now } : {}) })
+      .where(eq(leads.id, l.id));
+    return { entryId, previousOwner };
+  });
+  await audit(db, ctx, "lead.forwarded_to_kanban", "lead", l.id, { sdrId, stageId: stage.id, entryId: out.entryId });
+  const ownerIds = [l.assignedTo, out.previousOwner, sdrId];
+  await publish({ orgId: ctx.orgId, topic: "board", entityId: l.contactId, ownerIds });
+  await publish({ orgId: ctx.orgId, topic: "leads", entityId: l.id, ownerIds });
+  await publish({ orgId: ctx.orgId, topic: "contacts", entityId: l.contactId, ownerIds });
+  if (sdrId !== ctx.userId) {
+    await notifyUser({ orgId: ctx.orgId, userId: sdrId, type: "lead.new", title: `Lead no seu Kanban: ${l.name}`, link: `/social-seller?responsavel=${sdrId}` });
+  }
+  return { entryId: out.entryId, stageId: stage.id, stageName: stage.name, sdrId: sdr.id, sdrName: sdr.name };
 }
 
 export const scheduleLeadSchema = z
@@ -881,6 +1018,6 @@ export async function newLeadCount(ctx: Ctx) {
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(leads)
-    .where(and(leadScope(ctx), eq(leads.status, "new"), can(ctx, "data.all") ? undefined : eq(leads.assignedTo, ctx.userId)));
+    .where(and(leadScope(ctx), eq(leads.status, "new"), sql`not ${inKanbanSql}`, can(ctx, "data.all") ? undefined : eq(leads.assignedTo, ctx.userId)));
   return n;
 }
