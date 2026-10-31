@@ -165,7 +165,7 @@ function SdrKanbanCard({ leadId, b, onForwarded }: { leadId: string; b: LeadBoar
             <LayoutDashboard className="size-5" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14.5px] font-semibold text-brand-dark">{b.ownerId === me.user.id ? "No seu Kanban" : b.ownerName ? `No Kanban de ${b.ownerName}` : "No Kanban (sem responsável)"}</span>
+            <span className="block truncate text-[14.5px] font-semibold text-brand-dark">{b.ownerName ? `Em contato com ${b.ownerId === me.user.id ? "você" : b.ownerName.split(" ")[0]}` : "No Kanban (sem responsável)"}</span>
             <span className="block truncate text-[12.5px] text-brand-dark/80">Etapa: {b.stageName}</span>
           </span>
           <ExternalLink className="size-4 shrink-0 text-brand" aria-hidden />

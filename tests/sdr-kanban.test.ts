@@ -3,7 +3,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/server/db";
 import { contacts, leads, notifications, pipelineStages, relationshipEntries, stageHistory } from "@/server/db/schema";
 import { forwardLeadToKanban, getLead, listLeads, newLeadCount, submitPublicForm } from "@/server/services/leads";
-import { listSdrBoards } from "@/server/services/board";
+import { addEntry, listSdrBoards } from "@/server/services/board";
 import { listStages } from "@/server/services/stages";
 import { addToBoard } from "@/server/services/board";
 import { createForm } from "@/server/services/integrations";
@@ -31,6 +31,21 @@ describe("Kanban por SDR", () => {
     const stages = await listStages(o.ctx.admin, "relationship");
     expect(stages[0]).toMatchObject({ key: CONTATO_KEY, name: "Contato", color: "blue" });
     expect(stages).toHaveLength(8);
+  });
+
+  it("contato colocado no Kanban por qualquer caminho: lead vira 'em contato' com o dono e sai de Leads", async () => {
+    const o = await setupOrg();
+    const l = await leadFor(o, o.users.seller.id);
+    await db.update(leads).set({ assignedTo: null }).where(eq(leads.id, l.id));
+    const stages = await listStages(o.ctx.admin, "relationship");
+    await addEntry(o.ctx.seller, { contactId: l.contactId, stageId: stages[2].id });
+    const [after] = await db.select().from(leads).where(eq(leads.id, l.id));
+    expect(after.status).toBe("contacted");
+    expect(after.contactedAt).not.toBeNull();
+    expect(after.assignedTo).toBe(o.users.seller.id);
+    expect((await listLeads(o.ctx.seller, { status: "open", page: 1 })).rows.map((r) => r.id)).not.toContain(l.id);
+    const row = (await listLeads(o.ctx.seller, { status: "kanban", page: 1 })).rows.find((r) => r.id === l.id);
+    expect(row?.boardOwnerName).toBe("Mariana");
   });
 
   it("seller encaminha: cartão em Contato, dono, responsável, status e abas", async () => {

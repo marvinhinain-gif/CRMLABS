@@ -30,7 +30,7 @@ import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
 import { audit, cleanText, closerPipeline, CONTATO_KEY, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
-import { activeEntryFor, addToBoard } from "./board";
+import { activeEntryFor, addToBoard, syncLeadsWithBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
 import { classFromProduct, LEAD_CLASSES, LEAD_CLASS_FILTERS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, type LeadClass } from "@/lib/leadScore";
@@ -872,12 +872,14 @@ export async function addLeadToBoard(ctx: Ctx, id: string, input: z.infer<typeof
     if (current) {
       // Cartão antigo que entrou sozinho (mensagem/comentário): vira Lead de verdade.
       const [u] = await tx.update(relationshipEntries).set({ autoCreated: false, origin: "form", updatedAt: new Date() }).where(eq(relationshipEntries.id, current.id)).returning();
+      await syncLeadsWithBoard(tx, ctx.orgId, l.contactId);
       return u;
     }
     const e = await addToBoard(ctx, l.contactId, stageId, tx, `Adicionado ao CRM · ${form?.name ?? "Lead"}`, { origin: "form", productId: l.productId, createdBy: ctx.userId });
     if (!e) throw new AppError("conflict", "Este lead já está no CRM do Social Seller.");
     // O contato acompanha o responsável do lead quando ainda não tinha dono.
     if (l.assignedTo) await tx.update(contacts).set({ ownerId: l.assignedTo }).where(and(eq(contacts.id, l.contactId), isNull(contacts.ownerId)));
+    await syncLeadsWithBoard(tx, ctx.orgId, l.contactId);
     return e;
   });
   await audit(db, ctx, "lead.added_to_board", "lead", l.id, { stageId: entry.stageId });

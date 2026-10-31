@@ -60,6 +60,13 @@ function CardBody({ card, menu }: { card: BoardCard; menu?: React.ReactNode }) {
         </div>
         {menu}
       </div>
+      {card.ownerName && (
+        <p className="mt-2">
+          <span className="inline-flex max-w-full items-center rounded-full bg-info-soft px-2.5 py-0.5 text-[12px] font-medium text-info" title={`Responsável: ${card.ownerName}`}>
+            <span className="truncate">Em contato com {card.ownerName.split(" ")[0]}</span>
+          </span>
+        </p>
+      )}
       {card.cadenceStatus && (
         <p className="mt-2">
           {card.cadenceStatus === "active" ? (

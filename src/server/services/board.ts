@@ -187,6 +187,17 @@ async function assertContactVisible(ctx: Ctx, contactId: string, tx: DbOrTx = db
   return c;
 }
 
+/**
+ * O contato está no Kanban de um SDR: os leads dele saem da fila de Leads como "em contato"
+ * (novo/sem resposta → em contato) e ficam com o responsável do contato quando ainda não tinham dono.
+ */
+export async function syncLeadsWithBoard(tx: DbOrTx, orgId: string, contactId: string) {
+  await tx.execute(sql`update leads set status = 'contacted', contacted_at = coalesce(contacted_at, now()), updated_at = now()
+    where org_id = ${orgId} and contact_id = ${contactId} and status in ('new', 'no_answer')`);
+  await tx.execute(sql`update leads l set assigned_to = c.owner_id, updated_at = now() from contacts c
+    where c.id = l.contact_id and l.org_id = ${orgId} and l.contact_id = ${contactId} and l.assigned_to is null and c.owner_id is not null`);
+}
+
 /** Cria a entrada do contato no funil (no máximo uma ativa por funil). Registra histórico. */
 export async function addToBoard(
   ctx: Pick<Ctx, "orgId"> & { userId: string | null },
@@ -223,6 +234,7 @@ export async function addToBoard(
     actorId: ctx.userId,
     reason: reason ?? "Entrada no funil",
   });
+  await syncLeadsWithBoard(tx, ctx.orgId, contactId);
   return inserted[0];
 }
 
@@ -289,6 +301,7 @@ export async function moveEntry(ctx: Ctx, entryId: string, input: z.infer<typeof
       .set({ stageId: to.id, position: (min?.m ?? 0) - 1, version: entry.version + 1, updatedAt: new Date() })
       .where(eq(relationshipEntries.id, entry.id))
       .returning();
+    if (!entry.autoCreated) await syncLeadsWithBoard(tx, ctx.orgId, entry.contactId);
     await tx.insert(stageHistory).values({
       orgId: ctx.orgId,
       entityType: "relationship",
