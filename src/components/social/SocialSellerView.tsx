@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import * as Popover from "@radix-ui/react-popover";
-import { Eraser, Funnel, LayoutDashboard, MessageCircle, PhoneCall, Plus, Search, Send, ShieldAlert, SlidersHorizontal, UserRound } from "lucide-react";
+import { Eraser, Funnel, LayoutDashboard, MessageCircle, PhoneCall, Plus, Search, Send, ShieldAlert, SlidersHorizontal, UserRound, UsersRound } from "lucide-react";
 import { fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useOpenContact, useQueryParam } from "@/lib/nav";
-import type { Stage } from "@/lib/types";
-import { Button, cx, DemoBadge, Field, PageHeader, Select, Tabs } from "@/components/ui";
+import { ALL_SDRS, type SdrBoard, type Stage } from "@/lib/types";
+import { Avatar, Button, cx, DemoBadge, Field, PageHeader, Select, Tabs } from "@/components/ui";
 import { KanbanBoard } from "./KanbanBoard";
 import { EditStagesDialog } from "./EditStagesDialog";
 import { LeadReviewDialog } from "./LeadReviewDialog";
@@ -32,7 +32,14 @@ export function SocialSellerView() {
     if (tab === "direct") router.replace("/instagram?aba=directs");
     if (tab === "comentarios") router.replace("/instagram?aba=comentarios");
   }, [tab, router]);
-  const [owner, setOwner] = useQueryParam("responsavel", "");
+  const [ownerParam, setOwner] = useQueryParam("responsavel", "");
+  // SDR (seller/admin/manager) abre no próprio Kanban; closer continua com o filtro de responsável de antes.
+  const isSdr = me.user.role !== "closer";
+  const canSeeAll = me.permissions.dataAll;
+  const { data: sdrs, error: sdrsError, mutate: reloadSdrs } = useSWR<SdrBoard[]>(isSdr ? "/api/board/sdrs" : null, fetcher);
+  const owner = !isSdr ? ownerParam : ownerParam === ALL_SDRS ? (canSeeAll ? "" : me.user.id) : canSeeAll ? ownerParam || me.user.id : me.user.id;
+  const ownerName = owner === me.user.id ? me.user.name : (sdrs?.find((s) => s.userId === owner)?.name ?? team.find((m) => m.userId === owner)?.name ?? null);
+  const subtitle = !isSdr ? "Transforme interações em relacionamentos." : !owner ? "Kanban de toda a equipe." : owner === me.user.id ? `Kanban de ${me.user.name.split(" ")[0]} (você)` : ownerName ? `Kanban de ${ownerName}` : "Kanban do SDR";
   const [stageId, setStageId] = useQueryParam("etapa", "");
   const [tagId, setTagId] = useQueryParam("tag", "");
   const [nextAction, setNextAction] = useQueryParam("acao", "");
@@ -60,7 +67,7 @@ export function SocialSellerView() {
       <PageHeader
         title="Social Seller"
         badge={me.org.isDemo ? <DemoBadge /> : undefined}
-        subtitle="Transforme interações em relacionamentos."
+        subtitle={subtitle}
         actions={
           <>
             <AccountPill />
@@ -95,21 +102,34 @@ export function SocialSellerView() {
               </Button>
             </div>
           )}
+          {isSdr && (
+            <SdrStrip
+              sdrs={sdrs}
+              error={!!sdrsError}
+              onRetry={() => reloadSdrs()}
+              meId={me.user.id}
+              selected={owner}
+              canSeeAll={canSeeAll}
+              onSelect={(id) => setOwner(id === me.user.id ? null : id || ALL_SDRS)}
+            />
+          )}
           <div className="flex flex-col gap-3 rounded-[22px] border border-line/70 bg-white/60 p-3 sm:flex-row sm:items-center">
-            <div className="relative sm:w-[260px]">
-              <UserRound className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-ink" aria-hidden />
-              <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="pl-11 h-12 bg-white" disabled={!me.permissions.dataAll}>
-                <option value="">{me.permissions.dataAll ? "Todos os responsáveis" : "Meus contatos"}</option>
-                {me.permissions.dataAll &&
-                  team
-                    .filter((m) => m.status === "active")
-                    .map((m) => (
-                      <option key={m.userId} value={m.userId}>
-                        {m.name}
-                      </option>
-                    ))}
-              </Select>
-            </div>
+            {!isSdr && (
+              <div className="relative sm:w-[260px]">
+                <UserRound className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-ink" aria-hidden />
+                <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="pl-11 h-12 bg-white" disabled={!me.permissions.dataAll}>
+                  <option value="">{me.permissions.dataAll ? "Todos os responsáveis" : "Meus contatos"}</option>
+                  {me.permissions.dataAll &&
+                    team
+                      .filter((m) => m.status === "active")
+                      .map((m) => (
+                        <option key={m.userId} value={m.userId}>
+                          {m.name}
+                        </option>
+                      ))}
+                </Select>
+              </div>
+            )}
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-4 top-1/2 size-[18px] -translate-y-1/2 text-muted" aria-hidden />
               <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar no funil..." aria-label="Buscar no funil por nome ou @" className="h-12 w-full rounded-[14px] border border-line bg-white pl-11 pr-4 text-[14.5px] focus:border-brand focus:outline-none focus:ring-4 focus:ring-[#008a65]/10" />
@@ -191,6 +211,43 @@ export function SocialSellerView() {
       <EditStagesDialog open={editStages} onOpenChange={setEditStages} />
       {isAdmin && <LeadReviewDialog open={review} onOpenChange={setReview} />}
       {canCleanup && <BoardCleanupDialog open={cleanup} onOpenChange={setCleanup} />}
+    </div>
+  );
+}
+
+/** Faixa "Kanbans": um chip por SDR (rola na horizontal no celular). "" = Todos. */
+function SdrStrip({ sdrs, error, onRetry, meId, selected, canSeeAll, onSelect }: { sdrs: SdrBoard[] | undefined; error: boolean; onRetry: () => void; meId: string; selected: string; canSeeAll: boolean; onSelect: (userId: string) => void }) {
+  const chip = (active: boolean) => cx("inline-flex h-11 shrink-0 items-center gap-2 rounded-full border pl-1.5 pr-4 text-[14px] font-medium transition-colors", active ? "border-[#c9ebdc] bg-selected text-brand" : "border-line bg-white text-ink hover:bg-page");
+  const count = (n: number, active: boolean) => <span className={cx("rounded-full px-2 text-[12px] tabular-nums", active ? "bg-white" : "bg-page")}>{n}</span>;
+  return (
+    <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1 scroll-thin" role="tablist" aria-label="Kanbans por SDR">
+      {canSeeAll && (
+        <button role="tab" aria-selected={!selected} onClick={() => onSelect("")} className={cx(chip(!selected), "pl-4")}>
+          <UsersRound className="size-4" aria-hidden /> Todos
+        </button>
+      )}
+      {error ? (
+        <span className="inline-flex shrink-0 items-center gap-2 text-[13px] text-muted">
+          Não foi possível carregar os Kanbans.
+          <Button size="sm" variant="ghost" onClick={onRetry}>
+            Tentar de novo
+          </Button>
+        </span>
+      ) : !sdrs ? (
+        [0, 1, 2].map((i) => <span key={i} className="h-11 w-36 shrink-0 animate-pulse rounded-full bg-line/60" aria-hidden />)
+      ) : (
+        sdrs.map((s) => {
+          const active = selected === s.userId;
+          const mine = s.userId === meId;
+          return (
+            <button key={s.userId} role="tab" aria-selected={active} onClick={() => onSelect(s.userId)} className={chip(active)} title={`Kanban de ${s.name}`}>
+              <Avatar name={s.name} src={s.avatarUrl} size={32} tone="neutral" />
+              <span className="max-w-[160px] truncate">{mine ? "Meu Kanban" : s.name.split(" ").slice(0, 2).join(" ")}</span>
+              {count(s.total, active)}
+            </button>
+          );
+        })
+      )}
     </div>
   );
 }

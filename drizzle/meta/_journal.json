@@ -148,6 +148,13 @@
       "when": 1793399801822,
       "tag": "0020_cadencia_social_seller",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793455864042,
+      "tag": "0021_kanban_por_sdr",
+      "breakpoints": true
     }
   ]
 }

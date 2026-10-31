@@ -10,8 +10,11 @@ export type StageColor = (typeof STAGE_COLORS)[number];
 export const NOVO_INTERESSADO_KEY = "novo-interessado";
 /** Coluna do Kanban do Social Seller para quem não é do perfil de cliente ideal. */
 export const FORA_DO_ICP_KEY = "fora-do-icp";
+/** Primeira coluna do Kanban: para onde o SDR encaminha o lead que vai trabalhar. */
+export const CONTATO_KEY = "contato";
 
 export const DEFAULT_RELATIONSHIP_STAGES: { key: string; name: string; color: StageColor }[] = [
+  { key: CONTATO_KEY, name: "Contato", color: "blue" },
   { key: "engajado-1", name: "Engajado #1", color: "green" },
   { key: "seguidor-engajado-2", name: "Seguidor Engajado #2", color: "blue" },
   { key: "em-relacionamento", name: "Em relacionamento", color: "yellow" },
@@ -56,7 +59,7 @@ export async function createOrganization(input: { name: string; isDemo?: boolean
     .values(DEFAULT_RELATIONSHIP_STAGES.map((s, i) => ({ ...s, orgId: org.id, pipelineId: rel.id, position: i })))
     .returning();
   await tx.insert(pipelineStages).values(DEFAULT_SALES_STAGES.map((s, i) => ({ ...s, orgId: org.id, pipelineId: sales.id, position: i })));
-  await tx.update(organizations).set({ autoEntryStageId: relStages[0].id }).where(eq(organizations.id, org.id));
+  await tx.update(organizations).set({ autoEntryStageId: (relStages.find((s) => s.key === "engajado-1") ?? relStages[0]).id }).where(eq(organizations.id, org.id));
   // Origens e campos personalizados padrão (integrações de captação).
   const { DEFAULT_SOURCES, DEFAULT_CUSTOM_FIELDS } = await import("./integrations");
   await tx.insert(leadSources).values(DEFAULT_SOURCES.map((x, i) => ({ ...x, orgId: org.id, position: i }))).onConflictDoNothing();

@@ -15,7 +15,7 @@ import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { JourneySection, OriginTrail, type Journey } from "@/components/integrations/Journey";
 import { LEAD_CLASS, LEAD_CLASSES, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
-import type { Stage } from "@/lib/types";
+import { ALL_SDRS, type ForwardToKanbanResult, type SdrBoard, type Stage } from "@/lib/types";
 
 export const LEAD_STATUS = {
   new: { label: "Novo", cls: "bg-brand text-white" },
@@ -83,9 +83,126 @@ type LeadDetail = {
   board: LeadBoard;
 };
 
-type LeadBoard = { inBoard: boolean; stageId: string | null; stageName: string | null; suggestedStageId: string | null };
+type LeadBoard = { inBoard: boolean; stageId: string | null; stageName: string | null; suggestedStageId: string | null; ownerId: string | null; ownerName: string | null; contatoStageId: string | null };
 
-/** CRM do Social Seller: o lead do formulário só entra no Kanban por este botão. */
+/** Kanban do SDR: o SDR encaminha o lead para o próprio Kanban (etapa Contato) e ele sai da fila de Leads.
+ *  Gestores escolhem de quem é o Kanban e podem reencaminhar quem já está nele. */
+function SdrKanbanCard({ leadId, b, onForwarded }: { leadId: string; b: LeadBoard; onForwarded: (r: ForwardToKanbanResult) => Promise<void> | void }) {
+  const me = useMe();
+  const canPick = me.permissions.assign;
+  const { data: sdrs, error: sdrsError } = useSWR<SdrBoard[]>(canPick ? "/api/board/sdrs" : null, fetcher);
+  const [sdrPicked, setSdrPicked] = useState<string | null>(null);
+  const [stageOpen, setStageOpen] = useState(false);
+  const { data: stages } = useSWR<Stage[]>(stageOpen ? "/api/stages?kind=relationship" : null, fetcher);
+  const [stagePicked, setStagePicked] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Já no Kanban: o padrão do reencaminhamento é outro SDR (não faz sentido mandar para o mesmo dono).
+  const defaultSdr = b.inBoard && b.ownerId === me.user.id ? (sdrs?.find((s) => s.userId !== me.user.id)?.userId ?? me.user.id) : me.user.id;
+  const sdrId = sdrPicked ?? defaultSdr;
+  const sdrName = sdrId === me.user.id ? null : (sdrs?.find((s) => s.userId === sdrId)?.name ?? "outro SDR");
+  const stageId = stagePicked ?? b.contatoStageId ?? stages?.[0]?.id ?? "";
+  const stageName = stages?.find((s) => s.id === stageId)?.name ?? (stagePicked ? "etapa escolhida" : "Contato");
+  const sameOwner = b.inBoard && sdrId === b.ownerId && !stagePicked;
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const body: { sdrId?: string; stageId?: string } = {};
+      if (sdrId !== me.user.id) body.sdrId = sdrId;
+      if (stagePicked || (stageOpen && stageId && stageId !== b.contatoStageId)) body.stageId = stageId;
+      const r = await api.post<ForwardToKanbanResult>(`/api/leads/${leadId}/kanban`, body);
+      await onForwarded(r);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const picker = canPick && (
+    <div className="flex flex-col gap-1">
+      <label htmlFor="lead-kanban-sdr" className="text-[12.5px] text-muted">
+        Kanban de
+      </label>
+      <Select id="lead-kanban-sdr" value={sdrId} onChange={(e) => setSdrPicked(e.target.value)} disabled={!sdrs && !sdrsError}>
+        {!sdrs?.some((s) => s.userId === me.user.id) && <option value={me.user.id}>{me.user.name} (você)</option>}
+        {sdrs?.map((s) => (
+          <option key={s.userId} value={s.userId}>
+            {s.name}
+            {s.userId === me.user.id ? " (você)" : ""}
+          </option>
+        ))}
+      </Select>
+      {sdrsError && <p className="text-[12.5px] text-danger">Não foi possível carregar a equipe. Você ainda pode encaminhar para o seu Kanban.</p>}
+    </div>
+  );
+  const stagePicker = stageOpen ? (
+    <div className="flex flex-col gap-1">
+      <label htmlFor="lead-kanban-stage" className="text-[12.5px] text-muted">
+        Etapa
+      </label>
+      <Select id="lead-kanban-stage" value={stageId} onChange={(e) => setStagePicked(e.target.value)} disabled={!stages}>
+        {!stages && <option value={stageId}>Carregando etapas...</option>}
+        {stages?.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </Select>
+    </div>
+  ) : (
+    <button type="button" className="min-h-11 self-start text-[13px] font-medium text-muted underline-offset-2 hover:text-ink hover:underline" onClick={() => setStageOpen(true)}>
+      Colocar em outra etapa
+    </button>
+  );
+  const label = sdrName ? `Encaminhar para o Kanban de ${sdrName.split(" ")[0]}` : b.inBoard ? "Trazer para o meu Kanban" : "Encaminhar para o meu Kanban";
+
+  if (b.inBoard) {
+    return (
+      <div className="mt-4 flex flex-col gap-2">
+        <Link href={`/social-seller?responsavel=${b.ownerId ?? ALL_SDRS}`} className="flex items-center gap-3 rounded-[18px] border border-[#c9ebdc] bg-selected p-4 hover:brightness-[0.99]">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-[14px] bg-white text-brand" aria-hidden>
+            <LayoutDashboard className="size-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14.5px] font-semibold text-brand-dark">{b.ownerId === me.user.id ? "No seu Kanban" : b.ownerName ? `No Kanban de ${b.ownerName}` : "No Kanban (sem responsável)"}</span>
+            <span className="block truncate text-[12.5px] text-brand-dark/80">Etapa: {b.stageName}</span>
+          </span>
+          <ExternalLink className="size-4 shrink-0 text-brand" aria-hidden />
+        </Link>
+        {canPick && (
+          <details className="rounded-[18px] border border-line px-4 py-1">
+            <summary className="flex min-h-11 cursor-pointer items-center text-[13.5px] font-medium text-ink">Reencaminhar para outro SDR</summary>
+            <div className="flex flex-col gap-2 pb-3">
+              {picker}
+              {stagePicker}
+              <Button variant="secondary" loading={busy} disabled={sameOwner} icon={<Send className="size-4" />} onClick={submit}>
+                {label}
+              </Button>
+            </div>
+          </details>
+        )}
+      </div>
+    );
+  }
+  return (
+    <section className="mt-4 rounded-[18px] border border-line p-4" aria-labelledby="lead-kanban-title">
+      <h3 id="lead-kanban-title" className="text-[13px] font-semibold uppercase tracking-wide text-muted">
+        Kanban do SDR
+      </h3>
+      <p className="mt-1 text-[13px] text-muted">Encaminhe para o Kanban e o lead sai de &quot;Para atender&quot;: ele entra em {stageOpen ? stageName : "Contato"} e você segue por lá.</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {picker}
+        <Button loading={busy} disabled={stageOpen && !stageId} icon={<LayoutDashboard className="size-4" />} onClick={submit}>
+          {label}
+        </Button>
+        {stagePicker}
+      </div>
+    </section>
+  );
+}
+
+/** CRM do Social Seller (quem não é SDR, ex.: closer): o lead do formulário só entra no Kanban por este botão. */
 function BoardCard({ b, busy, onAdd }: { b: LeadBoard; busy: boolean; onAdd: (stageId: string) => void }) {
   const { data: stages } = useSWR<Stage[]>(b.inBoard ? null : "/api/stages?kind=relationship", fetcher);
   const [picked, setPicked] = useState<string | null>(null);
@@ -300,23 +417,35 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           onSet={(c) => patch({ scoreClass: c }, c ? `Lead classificado como ${LEAD_CLASS[c].label}.` : "Classificação do quiz restaurada.", "score")}
         />
 
-        <BoardCard
-          b={l.board}
-          busy={busy === "board"}
-          onAdd={async (stageId) => {
-            setBusy("board");
-            try {
-              await api.post(`/api/leads/${l.id}/board`, { stageId });
-              await refresh();
-              await globalMutate((k) => typeof k === "string" && k.startsWith("/api/board"));
-              toast.success("Lead adicionado ao CRM do Social Seller.");
-            } catch (e) {
-              toast.error((e as Error).message);
-            } finally {
-              setBusy(null);
-            }
-          }}
-        />
+        {me.user.role !== "closer" ? (
+          <SdrKanbanCard
+            leadId={l.id}
+            b={l.board}
+            onForwarded={async (r) => {
+              toast.success(`Lead encaminhado para o ${r.sdrId === me.user.id ? "seu Kanban" : `Kanban de ${r.sdrName}`}, em ${r.stageName}.`);
+              onClose();
+              await globalMutate((k) => typeof k === "string" && (k.startsWith("/api/leads") || k.startsWith("/api/me") || k.startsWith("/api/board") || k.startsWith("/api/contacts")));
+            }}
+          />
+        ) : (
+          <BoardCard
+            b={l.board}
+            busy={busy === "board"}
+            onAdd={async (stageId) => {
+              setBusy("board");
+              try {
+                await api.post(`/api/leads/${l.id}/board`, { stageId });
+                await refresh();
+                await globalMutate((k) => typeof k === "string" && k.startsWith("/api/board"));
+                toast.success("Lead adicionado ao CRM do Social Seller.");
+              } catch (e) {
+                toast.error((e as Error).message);
+              } finally {
+                setBusy(null);
+              }
+            }}
+          />
+        )}
 
         {l.appointment && (
           <Link href={`/agendamentos?reuniao=${l.appointment.id}`} className="mt-4 flex items-center gap-3 rounded-[18px] border border-[#c9ebdc] bg-selected p-4 hover:brightness-[0.99]">

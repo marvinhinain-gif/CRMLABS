@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
+import { toast } from "sonner";
 import Link from "next/link";
-import { CalendarCheck, ChevronRight, Inbox, Plug, Search, Trophy } from "lucide-react";
-import { fetcher, qs } from "@/lib/api";
+import { CalendarCheck, ChevronRight, Inbox, LayoutDashboard, Loader2, Plug, Search, Trophy } from "lucide-react";
+import { api, fetcher, qs } from "@/lib/api";
+import type { ForwardToKanbanResult } from "@/lib/types";
 import { useMe, useTeam } from "@/lib/me";
 import { useQueryParam, useSetQueryParams } from "@/lib/nav";
 import { formatPhone, longDayTime, relativeTime } from "@/lib/format";
@@ -41,12 +43,16 @@ export type LeadRow = {
   score: number | null;
   /** Faixa de faturamento respondida na aplicação (id da alternativa). */
   revenue: string | null;
+  /** Dono do contato e etapa do cartão quando o lead já está no Kanban de um SDR (null = fora do Kanban). */
+  boardOwnerName: string | null;
+  boardStageName: string | null;
 };
-type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; topCount: number; classCounts: Record<string, number> };
+type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; topCount: number; classCounts: Record<string, number>; allCount?: number };
 
 const FILTERS = [
   { value: "open", label: "Para atender" },
   { value: "new", label: "Novos" },
+  { value: "kanban", label: "No Kanban" },
   { value: "scheduled", label: "Agendados" },
   { value: "top20", label: "TOP 20 Leads" },
   { value: "disqualified", label: "Descartados" },
@@ -62,58 +68,102 @@ function useDebounced<T>(v: T, ms = 300) {
   return d;
 }
 
-function LeadCard({ l, i, rank, onOpen }: { l: LeadRow; i: number; rank?: number; onOpen: () => void }) {
+const WORK_STATUSES: readonly string[] = ["new", "contacted", "no_answer"];
+
+/** Botão rápido "Para o meu Kanban" (≥ 44px de toque). Não abre o lead. */
+function ToKanbanButton({ busy, onClick, className }: { busy: boolean; onClick: () => void; className?: string }) {
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cx("inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#c9ebdc] bg-selected px-3 text-[13px] font-semibold text-brand transition-colors hover:brightness-[0.98] disabled:opacity-60", className)}
+    >
+      {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <LayoutDashboard className="size-4" aria-hidden />}
+      Para o meu Kanban
+    </button>
+  );
+}
+
+function LeadCard({ l, i, rank, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow; i: number; rank?: number; onOpen: () => void; onToKanban?: () => void; toKanbanBusy?: boolean }) {
   const st = LEAD_STATUS[l.status];
+  const inKanban = !!(l.boardStageName || l.boardOwnerName);
+  const quick = onToKanban && !inKanban && WORK_STATUSES.includes(l.status);
   const fresh = l.status === "new" && Date.now() - new Date(l.createdAt).getTime() < 30 * 60000;
   return (
-    <li className="group anim-fade flex transition-colors hover:bg-page/60 active:bg-page items-start sm:items-center" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
-      <button onClick={onOpen} className="flex min-w-0 flex-1 items-start gap-3 px-4 py-3.5 text-left sm:items-center sm:px-5">
-        {rank && (
-          <span className={cx("mt-3 w-7 shrink-0 text-center text-[15px] font-bold tabular-nums sm:mt-0", rank <= 3 ? "text-brand" : "text-muted")} aria-label={`${rank}º lugar`}>
-            {rank}º
+    <li className="group anim-fade transition-colors hover:bg-page/60 active:bg-page" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
+      <div className="flex items-start sm:items-center">
+        <button onClick={onOpen} className="flex min-w-0 flex-1 items-start gap-3 px-4 py-3.5 text-left sm:items-center sm:px-5">
+          {rank && (
+            <span className={cx("mt-3 w-7 shrink-0 text-center text-[15px] font-bold tabular-nums sm:mt-0", rank <= 3 ? "text-brand" : "text-muted")} aria-label={`${rank}º lugar`}>
+              {rank}º
+            </span>
+          )}
+          <span className="relative shrink-0">
+            <Avatar name={l.name} size={46} />
+            {fresh && <span className="absolute -right-0.5 -top-0.5 size-3.5 rounded-full border-2 border-white bg-brand-accent animate-[crm-pulse_1.4s_ease-in-out_infinite]" aria-label="Chegou agora" />}
           </span>
-        )}
-        <span className="relative shrink-0">
-          <Avatar name={l.name} size={46} />
-          {fresh && <span className="absolute -right-0.5 -top-0.5 size-3.5 rounded-full border-2 border-white bg-brand-accent animate-[crm-pulse_1.4s_ease-in-out_infinite]" aria-label="Chegou agora" />}
+          <span className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="truncate text-[15.5px] font-semibold">{l.name}</span>
+              <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
+              <LeadClassBadge cls={l.scoreClass} score={l.score} manual={l.scoreClassManual} />
+            </span>
+            <span className="mt-0.5 block truncate text-[13px] text-muted">
+              {[formatPhone(l.phone), l.instagram && `@${l.instagram}`].filter(Boolean).join(" · ")}
+            </span>
+            <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px]">
+              {l.sourceName && <SourceChip name={l.sourceName} color={l.sourceColor} />}
+              {l.formName && <span className="rounded-full bg-page px-2.5 py-0.5 text-muted">{l.formName}</span>}
+              {l.productName && <span className="rounded-full bg-page px-2.5 py-0.5 text-ink">Interesse: {l.productName}</span>}
+              {inKanban && (
+                <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-selected px-2.5 py-0.5 font-medium text-brand">
+                  <LayoutDashboard className="size-3.5 shrink-0" aria-hidden />
+                  <span className="truncate">
+                    {l.boardOwnerName ? `Kanban de ${l.boardOwnerName}` : "No Kanban"}
+                    {l.boardStageName ? ` · ${l.boardStageName}` : ""}
+                  </span>
+                </span>
+              )}
+              {rank && l.revenue && REVENUE_OPTIONS[l.revenue] && <span className="rounded-full bg-success-soft px-2.5 py-0.5 font-medium text-success">Faturamento: {REVENUE_OPTIONS[l.revenue].label}</span>}
+            </span>
+            <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
+              <span className="text-muted">{relativeTime(l.createdAt)}</span>
+              {l.status === "scheduled" && l.appointmentAt ? (
+                <span className="inline-flex items-center gap-1 font-medium text-brand">
+                  <CalendarCheck className="size-3.5" aria-hidden /> {longDayTime(l.appointmentAt)}
+                </span>
+              ) : l.preferredAt ? (
+                <span className="text-ink">Prefere {longDayTime(l.preferredAt)}</span>
+              ) : null}
+              {l.assignedName && (
+                <span className="inline-flex items-center gap-1.5 text-muted">
+                  <TeamAvatar userId={l.assignedTo} name={l.assignedName} size={18} /> {l.assignedName}
+                </span>
+              )}
+            </span>
+          </span>
+        </button>
+        {/* Faixa da direita também abre o lead (o botão do WhatsApp não propaga o clique). */}
+        <span onClick={onOpen} className="flex shrink-0 cursor-pointer items-center gap-1 self-stretch pr-3 pt-3.5 sm:pr-4 sm:pt-0">
+          {quick && (
+            <span className="mr-1 hidden sm:block">
+              <ToKanbanButton busy={!!toKanbanBusy} onClick={onToKanban!} />
+            </span>
+          )}
+          <WhatsAppButton variant="icon" phone={l.phone} name={l.name} className="size-11" />
+          <ChevronRight className="pointer-events-none size-5 shrink-0 text-muted transition-transform group-hover:translate-x-0.5" aria-hidden />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate text-[15.5px] font-semibold">{l.name}</span>
-            <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
-            <LeadClassBadge cls={l.scoreClass} score={l.score} manual={l.scoreClassManual} />
-          </span>
-          <span className="mt-0.5 block truncate text-[13px] text-muted">
-            {[formatPhone(l.phone), l.instagram && `@${l.instagram}`].filter(Boolean).join(" · ")}
-          </span>
-          <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px]">
-            {l.sourceName && <SourceChip name={l.sourceName} color={l.sourceColor} />}
-            {l.formName && <span className="rounded-full bg-page px-2.5 py-0.5 text-muted">{l.formName}</span>}
-            {l.productName && <span className="rounded-full bg-page px-2.5 py-0.5 text-ink">Interesse: {l.productName}</span>}
-            {rank && l.revenue && REVENUE_OPTIONS[l.revenue] && <span className="rounded-full bg-success-soft px-2.5 py-0.5 font-medium text-success">Faturamento: {REVENUE_OPTIONS[l.revenue].label}</span>}
-          </span>
-          <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
-            <span className="text-muted">{relativeTime(l.createdAt)}</span>
-            {l.status === "scheduled" && l.appointmentAt ? (
-              <span className="inline-flex items-center gap-1 font-medium text-brand">
-                <CalendarCheck className="size-3.5" aria-hidden /> {longDayTime(l.appointmentAt)}
-              </span>
-            ) : l.preferredAt ? (
-              <span className="text-ink">Prefere {longDayTime(l.preferredAt)}</span>
-            ) : null}
-            {l.assignedName && (
-              <span className="inline-flex items-center gap-1.5 text-muted">
-                <TeamAvatar userId={l.assignedTo} name={l.assignedName} size={18} /> {l.assignedName}
-              </span>
-            )}
-          </span>
-        </span>
-      </button>
-      {/* Faixa da direita também abre o lead (o botão do WhatsApp não propaga o clique). */}
-      <span onClick={onOpen} className="flex shrink-0 cursor-pointer items-center gap-1 self-stretch pr-3 pt-3.5 sm:pr-4 sm:pt-0">
-        <WhatsAppButton variant="icon" phone={l.phone} name={l.name} className="size-11" />
-        <ChevronRight className="pointer-events-none size-5 shrink-0 text-muted transition-transform group-hover:translate-x-0.5" aria-hidden />
-      </span>
+      </div>
+      {/* Celular: o botão vai numa linha própria, alinhado ao texto, para não espremer o nome. */}
+      {quick && (
+        <div className={cx("-mt-1 pb-3 pr-4 sm:hidden", rank ? "pl-[114px]" : "pl-[74px]")}>
+          <ToKanbanButton busy={!!toKanbanBusy} onClick={onToKanban!} />
+        </div>
+      )}
     </li>
   );
 }
@@ -132,6 +182,9 @@ function LeadList() {
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const debounced = useDebounced(q);
+  const { mutate: globalMutate } = useSWRConfig();
+  const isSdr = me.user.role !== "closer";
+  const [forwarding, setForwarding] = useState<string | null>(null);
   const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, q: debounced, assignedTo: owner, classe, fonte, periodo, page })}`, fetcher, { keepPreviousData: true });
   const { data: stats } = useLeadSourceStats({ periodo, classe, owner });
   useEffect(() => setPage(1), [status, debounced, owner, classe, fonte, periodo]);
@@ -140,7 +193,21 @@ function LeadList() {
   const sourceOptions = stats?.sources ?? [];
   const counts = data?.counts ?? {};
   const top = status === "top20";
-  const countFor = (v: string) => (v === "top20" ? (data?.topCount ?? 0) : v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? Object.values(counts).reduce((a, b) => a + b, 0) : (counts[v] ?? 0));
+  const countFor = (v: string) => (v === "top20" ? (data?.topCount ?? 0) : v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? (data?.allCount ?? Object.entries(counts).reduce((a, [k, n]) => (k === "kanban" ? a : a + n), 0)) : (counts[v] ?? 0));
+  const toKanban = async (l: LeadRow) => {
+    setForwarding(l.id);
+    try {
+      const r = await api.post<ForwardToKanbanResult>(`/api/leads/${l.id}/kanban`, {});
+      // Nas abas de trabalho o lead sai da lista na hora; a revalidação acerta contagens e as demais abas.
+      if (status !== "all" && status !== "kanban") await mutate((d) => (d ? { ...d, rows: d.rows.filter((x) => x.id !== l.id), total: Math.max(0, d.total - 1) } : d), { revalidate: false });
+      toast.success(`${l.name.split(" ")[0]} foi para o seu Kanban, em ${r.stageName}.`);
+      await globalMutate((k) => typeof k === "string" && (k.startsWith("/api/leads") || k.startsWith("/api/me") || k.startsWith("/api/board") || k.startsWith("/api/contacts")));
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setForwarding(null);
+    }
+  };
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
   return (
@@ -231,14 +298,14 @@ function LeadList() {
         ) : !data?.rows.length ? (
           <EmptyState
             icon={<Inbox />}
-            title={top ? "Nenhum lead no TOP 20 agora" : status === "open" ? "Nenhum lead esperando atendimento" : "Nenhum lead encontrado"}
-            description={top ? "Entram aqui os leads que responderam a aplicação com faturamento de R$ 10 mil por mês ou mais." : me.user.role === "admin" ? "Leads chegam pelas integrações (formulários, quizzes, webhooks). Configure em Integrações." : "Quando um novo lead chegar para você, ele aparece aqui e você recebe uma notificação."}
+            title={top ? "Nenhum lead no TOP 20 agora" : status === "open" ? "Nenhum lead esperando atendimento" : status === "kanban" ? "Nenhum lead no Kanban" : "Nenhum lead encontrado"}
+            description={status === "kanban" ? "Leads encaminhados para o Kanban de um SDR aparecem aqui, com o dono e a etapa." : top ? "Entram aqui os leads que responderam a aplicação com faturamento de R$ 10 mil por mês ou mais." : me.user.role === "admin" ? "Leads chegam pelas integrações (formulários, quizzes, webhooks). Configure em Integrações." : "Quando um novo lead chegar para você, ele aparece aqui e você recebe uma notificação."}
           />
         ) : (
           <>
             <ul className="divide-y divide-line">
               {data.rows.map((l, i) => (
-                <LeadCard key={l.id} l={l} i={i} rank={top ? (data.page - 1) * data.pageSize + i + 1 : undefined} onOpen={() => setLeadParam(l.id)} />
+                <LeadCard key={l.id} l={l} i={i} rank={top ? (data.page - 1) * data.pageSize + i + 1 : undefined} onOpen={() => setLeadParam(l.id)} onToKanban={isSdr ? () => toKanban(l) : undefined} toKanbanBusy={forwarding === l.id} />
               ))}
             </ul>
             {pages > 1 && (

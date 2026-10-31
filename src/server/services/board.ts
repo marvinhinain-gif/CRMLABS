@@ -10,7 +10,9 @@ import {
   cadenceSteps,
   relationshipEntries,
   stageHistory,
+  memberships,
   tags,
+  userAvatars,
   users,
 } from "../db/schema";
 import type { Ctx } from "../context";
@@ -19,6 +21,7 @@ import { AppError, forbidden, notFound } from "../errors";
 import { publish } from "../realtime";
 import { getPipeline } from "./common";
 import { getStageInOrg, listStages } from "./stages";
+import { avatarUrl } from "./avatars";
 import { dayRange } from "../time";
 import { alertLeadStage } from "./alerts";
 import { logger } from "../logger";
@@ -135,6 +138,39 @@ export async function getBoard(ctx: Ctx, f: BoardFilters) {
     })),
     pageSize: COLUMN_PAGE,
   };
+}
+
+/**
+ * Kanbans por SDR: membros ativos seller/admin/manager com o total de cartões ativos do funil cujo contato é deles.
+ * Admin e gestor veem todos; o social seller só o próprio. O próprio usuário vem primeiro, depois por nome.
+ */
+export async function listSdrBoards(ctx: Ctx) {
+  const stageIds = (await listStages(ctx, "relationship")).map((s) => s.id);
+  const totals = stageIds.length
+    ? await db
+        .select({ ownerId: contacts.ownerId, n: sql<number>`count(*)::int` })
+        .from(relationshipEntries)
+        .innerJoin(contacts, eq(contacts.id, relationshipEntries.contactId))
+        .where(and(inArray(relationshipEntries.stageId, stageIds), isNull(relationshipEntries.closedAt), contactScope(ctx), isNull(contacts.archivedAt), isNull(contacts.mergedIntoId)))
+        .groupBy(contacts.ownerId)
+    : [];
+  const byOwner = new Map(totals.map((t) => [t.ownerId, t.n]));
+  const rows = await db
+    .select({ userId: users.id, name: users.name, role: memberships.role, avatarAt: userAvatars.updatedAt })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .leftJoin(userAvatars, eq(userAvatars.userId, users.id))
+    .where(
+      and(
+        eq(memberships.orgId, ctx.orgId),
+        eq(memberships.status, "active"),
+        inArray(memberships.role, ["seller", "admin", "manager"]),
+        can(ctx, "data.all") ? undefined : eq(memberships.userId, ctx.userId),
+      ),
+    );
+  return rows
+    .map(({ avatarAt, ...r }) => ({ ...r, avatarUrl: avatarUrl(r.userId, avatarAt), total: byOwner.get(r.userId) ?? 0 }))
+    .sort((a, b) => Number(b.userId === ctx.userId) - Number(a.userId === ctx.userId) || a.name.localeCompare(b.name, "pt-BR"));
 }
 
 export async function getColumnPage(ctx: Ctx, stageId: string, offset: number, f: BoardFilters) {
