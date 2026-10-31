@@ -3,15 +3,20 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
 
-/** Abre o painel de contato (?contato=id) mantendo a página atual. */
+/** Aba do painel de contato que pode ser aberta direto pela URL (?aba-contato=cadencia). */
+export const CONTACT_TAB_PARAM = "aba-contato";
+
+/** Abre o painel de contato (?contato=id) mantendo a página atual. `opts.tab` abre direto numa aba (ex.: "cadencia"). */
 export function useOpenContact() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
   return useCallback(
-    (id: string) => {
+    (id: string, opts?: { tab?: string }) => {
       const next = new URLSearchParams(sp.toString());
       next.set("contato", id);
+      if (opts?.tab) next.set(CONTACT_TAB_PARAM, opts.tab);
+      else next.delete(CONTACT_TAB_PARAM);
       router.push(`${pathname}?${next}`, { scroll: false });
     },
     [router, pathname, sp],

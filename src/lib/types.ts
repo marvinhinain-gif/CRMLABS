@@ -1,3 +1,5 @@
+import type { CadenceChannel, CadenceStatus } from "./cadence";
+
 export type Role = "admin" | "manager" | "seller" | "closer";
 
 export type Me = {
@@ -40,6 +42,11 @@ export type BoardCard = {
   ownerName: string | null;
   unread: number;
   hasOfficialIdentity: boolean;
+  /** Cadência: situação (null = fora da cadência), nome/canal da etapa atual e prazo. */
+  cadenceStatus: CadenceStatus | null;
+  cadenceStepName: string | null;
+  cadenceStepChannel: CadenceChannel | null;
+  cadenceDueAt: string | null;
   /** Entrou sozinho pela regra antiga (aguarda revisão do administrador). */
   autoCreated?: boolean;
   tags: { id: string; name: string; color: string }[];
@@ -48,3 +55,60 @@ export type BoardCard = {
 export type Board = { stages: (Stage & { total: number; cards: BoardCard[] })[]; pageSize: number };
 
 export const ROLE_LABEL: Record<Role, string> = { admin: "Administrador", manager: "Gestor", seller: "Social seller", closer: "Closer" };
+
+// ---------- Cadência (respostas da API) ----------
+
+export type CadenceStep = { id: string; key: string; name: string; channel: CadenceChannel; waitDays: number; script: string; position: number; archivedAt: string | null };
+
+export type CadenceActivity = { id: string; outcome: string; note: string | null; stepName: string | null; actorName: string | null; createdAt: string };
+
+export type ContactCadence = {
+  entry: { id: string; status: CadenceStatus | null; stepId: string | null; dueAt: string | null; startedAt: string | null } | null;
+  steps: CadenceStep[];
+  currentStep: CadenceStep | null;
+  activities: CadenceActivity[];
+};
+
+export type CadenceQueueView = "due" | "upcoming" | "responded" | "scheduled" | "lost" | "finished" | "all";
+
+export type CadenceQueueItem = {
+  entryId: string;
+  contactId: string;
+  name: string;
+  username: string | null;
+  avatarUrl: string | null;
+  phone: string | null;
+  ownerId: string | null;
+  ownerName: string | null;
+  stageName: string;
+  stageColor: string;
+  status: CadenceStatus;
+  stepId: string | null;
+  stepName: string | null;
+  stepChannel: CadenceChannel | null;
+  stepIndex: number | null;
+  stepCount: number;
+  dueAt: string | null;
+  startedAt: string | null;
+  lastActivity: { outcome: string; note: string | null; at: string; actorName: string | null } | null;
+};
+
+export type CadenceQueue = {
+  items: CadenceQueueItem[];
+  counts: { overdue: number; today: number; upcoming: number; responded: number; scheduled: number; lost: number; finished: number };
+};
+
+export type BoardCleanupPreview = {
+  total: number;
+  byStage: { stageId: string; stageName: string; color: string; count: number }[];
+  items: {
+    entryId: string;
+    contactId: string;
+    name: string;
+    username: string | null;
+    avatarUrl: string | null;
+    stageName: string;
+    ownerName: string | null;
+    reason: "sem_responsavel" | "sem_interacao";
+  }[];
+};

@@ -10,6 +10,7 @@ import { useQueryParam, useSetQueryParams } from "@/lib/nav";
 import { formatPhone, longDayTime, relativeTime } from "@/lib/format";
 import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Select } from "@/components/ui";
 import { SourceChip } from "@/components/integrations/shared";
+import { WhatsAppButton } from "@/components/ui/WhatsApp";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { LEAD_CLASS, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
 import { LEAD_PERIOD_LABEL, LEAD_PERIODS, NO_SOURCE, type LeadPeriod } from "@/lib/leadSources";
@@ -65,8 +66,8 @@ function LeadCard({ l, i, rank, onOpen }: { l: LeadRow; i: number; rank?: number
   const st = LEAD_STATUS[l.status];
   const fresh = l.status === "new" && Date.now() - new Date(l.createdAt).getTime() < 30 * 60000;
   return (
-    <li className="anim-fade" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
-      <button onClick={onOpen} className="group flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-page/60 active:bg-page sm:items-center sm:px-5">
+    <li className="group anim-fade flex transition-colors hover:bg-page/60 active:bg-page items-start sm:items-center" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
+      <button onClick={onOpen} className="flex min-w-0 flex-1 items-start gap-3 px-4 py-3.5 text-left sm:items-center sm:px-5">
         {rank && (
           <span className={cx("mt-3 w-7 shrink-0 text-center text-[15px] font-bold tabular-nums sm:mt-0", rank <= 3 ? "text-brand" : "text-muted")} aria-label={`${rank}º lugar`}>
             {rank}º
@@ -107,8 +108,12 @@ function LeadCard({ l, i, rank, onOpen }: { l: LeadRow; i: number; rank?: number
             )}
           </span>
         </span>
-        <ChevronRight className="mt-3 size-5 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 sm:mt-0" aria-hidden />
       </button>
+      {/* Faixa da direita também abre o lead (o botão do WhatsApp não propaga o clique). */}
+      <span onClick={onOpen} className="flex shrink-0 cursor-pointer items-center gap-1 self-stretch pr-3 pt-3.5 sm:pr-4 sm:pt-0">
+        <WhatsAppButton variant="icon" phone={l.phone} name={l.name} className="size-11" />
+        <ChevronRight className="pointer-events-none size-5 shrink-0 text-muted transition-transform group-hover:translate-x-0.5" aria-hidden />
+      </span>
     </li>
   );
 }

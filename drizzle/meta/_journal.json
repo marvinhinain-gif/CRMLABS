@@ -141,6 +141,13 @@
       "when": 1792613948792,
       "tag": "0019_fora_do_icp_e_entrada_manual",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793399801822,
+      "tag": "0020_cadencia_social_seller",
+      "breakpoints": true
     }
   ]
 }

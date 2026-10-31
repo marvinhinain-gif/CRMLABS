@@ -498,6 +498,7 @@ function ContactPanelHost() {
   const close = () => {
     const next = new URLSearchParams(sp.toString());
     next.delete("contato");
+    next.delete("aba-contato");
     const s = next.toString();
     router.replace(s ? `${pathname}?${s}` : pathname, { scroll: false });
   };

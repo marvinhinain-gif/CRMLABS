@@ -364,6 +364,24 @@ export const pipelineStages = pgTable(
   (t) => [uniqueIndex("pipeline_stages_key_uq").on(t.pipelineId, t.key)],
 );
 
+/** Passos da cadência de contato do Social Seller (editáveis por organização; nunca apagados, só arquivados). */
+export const cadenceSteps = pgTable(
+  "cadence_steps",
+  {
+    id: id(),
+    orgId: orgRef(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    channel: text("channel").notNull(), // call | whatsapp | instagram | other
+    waitDays: integer("wait_days").notNull().default(0),
+    script: text("script").notNull().default(""),
+    position: integer("position").notNull(),
+    archivedAt: ts("archived_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("cadence_steps_org_key_uq").on(t.orgId, t.key)],
+);
+
 export const relationshipEntries = pgTable(
   "relationship_entries",
   {
@@ -380,6 +398,11 @@ export const relationshipEntries = pgTable(
     origin: text("origin"),
     productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    /** Cadência: etapa atual, situação (null = fora da cadência), prazo e início. */
+    cadenceStepId: uuid("cadence_step_id").references(() => cadenceSteps.id, { onDelete: "set null" }),
+    cadenceStatus: text("cadence_status"), // active | responded | scheduled | lost | finished
+    cadenceDueAt: ts("cadence_due_at"),
+    cadenceStartedAt: ts("cadence_started_at"),
     closedAt: ts("closed_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -389,6 +412,24 @@ export const relationshipEntries = pgTable(
     uniqueIndex("relationship_entries_active_uq").on(t.pipelineId, t.contactId).where(sql`${t.closedAt} is null`),
     index("relationship_entries_stage_idx").on(t.stageId),
   ],
+);
+
+/** Registro de cada contato/resultado da cadência (com a etapa copiada, para sobreviver a edições). */
+export const cadenceActivities = pgTable(
+  "cadence_activities",
+  {
+    id: id(),
+    orgId: orgRef(),
+    contactId: uuid("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    entryId: uuid("entry_id").references(() => relationshipEntries.id, { onDelete: "set null" }),
+    stepId: uuid("step_id").references(() => cadenceSteps.id, { onDelete: "set null" }),
+    stepName: text("step_name"),
+    outcome: text("outcome").notNull(),
+    note: text("note"),
+    actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("cadence_activities_contact_idx").on(t.contactId, t.createdAt), index("cadence_activities_org_idx").on(t.orgId, t.createdAt)],
 );
 
 /** Histórico imutável de movimentação (protegido por trigger no banco). */

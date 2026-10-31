@@ -23,9 +23,15 @@ import {
   X,
   Footprints,
   ClipboardList,
+  Phone,
+  PhoneCall,
 } from "lucide-react";
 import { JourneySection } from "@/components/integrations/Journey";
 import { ContactFormsTab } from "@/components/forms/ContactFormsTab";
+import { CadencePanel } from "@/components/social/CadencePanel";
+import { PhoneWhatsAppLink, WhatsAppButton } from "@/components/ui/WhatsApp";
+import { useSearchParams } from "next/navigation";
+import { CONTACT_TAB_PARAM } from "@/lib/nav";
 import { api, ApiError, fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import type { Stage } from "@/lib/types";
@@ -85,7 +91,7 @@ type Detail = {
 
 const SOURCE_LABEL: Record<string, string> = { manual: "Cadastro manual", instagram_dm: "Direct do Instagram", instagram_comment: "Comentário no Instagram", import: "Importação CSV", checkout: "Compra na Cakto" };
 
-type Tab = "dados" | "origem" | "formularios" | "tarefas" | "notas" | "historico";
+type Tab = "dados" | "cadencia" | "origem" | "formularios" | "tarefas" | "notas" | "historico";
 
 export function ContactPanel({ contactId, onClose }: { contactId: string | null; onClose: () => void }) {
   return (
@@ -98,7 +104,12 @@ export function ContactPanel({ contactId, onClose }: { contactId: string | null;
 function PanelBody({ id, onClose }: { id: string; onClose: () => void }) {
   const key = `/api/contacts/${id}`;
   const { data, error, mutate, isLoading } = useSWR<Detail>(key, fetcher);
-  const [tab, setTab] = useState<Tab>("dados");
+  const wantedTab = useSearchParams().get(CONTACT_TAB_PARAM);
+  const [tab, setTab] = useState<Tab>(wantedTab === "cadencia" ? "cadencia" : "dados");
+  // "Registrar" na fila da cadência abre direto na aba Cadência (também com o painel já aberto).
+  useEffect(() => {
+    if (wantedTab === "cadencia") setTab("cadencia");
+  }, [wantedTab, id]);
   const me = useMe();
   const { mutate: globalMutate } = useSWRConfig();
   const refreshAll = () => {
@@ -211,6 +222,7 @@ function PanelBody({ id, onClose }: { id: string; onClose: () => void }) {
           className="w-full"
           items={[
             { value: "dados", label: "Dados", icon: <UserRound /> },
+            ...(data.entry ? [{ value: "cadencia" as const, label: "Cadência", icon: <PhoneCall /> }] : []),
             { value: "origem", label: "Origem", icon: <Footprints /> },
             { value: "formularios", label: "Formulários", icon: <ClipboardList /> },
             { value: "tarefas", label: "Tarefas", icon: <SquareCheck />, count: data.tasks.filter((t) => t.status !== "done").length },
@@ -221,6 +233,8 @@ function PanelBody({ id, onClose }: { id: string; onClose: () => void }) {
       </div>
       <div className="flex-1 overflow-y-auto scroll-thin px-6 py-5">
         {tab === "dados" && <DataTab data={data} onChanged={refreshAll} />}
+        {tab === "cadencia" && data.entry && <CadencePanel contactId={id} contactName={c.name} phone={c.phone} onChanged={() => mutate()} />}
+        {tab === "cadencia" && !data.entry && <p className="py-6 text-center text-[13.5px] text-muted">Coloque o contato numa etapa do quadro para usar a cadência.</p>}
         {tab === "origem" && <JourneySection contactId={id} />}
         {tab === "formularios" && <ContactFormsTab contactId={id} />}
         {tab === "tarefas" && <TasksTab data={data} onChanged={refreshAll} />}
@@ -298,6 +312,18 @@ function DataTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {
 
   return (
     <div className="flex flex-col gap-6">
+      {c.phone && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[18px] border border-[#bfe8d3] bg-[#f3fbf7] p-3">
+          <span className="min-w-0 flex-1 text-[14px]">
+            <span className="block text-[12px] text-muted">Telefone</span>
+            <PhoneWhatsAppLink phone={c.phone} name={c.name} className="text-[15px]" />
+          </span>
+          <a href={`tel:${c.phone}`} className="inline-flex h-10 items-center gap-2 rounded-[12px] border border-line bg-white px-3.5 text-[14px] font-semibold hover:bg-page">
+            <Phone className="size-[18px]" aria-hidden /> Ligar
+          </a>
+          <WhatsAppButton phone={c.phone} name={c.name} />
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Etapa do relacionamento" htmlFor="cp-stage">
           <Select id="cp-stage" value={data.entry?.stageId ?? ""} onChange={(e) => e.target.value && changeStage(e.target.value)}>
@@ -367,7 +393,7 @@ function DataTab({ data, onChanged }: { data: Detail; onChanged: () => void }) {
             <Input id="cp-email" type="email" value={form.email} onChange={set("email")} />
           </Field>
           <Field label="Telefone (opcional)" htmlFor="cp-phone">
-            <Input id="cp-phone" value={form.phone} onChange={set("phone")} />
+            <Input id="cp-phone" value={form.phone} onChange={set("phone")} inputMode="tel" className={c.phone ? "pr-12" : undefined} trailing={c.phone ? <WhatsAppButton variant="icon" phone={c.phone} name={c.name} className="size-9" /> : undefined} />
           </Field>
         </div>
         <Field label="Link do perfil" htmlFor="cp-url" error={fields.profileUrl}>

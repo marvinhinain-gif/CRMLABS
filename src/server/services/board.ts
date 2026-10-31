@@ -7,6 +7,7 @@ import {
   contactTags,
   conversations,
   pipelineStages,
+  cadenceSteps,
   relationshipEntries,
   stageHistory,
   tags,
@@ -76,6 +77,10 @@ async function loadCards(ctx: Ctx, stageIds: string[], f: BoardFilters, offset: 
       nextActionAt: contacts.nextActionAt,
       ownerId: contacts.ownerId,
       ownerName: sql<string | null>`${users.name}`.as("owner_name"),
+      cadenceStatus: relationshipEntries.cadenceStatus,
+      cadenceStepName: sql<string | null>`${cadenceSteps.name}`.as("cadence_step_name"),
+      cadenceStepChannel: sql<string | null>`${cadenceSteps.channel}`.as("cadence_step_channel"),
+      cadenceDueAt: relationshipEntries.cadenceDueAt,
       unread: sql<number>`coalesce((select sum(${conversations.unreadCount}) from ${conversations} where ${conversations.contactId} = ${contacts.id}), 0)::int`.as("unread"),
       hasOfficialIdentity: sql<boolean>`exists (select 1 from ${channelIdentities} ci where ci.contact_id = ${contacts.id})`.as("has_official_identity"),
       rn: sql<number>`(row_number() over (partition by ${relationshipEntries.stageId} order by ${relationshipEntries.position} asc, ${relationshipEntries.updatedAt} desc))::int`.as("rn"),
@@ -83,6 +88,7 @@ async function loadCards(ctx: Ctx, stageIds: string[], f: BoardFilters, offset: 
     .from(relationshipEntries)
     .innerJoin(contacts, eq(contacts.id, relationshipEntries.contactId))
     .leftJoin(users, eq(users.id, contacts.ownerId))
+    .leftJoin(cadenceSteps, eq(cadenceSteps.id, relationshipEntries.cadenceStepId))
     .where(and(inArray(relationshipEntries.stageId, stageIds), isNull(relationshipEntries.closedAt), ...filterConditions(ctx, f)))
     .as("sq");
   // Paginação por coluna no banco: cada etapa carrega apenas sua página.
