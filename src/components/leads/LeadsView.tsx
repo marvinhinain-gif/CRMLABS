@@ -109,7 +109,11 @@ function LeadCard({ l, i, rank, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="truncate text-[15.5px] font-semibold">{l.name}</span>
-              <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
+              {inKanban && l.boardOwnerName ? (
+                <span className="rounded-full bg-info-soft px-2.5 py-0.5 text-[12px] font-medium text-info">Em contato com {l.boardOwnerName.split(" ")[0]}</span>
+              ) : (
+                <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
+              )}
               <LeadClassBadge cls={l.scoreClass} score={l.score} manual={l.scoreClassManual} />
             </span>
             <span className="mt-0.5 block truncate text-[13px] text-muted">
@@ -123,7 +127,7 @@ function LeadCard({ l, i, rank, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow
                 <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-selected px-2.5 py-0.5 font-medium text-brand">
                   <LayoutDashboard className="size-3.5 shrink-0" aria-hidden />
                   <span className="truncate">
-                    {l.boardOwnerName ? `Kanban de ${l.boardOwnerName}` : "No Kanban"}
+                    {l.boardOwnerName ? `Kanban de ${l.boardOwnerName.split(" ")[0]}` : "No Kanban"}
                     {l.boardStageName ? ` · ${l.boardStageName}` : ""}
                   </span>
                 </span>
