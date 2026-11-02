@@ -131,6 +131,10 @@ export function leadScope(ctx: Ctx): SQL {
     or(
       eq(leads.assignedTo, ctx.userId),
       exists(sql`(select 1 from ${contacts} c where c.id = ${leads.contactId} and c.owner_id = ${ctx.userId})`),
+      // Fila de Leads: lead sem responsável e contato sem dono fica visível para todo SDR (seller).
+      ctx.role === "seller"
+        ? and(isNull(leads.assignedTo), sql`not exists (select 1 from ${contacts} c where c.id = ${leads.contactId} and c.owner_id is not null)`)
+        : undefined,
       // Quando o lead chega ao closer (oportunidade ou reunião dele), o histórico vai junto.
       exists(sql`(select 1 from ${opportunities} o where o.contact_id = ${leads.contactId} and o.closer_id = ${ctx.userId})`),
       exists(sql`(select 1 from ${appointments} a where a.contact_id = ${leads.contactId} and a.owner_id = ${ctx.userId})`),

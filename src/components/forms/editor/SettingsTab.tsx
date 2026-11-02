@@ -52,6 +52,10 @@ export function RouteEditor({ value, onChange, options, idPrefix }: { value: Rou
           </Select>
         </Field>
       )}
+      {value.mode === "relationship" && (
+        <p className="text-[13px] text-muted sm:col-span-2">O lead chega sem responsável e aparece em Leads para todos os SDRs. Quem encaminhar para o próprio Kanban vira o responsável.</p>
+      )}
+      {value.mode === "sales" && (
       <Field label="Responsável" htmlFor={`${idPrefix}-assign`}>
         <Select id={`${idPrefix}-assign`} value={value.assignMode} onChange={(e) => set({ assignMode: e.target.value as Route["assignMode"] })}>
           <option value="round_robin">Rodízio entre {value.mode === "sales" ? "closers" : "social sellers"}</option>
@@ -59,7 +63,8 @@ export function RouteEditor({ value, onChange, options, idPrefix }: { value: Rou
           <option value="none">Sem responsável</option>
         </Select>
       </Field>
-      {value.assignMode === "fixed" && (
+      )}
+      {value.mode === "sales" && value.assignMode === "fixed" && (
         <Field label="Quem recebe" htmlFor={`${idPrefix}-fixed`}>
           <Select id={`${idPrefix}-fixed`} value={value.fixedAssigneeId ?? ""} onChange={(e) => set({ fixedAssigneeId: e.target.value || null })}>
             <option value="">Escolha alguém</option>
@@ -71,7 +76,7 @@ export function RouteEditor({ value, onChange, options, idPrefix }: { value: Rou
           </Select>
         </Field>
       )}
-      {value.assignMode === "round_robin" && (
+      {value.mode === "sales" && value.assignMode === "round_robin" && (
         <div className="flex flex-col gap-1.5 sm:col-span-2">
           <span className="text-[14px] font-medium">Quem participa do rodízio</span>
           <PeoplePicker team={options.team} roles={[role]} value={value.assigneeIds} onChange={(ids) => set({ assigneeIds: ids })} />

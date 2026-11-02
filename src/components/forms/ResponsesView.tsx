@@ -8,6 +8,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, CircleAlert, Download, Eye, Gauge
 import { fetcher, qs } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { formatDateTime } from "@/lib/format";
+import { PhoneWhatsAppLink, WhatsAppButton } from "@/components/ui/WhatsApp";
 import { Button, Card, EmptyState, ErrorState, IconButton, Input, LoadingState, NoPermission, Select, Sheet, SheetClose } from "@/components/ui";
 import { BarList, DailyChart, Kpi, LEAD_STATUS_LABEL, pct, TierBadge, type FormDetail } from "./shared";
 import { SubmissionView } from "./SubmissionView";
@@ -341,7 +342,14 @@ export function ResponsesView({ id }: { id: string }) {
                         <button type="button" className="block max-w-full truncate text-left font-semibold hover:text-brand" onClick={(e) => (e.stopPropagation(), setParams({ resposta: r.id }))}>
                           {r.name ?? "Sem nome"}
                         </button>
-                        <span className="block truncate text-[12.5px] text-muted">{r.email ?? r.phone ?? (r.instagram ? `@${r.instagram}` : "")}</span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          {r.email || !r.phone ? (
+                            <span className="block truncate text-[12.5px] text-muted">{r.email ?? (r.instagram ? `@${r.instagram}` : "")}</span>
+                          ) : (
+                            <PhoneWhatsAppLink phone={r.phone} name={r.name} className="truncate text-[12.5px]" />
+                          )}
+                          <WhatsAppButton variant="icon" phone={r.phone} name={r.name} className="size-8 [&>svg]:size-4" />
+                        </span>
                       </td>
                       <td className="px-3 py-3 text-right font-semibold">{r.score ?? "—"}</td>
                       <td className="px-3 py-3">
@@ -362,8 +370,8 @@ export function ResponsesView({ id }: { id: string }) {
             </div>
             <ul className="flex flex-col gap-2.5 md:hidden">
               {list.rows.map((r) => (
-                <li key={r.id}>
-                  <button type="button" onClick={() => setParams({ resposta: r.id })} className="w-full rounded-[18px] border border-line p-4 text-left">
+                <li key={r.id} className="flex items-center rounded-[18px] border border-line">
+                  <button type="button" onClick={() => setParams({ resposta: r.id })} className="min-w-0 flex-1 rounded-[18px] p-4 text-left">
                     <div className="flex items-start justify-between gap-2">
                       <span className="min-w-0">
                         <span className="block truncate font-semibold">{r.name ?? "Sem nome"}</span>
@@ -378,6 +386,7 @@ export function ResponsesView({ id }: { id: string }) {
                       {r.assignedName && <span>· {r.assignedName}</span>}
                     </div>
                   </button>
+                  <WhatsAppButton variant="icon" phone={r.phone} name={r.name} className="mr-3 size-11" />
                 </li>
               ))}
             </ul>

@@ -70,17 +70,12 @@ describe("leads por fonte de tráfego", () => {
 
   it("vendedor só vê na conta os leads que ele pode ver", async () => {
     const { ctx, all } = await seed();
-    const mine = all.filter((l) => l.assignedTo === ctx.seller.userId);
-    await db
-      .update(leads)
-      .set({ createdAt: daysAgo(1) })
-      .where(
-        inArray(
-          leads.id,
-          mine.map((l) => l.id),
-        ),
-      );
+    // Leads da fila (sem responsável) são de todos os SDRs; os já assumidos por outro seller somem da conta.
+    const taken = all.slice(0, 2);
+    await db.update(leads).set({ assignedTo: ctx.seller2.userId }).where(inArray(leads.id, taken.map((l) => l.id)));
     const s = await leadSourceStats(ctx.seller, { periodo: "30d" });
-    expect(s.total).toBe(mine.length);
+    expect(s.total).toBe(all.length - taken.length);
+    const s2 = await leadSourceStats(ctx.seller2, { periodo: "30d" });
+    expect(s2.total).toBe(all.length);
   });
 });

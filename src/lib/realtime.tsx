@@ -4,8 +4,8 @@ import { useEffect } from "react";
 import { useSWRConfig } from "swr";
 
 const TOPIC_KEYS: Record<string, string[]> = {
-  board: ["/api/board", "/api/dashboard", "/api/contacts", "/api/me"],
-  contacts: ["/api/contacts", "/api/board", "/api/dashboard", "/api/search"],
+  board: ["/api/board", "/api/dashboard", "/api/contacts", "/api/me", "/api/leads"],
+  contacts: ["/api/contacts", "/api/board", "/api/dashboard", "/api/search", "/api/leads"],
   conversations: ["/api/conversations", "/api/me", "/api/dashboard", "/api/board", "/api/contacts/", "/api/instagram"],
   comments: ["/api/comments", "/api/instagram", "/api/me"],
   engagement: ["/api/instagram/engajados"],

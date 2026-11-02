@@ -170,7 +170,7 @@ export function IntegrationWizard({
   const isForm = v.provider === "crmlabs_form";
 
   const canNext =
-    step === 0 ? !!v.provider : step === 1 ? v.name.trim().length >= 2 : step === 2 ? v.assignMode === "round_robin" || !!v.fixedAssigneeId : step === 3 ? !!v.sourceId : true;
+    step === 0 ? !!v.provider : step === 1 ? v.name.trim().length >= 2 : step === 2 ? v.pipelineKind !== "sales" || v.assignMode === "round_robin" || !!v.fixedAssigneeId : step === 3 ? !!v.sourceId : true;
 
   const save = async () => {
     setSaving(true);
@@ -365,6 +365,12 @@ export function IntegrationWizard({
                 )}
               </Field>
             </div>
+            {v.pipelineKind !== "sales" ? (
+              <div className="rounded-[18px] border border-line p-4">
+                <p className="text-[14.5px] font-semibold">Responsável</p>
+                <p className="mt-1 text-[13px] text-muted">O lead chega sem responsável e aparece em Leads para todos os SDRs. Quem encaminhar para o próprio Kanban vira o responsável.</p>
+              </div>
+            ) : (
             <div className="rounded-[18px] border border-line p-4">
               <p className="text-[14.5px] font-semibold">Responsável</p>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -409,6 +415,7 @@ export function IntegrationWizard({
                 </>
               )}
             </div>
+            )}
           </div>
         )}
 

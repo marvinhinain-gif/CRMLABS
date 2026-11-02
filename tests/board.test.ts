@@ -10,9 +10,9 @@ import { archiveStage, createStage, listStages, reorderStages, updateStage } fro
 describe("Kanban de relacionamento", () => {
   it("mover persiste e registra histórico com autor, etapa anterior e nova", async () => {
     const { ctx, users } = await setupOrg();
-    const [s1, s2] = await listStages(ctx.admin, "relationship");
+    const [, s1, s2] = await listStages(ctx.admin, "relationship"); // a primeira coluna é "Contato"
     const c = await createContact(ctx.seller, { name: "Ana", stageId: s1.id });
-    const card = (await getBoard(ctx.seller, {})).stages[0].cards[0];
+    const card = (await getBoard(ctx.seller, {})).stages[1].cards[0];
     const moved = await moveEntry(ctx.seller, card.entryId, { toStageId: s2.id, expectedVersion: card.version });
     expect(moved.version).toBe(2);
     const board = await getBoard(ctx.seller, {});
@@ -53,12 +53,12 @@ describe("Kanban de relacionamento", () => {
   it("editar e reordenar etapas persiste; nomes aprovados por padrão", async () => {
     const { ctx } = await setupOrg();
     const stages = await listStages(ctx.admin, "relationship");
-    expect(stages.map((s) => s.name)).toEqual(["Engajado #1", "Seguidor Engajado #2", "Em relacionamento", "Novo interessado", "Em qualificação", "Encaminhado ao closer", "Fora do ICP"]);
-    await updateStage(ctx.manager, stages[2].id, { name: "Conversando", color: "orange" });
+    expect(stages.map((s) => s.name)).toEqual(["Contato", "Engajado #1", "Seguidor Engajado #2", "Em relacionamento", "Novo interessado", "Em qualificação", "Encaminhado ao closer", "Fora do ICP"]);
+    await updateStage(ctx.manager, stages[3].id, { name: "Conversando", color: "orange" });
     await reorderStages(ctx.manager, "relationship", [stages[1].id, stages[0].id, ...stages.slice(2).map((s) => s.id)]);
     const after = await listStages(ctx.admin, "relationship");
     expect(after[0].id).toBe(stages[1].id);
-    expect(after[2]).toMatchObject({ name: "Conversando", color: "orange", key: "em-relacionamento" });
+    expect(after[3]).toMatchObject({ name: "Conversando", color: "orange", key: "em-relacionamento" });
     const created = await createStage(ctx.admin, { kind: "relationship", name: "Pós-venda", color: "teal" });
     expect((await listStages(ctx.admin, "relationship")).at(-1)!.id).toBe(created.id);
   });

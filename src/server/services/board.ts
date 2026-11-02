@@ -7,17 +7,21 @@ import {
   contactTags,
   conversations,
   pipelineStages,
+  cadenceSteps,
   relationshipEntries,
   stageHistory,
+  memberships,
   tags,
+  userAvatars,
   users,
 } from "../db/schema";
 import type { Ctx } from "../context";
 import { can, contactScope } from "../permissions";
 import { AppError, forbidden, notFound } from "../errors";
 import { publish } from "../realtime";
-import { getPipeline } from "./common";
+import { audit, getPipeline } from "./common";
 import { getStageInOrg, listStages } from "./stages";
+import { avatarUrl } from "./avatars";
 import { dayRange } from "../time";
 import { alertLeadStage } from "./alerts";
 import { logger } from "../logger";
@@ -76,6 +80,10 @@ async function loadCards(ctx: Ctx, stageIds: string[], f: BoardFilters, offset: 
       nextActionAt: contacts.nextActionAt,
       ownerId: contacts.ownerId,
       ownerName: sql<string | null>`${users.name}`.as("owner_name"),
+      cadenceStatus: relationshipEntries.cadenceStatus,
+      cadenceStepName: sql<string | null>`${cadenceSteps.name}`.as("cadence_step_name"),
+      cadenceStepChannel: sql<string | null>`${cadenceSteps.channel}`.as("cadence_step_channel"),
+      cadenceDueAt: relationshipEntries.cadenceDueAt,
       unread: sql<number>`coalesce((select sum(${conversations.unreadCount}) from ${conversations} where ${conversations.contactId} = ${contacts.id}), 0)::int`.as("unread"),
       hasOfficialIdentity: sql<boolean>`exists (select 1 from ${channelIdentities} ci where ci.contact_id = ${contacts.id})`.as("has_official_identity"),
       rn: sql<number>`(row_number() over (partition by ${relationshipEntries.stageId} order by ${relationshipEntries.position} asc, ${relationshipEntries.updatedAt} desc))::int`.as("rn"),
@@ -83,6 +91,7 @@ async function loadCards(ctx: Ctx, stageIds: string[], f: BoardFilters, offset: 
     .from(relationshipEntries)
     .innerJoin(contacts, eq(contacts.id, relationshipEntries.contactId))
     .leftJoin(users, eq(users.id, contacts.ownerId))
+    .leftJoin(cadenceSteps, eq(cadenceSteps.id, relationshipEntries.cadenceStepId))
     .where(and(inArray(relationshipEntries.stageId, stageIds), isNull(relationshipEntries.closedAt), ...filterConditions(ctx, f)))
     .as("sq");
   // Paginação por coluna no banco: cada etapa carrega apenas sua página.
@@ -131,6 +140,39 @@ export async function getBoard(ctx: Ctx, f: BoardFilters) {
   };
 }
 
+/**
+ * Kanbans por SDR: membros ativos seller/admin/manager com o total de cartões ativos do funil cujo contato é deles.
+ * Admin e gestor veem todos; o social seller só o próprio. O próprio usuário vem primeiro, depois por nome.
+ */
+export async function listSdrBoards(ctx: Ctx) {
+  const stageIds = (await listStages(ctx, "relationship")).map((s) => s.id);
+  const totals = stageIds.length
+    ? await db
+        .select({ ownerId: contacts.ownerId, n: sql<number>`count(*)::int` })
+        .from(relationshipEntries)
+        .innerJoin(contacts, eq(contacts.id, relationshipEntries.contactId))
+        .where(and(inArray(relationshipEntries.stageId, stageIds), isNull(relationshipEntries.closedAt), contactScope(ctx), isNull(contacts.archivedAt), isNull(contacts.mergedIntoId)))
+        .groupBy(contacts.ownerId)
+    : [];
+  const byOwner = new Map(totals.map((t) => [t.ownerId, t.n]));
+  const rows = await db
+    .select({ userId: users.id, name: users.name, role: memberships.role, avatarAt: userAvatars.updatedAt })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .leftJoin(userAvatars, eq(userAvatars.userId, users.id))
+    .where(
+      and(
+        eq(memberships.orgId, ctx.orgId),
+        eq(memberships.status, "active"),
+        inArray(memberships.role, ["seller", "admin", "manager"]),
+        can(ctx, "data.all") ? undefined : eq(memberships.userId, ctx.userId),
+      ),
+    );
+  return rows
+    .map(({ avatarAt, ...r }) => ({ ...r, avatarUrl: avatarUrl(r.userId, avatarAt), total: byOwner.get(r.userId) ?? 0 }))
+    .sort((a, b) => Number(b.userId === ctx.userId) - Number(a.userId === ctx.userId) || a.name.localeCompare(b.name, "pt-BR"));
+}
+
 export async function getColumnPage(ctx: Ctx, stageId: string, offset: number, f: BoardFilters) {
   await getStageInOrg(ctx.orgId, stageId, "relationship");
   return loadCards(ctx, [stageId], f, offset, COLUMN_PAGE);
@@ -143,6 +185,17 @@ async function assertContactVisible(ctx: Ctx, contactId: string, tx: DbOrTx = db
     .where(and(eq(contacts.id, contactId), contactScope(ctx)));
   if (!c) throw notFound("Contato não encontrado.");
   return c;
+}
+
+/**
+ * O contato está no Kanban de um SDR: os leads dele saem da fila de Leads como "em contato"
+ * (novo/sem resposta → em contato) e ficam com o responsável do contato quando ainda não tinham dono.
+ */
+export async function syncLeadsWithBoard(tx: DbOrTx, orgId: string, contactId: string) {
+  await tx.execute(sql`update leads set status = 'contacted', contacted_at = coalesce(contacted_at, now()), updated_at = now()
+    where org_id = ${orgId} and contact_id = ${contactId} and status in ('new', 'no_answer')`);
+  await tx.execute(sql`update leads l set assigned_to = c.owner_id, updated_at = now() from contacts c
+    where c.id = l.contact_id and l.org_id = ${orgId} and l.contact_id = ${contactId} and l.assigned_to is null and c.owner_id is not null`);
 }
 
 /** Cria a entrada do contato no funil (no máximo uma ativa por funil). Registra histórico. */
@@ -181,6 +234,7 @@ export async function addToBoard(
     actorId: ctx.userId,
     reason: reason ?? "Entrada no funil",
   });
+  await syncLeadsWithBoard(tx, ctx.orgId, contactId);
   return inserted[0];
 }
 
@@ -188,7 +242,14 @@ export const addEntrySchema = z.object({ contactId: z.string().uuid(), stageId: 
 
 export async function addEntry(ctx: Ctx, input: z.infer<typeof addEntrySchema>) {
   const c = await assertContactVisible(ctx, input.contactId);
-  const entry = await db.transaction((tx) => addToBoard(ctx, c.id, input.stageId, tx));
+  const entry = await db.transaction(async (tx) => {
+    const e = await addToBoard(ctx, c.id, input.stageId, tx);
+    if (e) {
+      const [stage] = await tx.select({ name: pipelineStages.name }).from(pipelineStages).where(eq(pipelineStages.id, e.stageId));
+      await audit(tx, ctx, "board.card_added", "contact", c.id, { stage: stage?.name ?? null });
+    }
+    return e;
+  });
   if (!entry) throw new AppError("conflict", "Este contato já está no quadro.");
   await publish({ orgId: ctx.orgId, topic: "board", entityId: c.id, ownerIds: [c.ownerId] });
   return entry;
@@ -247,6 +308,7 @@ export async function moveEntry(ctx: Ctx, entryId: string, input: z.infer<typeof
       .set({ stageId: to.id, position: (min?.m ?? 0) - 1, version: entry.version + 1, updatedAt: new Date() })
       .where(eq(relationshipEntries.id, entry.id))
       .returning();
+    if (!entry.autoCreated) await syncLeadsWithBoard(tx, ctx.orgId, entry.contactId);
     await tx.insert(stageHistory).values({
       orgId: ctx.orgId,
       entityType: "relationship",
@@ -258,6 +320,7 @@ export async function moveEntry(ctx: Ctx, entryId: string, input: z.infer<typeof
       toStageName: to.name,
       actorId: ctx.userId,
     });
+    await audit(tx, ctx, "board.card_moved", "contact", entry.contactId, { from: from?.name ?? null, to: to.name });
     return { entry: updated, contact, changed: true, fromName: from?.name ?? null, toName: to.name };
   });
   if (result.changed) {
@@ -292,6 +355,7 @@ export async function closeEntry(ctx: Ctx, entryId: string) {
       actorId: ctx.userId,
       reason: "Removido do quadro",
     });
+    await audit(tx, ctx, "board.card_removed", "contact", entry.contactId, { stage: stage?.name ?? null });
   });
   await publish({ orgId: ctx.orgId, topic: "board", entityId: contact.id, ownerIds: [contact.ownerId] });
 }

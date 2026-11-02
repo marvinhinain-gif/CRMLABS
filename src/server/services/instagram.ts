@@ -26,7 +26,7 @@ import { can, commentScope, contactScope, conversationScope, ROLE_LABEL } from "
 import { AppError, forbidden, invalid, notFound } from "../errors";
 import { publish } from "../realtime";
 import { audit, cleanText, getPipeline } from "./common";
-import { addToBoard, activeEntryFor, isRealLeadSql } from "./board";
+import { addToBoard, syncLeadsWithBoard, activeEntryFor, isRealLeadSql } from "./board";
 import { assertMember } from "./team";
 import { countAutoEntries } from "./leadReview";
 import { getInstagramApi, ProviderError } from "../integrations/instagram/client";
@@ -210,6 +210,7 @@ export async function transformToLead(ctx: Ctx, contactId: string, input: z.infe
       await addToBoard(ctx, target, stage.id, tx, reason, { origin, productId, createdBy: ctx.userId });
     }
     await tx.update(contacts).set({ ownerId }).where(eq(contacts.id, target));
+    await syncLeadsWithBoard(tx, ctx.orgId, target);
     // A conversa sem responsável passa para quem cuida do Lead.
     if (ownerId) await tx.update(conversations).set({ ownerId }).where(and(eq(conversations.contactId, target), isNull(conversations.ownerId)));
     if (input.note) await tx.insert(notes).values({ orgId: ctx.orgId, contactId: target, authorId: ctx.userId, body: cleanText(input.note, 2000)! });

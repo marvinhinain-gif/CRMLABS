@@ -141,6 +141,34 @@
       "when": 1792613948792,
       "tag": "0019_fora_do_icp_e_entrada_manual",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793399801822,
+      "tag": "0020_cadencia_social_seller",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793455864042,
+      "tag": "0021_kanban_por_sdr",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793477877138,
+      "tag": "0022_leads_sem_responsavel",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793640981007,
+      "tag": "0023_historico_atividade_equipe",
+      "breakpoints": true
     }
   ]
 }

@@ -71,7 +71,7 @@ describe("integrações de captação", () => {
     const sig = `sha256=${createHmac("sha256", secret).update(raw).digest("base64")}`;
     const r = await receiveWebhook(tokenOf(integ.webhookUrl!), raw, json(body, { "typeform-signature": sig }).headers);
     const lead = await getLead(ctx.seller, r.leadId);
-    expect(lead).toMatchObject({ name: "Maria Silva", phone: "+5571988887777", instagram: "mariasilva", channel: "typeform", campaign: "Stories Lucão", source: { name: "Stories" }, productName: "Consultoria", assignedTo: u.seller.id });
+    expect(lead).toMatchObject({ name: "Maria Silva", phone: "+5571988887777", instagram: "mariasilva", channel: "typeform", campaign: "Stories Lucão", source: { name: "Stories" }, productName: "Consultoria", assignedTo: null });
     expect(lead.customValues).toEqual([
       { label: "Faturamento", value: "R$30.000 a R$50.000" },
       { label: "Dor principal", value: "Escalar campanhas mantendo margem." },

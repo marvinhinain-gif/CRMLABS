@@ -171,6 +171,7 @@ export async function createTask(ctx: Ctx, input: z.infer<typeof taskInputSchema
       const parsed = input.links.map((l) => linkSchema.parse(l));
       await tx.insert(taskLinks).values(parsed.map((l, i) => ({ orgId: ctx.orgId, taskId: t.id, title: l.title, url: l.url, description: cleanText(l.description, 300), position: i, createdBy: ctx.userId })));
     }
+    await audit(tx, ctx, "task.created", "task", t.id, { title: t.title });
     return t;
   });
   if (ownerId !== ctx.userId) {

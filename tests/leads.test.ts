@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/server/db";
 import { appointments, contacts, leadForms, leads, notifications, pipelineStages, relationshipEntries } from "@/server/db/schema";
-import { addLeadToBoard, getLead, listLeads, normalizePhone, scheduleLead, submitPublicForm, updateLead } from "@/server/services/leads";
+import { addLeadToBoard, forwardLeadToKanban, getLead, listLeads, normalizePhone, scheduleLead, submitPublicForm, updateLead } from "@/server/services/leads";
 import { getBoard } from "@/server/services/board";
 import { createForm, ingestWebhookLead, listForms, updateForm } from "@/server/services/integrations";
 import { listAppointments } from "@/server/services/commercial";
@@ -28,7 +28,7 @@ async function formFor(ctx: Awaited<ReturnType<typeof setupOrg>>["ctx"], extra: 
 }
 
 describe("leads de anúncio", () => {
-  it("formulário público: cria contato, distribui em rodízio e avisa só o social seller", async () => {
+  it("formulário público: cria contato, lead chega sem responsável e avisa os SDRs", async () => {
     const { ctx, users: u } = await setupOrg();
     const form = await formFor(ctx);
     expect(form.publicUrl).toMatch(/\/f\/mentoria-anuncio-outubro$/);
@@ -38,7 +38,7 @@ describe("leads de anúncio", () => {
 
     const all = await db.select().from(leads).orderBy(leads.createdAt);
     expect(all).toHaveLength(2);
-    expect(new Set(all.map((l) => l.assignedTo))).toEqual(new Set([u.seller.id, u.seller2.id])); // rodízio
+    expect(all.map((l) => l.assignedTo)).toEqual([null, null]); // fila: sem responsável até alguém encaminhar
     const ana = all[0];
     expect(ana).toMatchObject({ name: "Ana Souza", phone: "+5571999991111", email: "ana@x.com", instagram: "anasouza", status: "new", channel: "crmlabs_form" });
     expect(ana.answers).toEqual([
@@ -48,17 +48,20 @@ describe("leads de anúncio", () => {
     expect(ana.utm).toEqual({ utm_source: "facebook", utm_campaign: "outubro" });
     expect(ana.preferredAt).toBeInstanceOf(Date);
 
-    // contato criado com dono = social seller; SEM cartão no Kanban até alguém apertar o botão
+    // contato criado sem dono; SEM cartão no Kanban até alguém encaminhar
     const [c] = await db.select().from(contacts).where(eq(contacts.id, ana.contactId));
-    expect(c).toMatchObject({ source: "lead_form", ownerId: ana.assignedTo });
+    expect(c).toMatchObject({ source: "lead_form", ownerId: null });
     expect(await db.select().from(relationshipEntries).where(eq(relationshipEntries.contactId, c.id))).toHaveLength(0);
 
-    // notificação apenas para quem recebeu
-    const sellerNotes = (await notesOf(ana.assignedTo!)).filter((n) => n.type === "lead.new");
+    // todos os SDRs (sellers, gestor e admin) são avisados; closer não
+    const sellerNotes = (await notesOf(u.seller.id)).filter((n) => n.type === "lead.new" && n.title === "Novo lead: Ana Souza");
     expect(sellerNotes).toHaveLength(1);
     expect(sellerNotes[0].title).toBe("Novo lead: Ana Souza");
     expect(sellerNotes[0].link).toBe(`/leads?lead=${ana.id}`);
-    for (const other of [u.admin, u.manager, u.closer]) expect((await notesOf(other.id)).some((n) => n.type === "lead.new")).toBe(false);
+    for (const sdr of [u.seller2, u.admin, u.manager]) expect((await notesOf(sdr.id)).some((n) => n.type === "lead.new")).toBe(true);
+    expect((await notesOf(u.closer.id)).some((n) => n.type === "lead.new")).toBe(false);
+    // a fila é visível para todo seller
+    expect((await listLeads(ctx.seller2, { status: "open", page: 1 })).rows).toHaveLength(2);
   });
 
   it("cliente que volta fica com o mesmo social seller e não duplica contato", async () => {
@@ -110,9 +113,10 @@ describe("leads de anúncio", () => {
     const form = await formFor(ctx, { questions: [], assigneeIds: [u.seller.id] });
     await submitPublicForm(form.slug, { ...base, name: "Ana Souza", phone: "71999991111", preferredAt: future(2) }, "5.5.5.5");
     const [lead] = await db.select().from(leads);
-    expect(lead.assignedTo).toBe(u.seller.id);
+    expect(lead.assignedTo).toBeNull();
+    await forwardLeadToKanban(ctx.seller, lead.id, {});
 
-    // outro seller não vê o lead
+    // depois de encaminhado, outro seller não vê o lead
     expect((await listLeads(ctx.seller2, { status: "all", page: 1 })).rows).toHaveLength(0);
     await expect(getLead(ctx.seller2, lead.id)).rejects.toMatchObject({ code: "not_found" });
 
@@ -133,10 +137,11 @@ describe("leads de anúncio", () => {
     // seller não marca reunião para outro seller
     await submitPublicForm(form.slug, { ...base, name: "Bruno", phone: "71999992222" }, "5.5.5.6");
     const [l2] = (await db.select().from(leads).where(and(eq(leads.name, "Bruno"))));
+    await forwardLeadToKanban(ctx.seller, l2.id, {});
     await expect(scheduleLead(ctx.seller, l2.id, { startsAt, endsAt: new Date(startsAt.getTime() + 3600_000), ownerId: u.seller2.id })).rejects.toMatchObject({ code: "forbidden" });
   });
 
-  it("sem social seller ativo: administradores são avisados", async () => {
+  it("lead sem responsável: SDRs ativos são avisados, inativos não", async () => {
     const { ctx, users: u } = await setupOrg();
     const form = await formFor(ctx, { questions: [], assigneeIds: [u.seller.id] });
     const { memberships } = await import("@/server/db/schema");
@@ -144,7 +149,9 @@ describe("leads de anúncio", () => {
     await submitPublicForm(form.slug, { ...base, name: "Sem Dono", phone: "71999993333" }, "6.6.6.6");
     const [lead] = await db.select().from(leads);
     expect(lead.assignedTo).toBeNull();
-    expect((await notesOf(u.admin.id)).some((n) => n.type === "lead.unassigned")).toBe(true);
+    expect((await notesOf(u.admin.id)).some((n) => n.type === "lead.new")).toBe(true);
+    expect((await notesOf(u.seller2.id)).some((n) => n.type === "lead.new")).toBe(true);
+    expect((await notesOf(u.seller.id)).some((n) => n.type === "lead.new")).toBe(false);
   });
 
   it("normaliza telefones brasileiros", () => {

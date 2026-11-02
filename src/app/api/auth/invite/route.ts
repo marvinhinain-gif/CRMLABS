@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { cookies } from "next/headers";
 import { acceptInvite, getInvite, SESSION_COOKIE } from "@/server/auth/service";
-import { json, parseBody, publicRoute } from "@/server/http";
+import { clientIp, json, parseBody, publicRoute } from "@/server/http";
 import { AppError } from "@/server/errors";
 import { secureCookies } from "@/server/env";
 
@@ -16,7 +16,7 @@ const schema = z.object({ token: z.string().min(10).max(200), password: z.string
 
 export const POST = publicRoute(async (req) => {
   const input = await parseBody(req, schema);
-  const r = await acceptInvite(input.token, input.password, input.name);
+  const r = await acceptInvite(input.token, input.password, input.name, clientIp(req), req.headers.get("user-agent"));
   (await cookies()).set(SESSION_COOKIE, r.token, { httpOnly: true, secure: secureCookies(), sameSite: "lax", path: "/" });
   return json({ ok: true });
 });
