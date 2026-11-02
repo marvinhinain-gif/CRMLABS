@@ -759,7 +759,11 @@ export const auditEvents = pgTable(
     data: jsonb("data"),
     createdAt: createdAt(),
   },
-  (t) => [index("audit_events_org_idx").on(t.orgId, t.createdAt)],
+  (t) => [
+    index("audit_events_org_idx").on(t.orgId, t.createdAt),
+    // Histórico de acessos e atividades da equipe: filtro por pessoa e período.
+    index("audit_events_actor_idx").on(t.orgId, t.actorId, t.createdAt),
+  ],
 );
 
 export const notifications = pgTable(

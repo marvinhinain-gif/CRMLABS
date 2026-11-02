@@ -1,11 +1,13 @@
-import { and, eq, gt, isNull, sql, desc } from "drizzle-orm";
+import { and, eq, gt, isNull, lt, sql, desc } from "drizzle-orm";
 import { db } from "../db";
-import { authTokens, loginAttempts, memberships, organizations, sessions, users } from "../db/schema";
+import { auditEvents, authTokens, loginAttempts, memberships, organizations, sessions, users } from "../db/schema";
 import { hashPassword, randomToken, sha256, verifyPassword } from "../crypto";
 import { AppError, invalid } from "../errors";
 import type { Ctx } from "../context";
 import { sendMail } from "../mail";
 import { appUrl } from "../env";
+import { logger } from "../logger";
+import { deviceLabel } from "@/lib/activity";
 
 export const SESSION_COOKIE = "crmlabs_session";
 const SHORT_SESSION_MS = 12 * 60 * 60 * 1000; // 12 h
@@ -23,6 +25,33 @@ export function validatePassword(pw: string) {
 }
 
 const normalizeEmail = (e: string) => e.trim().toLowerCase();
+
+/** Depois de quanto tempo parado a volta ao CRM (sessão já aberta) conta como um novo acesso no histórico. */
+const TOUCH_MS = 5 * 60 * 1000;
+export const ACCESS_IDLE_MS = 30 * 60 * 1000;
+
+/**
+ * Registra um evento de acesso (login, saída, troca de senha…) no histórico da equipe.
+ * Sem orgId, registra em todas as organizações em que a pessoa está ativa.
+ * Nunca derruba o login: se falhar, só registra no log.
+ */
+async function recordAccess(userId: string, orgId: string | null, action: string, data: Record<string, unknown> = {}) {
+  try {
+    const orgIds = orgId
+      ? [orgId]
+      : await db
+          .select({ orgId: memberships.orgId })
+          .from(memberships)
+          .where(and(eq(memberships.userId, userId), eq(memberships.status, "active")))
+          .then((r) => r.map((x) => x.orgId));
+    if (!orgIds.length) return;
+    await db.insert(auditEvents).values(orgIds.map((o) => ({ orgId: o, actorId: userId, action, entityType: "user", entityId: userId, data })));
+  } catch (e) {
+    logger.warn("Falha ao registrar acesso no histórico", e);
+  }
+}
+
+const accessData = (ip?: string | null, userAgent?: string | null) => ({ ip: ip ?? null, device: deviceLabel(userAgent) });
 
 async function assertNotRateLimited(keys: string[]) {
   const since = new Date(Date.now() - FAILURE_WINDOW_MS);
@@ -77,12 +106,16 @@ export async function login(input: {
   }
   if (!ok || !user || !membership) {
     await db.insert(loginAttempts).values(keys.map((key) => ({ key, success: false })));
+    // Senha errada numa conta da equipe: aparece no histórico de acessos da pessoa.
+    if (user && !ok) await recordAccess(user.id, null, "auth.login_failed", accessData(input.ip, input.userAgent));
     throw new AppError("unauthenticated", "E-mail ou senha incorretos.");
   }
 
   await db.insert(loginAttempts).values({ key: `email:${email}`, success: true });
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
-  return createSession(user.id, membership.orgId, input.remember, input.ip, input.userAgent);
+  const session = await createSession(user.id, membership.orgId, input.remember, input.ip, input.userAgent);
+  await recordAccess(user.id, membership.orgId, "auth.login", { ...accessData(input.ip, input.userAgent), remember: input.remember });
+  return session;
 }
 
 export async function createSession(
@@ -120,8 +153,18 @@ export async function resolveSession(token: string | undefined | null): Promise<
   const row = rows[0];
   if (!row || row.m.status !== "active") return null;
   // Atualiza "visto por último" no máximo a cada 5 minutos.
-  if (Date.now() - row.s.lastSeenAt.getTime() > 5 * 60 * 1000) {
-    await db.update(sessions).set({ lastSeenAt: new Date() }).where(eq(sessions.id, row.s.id));
+  const idleMs = Date.now() - row.s.lastSeenAt.getTime();
+  if (idleMs > TOUCH_MS) {
+    // Só quem atualizar primeiro registra a volta (várias requisições chegam juntas ao reabrir o CRM).
+    const touched = await db
+      .update(sessions)
+      .set({ lastSeenAt: new Date() })
+      .where(and(eq(sessions.id, row.s.id), lt(sessions.lastSeenAt, new Date(Date.now() - TOUCH_MS))))
+      .returning({ id: sessions.id });
+    // Com "lembrar de mim" a pessoa quase não faz login: a volta depois de um tempo parado também é um acesso.
+    if (touched.length && idleMs >= ACCESS_IDLE_MS) {
+      await recordAccess(row.u.id, row.o.id, "auth.session_resumed", { device: deviceLabel(row.s.userAgent), ip: row.s.ip, idleMinutes: Math.round(idleMs / 60000) });
+    }
   }
   return {
     userId: row.u.id,
@@ -141,7 +184,8 @@ export async function resolveSession(token: string | undefined | null): Promise<
 }
 
 export async function revokeSession(token: string) {
-  await db.delete(sessions).where(eq(sessions.tokenHash, sha256(token)));
+  const [s] = await db.delete(sessions).where(eq(sessions.tokenHash, sha256(token))).returning();
+  if (s) await recordAccess(s.userId, s.orgId, "auth.logout", { device: deviceLabel(s.userAgent), ip: s.ip });
 }
 
 export async function revokeAllUserSessions(userId: string, orgId?: string) {
@@ -219,6 +263,7 @@ export async function changePassword(ctx: Ctx, current: string, next: string) {
   validatePassword(next);
   await db.update(users).set({ passwordHash: await hashPassword(next) }).where(eq(users.id, ctx.userId));
   await db.delete(sessions).where(and(eq(sessions.userId, ctx.userId), sql`${sessions.id} <> ${ctx.sessionId}`));
+  await recordAccess(ctx.userId, ctx.orgId, "auth.password_changed");
 }
 
 async function consumeToken(kind: "reset" | "invite", token: string) {
@@ -243,6 +288,7 @@ export async function resetPassword(token: string, newPassword: string) {
   const row = await consumeToken("reset", token);
   await db.update(users).set({ passwordHash: await hashPassword(newPassword) }).where(eq(users.id, row.userId));
   await revokeAllUserSessions(row.userId);
+  await recordAccess(row.userId, null, "auth.password_reset");
 }
 
 // ---------- Convites ----------
@@ -283,7 +329,7 @@ export async function getInvite(token: string) {
   return { name: row.u.name, email: row.u.email, orgName: row.o.name, hasPassword: !!row.u.passwordHash };
 }
 
-export async function acceptInvite(token: string, password: string | null, name?: string) {
+export async function acceptInvite(token: string, password: string | null, name?: string, ip?: string | null, userAgent?: string | null) {
   const row = await consumeToken("invite", token);
   if (!row.orgId) throw invalid("Convite inválido.");
   const [user] = await db.select().from(users).where(eq(users.id, row.userId));
@@ -303,5 +349,7 @@ export async function acceptInvite(token: string, password: string | null, name?
       .returning();
     if (!m) throw new AppError("invalid", "Este convite não está mais disponível. Fale com o administrador.");
   });
-  return createSession(user.id, row.orgId, false);
+  const session = await createSession(user.id, row.orgId, false, ip, userAgent);
+  await recordAccess(user.id, row.orgId, "auth.invite_accepted", accessData(ip, userAgent));
+  return session;
 }

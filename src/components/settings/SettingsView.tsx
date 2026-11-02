@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Building, CircleCheck, CircleX, Copy, MessageSquareQuote, Plug, RefreshCw, Send, ShieldCheck, SlidersHorizontal, Trash2, Unplug, UserRound, Users } from "lucide-react";
+import { Activity, Building, CircleCheck, CircleX, Copy, MessageSquareQuote, Plug, RefreshCw, Send, ShieldCheck, SlidersHorizontal, Trash2, Unplug, UserRound, Users } from "lucide-react";
 import { api, ApiError, fetcher } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useQueryParam } from "@/lib/nav";
@@ -16,11 +16,12 @@ import { Copyable } from "./Copyable";
 import { InstagramSetup } from "./InstagramSetup";
 import { PushSettings } from "./PushSettings";
 import { CalendarSettings } from "./CalendarSettings";
+import { TeamActivityTab } from "./TeamActivity";
 import { StagesEditor } from "@/components/social/EditStagesDialog";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ACCOUNT_STATUS, type IntegrationAccount } from "@/components/social/AccountPill";
 
-type Tab = "perfil" | "organizacao" | "equipe" | "funis" | "integracoes" | "respostas";
+type Tab = "perfil" | "organizacao" | "equipe" | "atividade" | "funis" | "integracoes" | "respostas";
 
 function Section({ title, description, children, actions }: { title: string; description?: string; children: React.ReactNode; actions?: React.ReactNode }) {
   return (
@@ -289,6 +290,7 @@ function PendingRequests({ requests, onChanged }: { requests: Member[]; onChange
 
 function TeamTab() {
   const me = useMe();
+  const router = useRouter();
   const { data, mutate } = useSWR<Member[]>("/api/team", fetcher);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", role: "seller" as Role });
@@ -383,6 +385,11 @@ function TeamTab() {
                     </option>
                   ))}
                 </Select>
+                {m.status !== "invited" && (
+                  <Button size="sm" variant="ghost" onClick={() => router.push(`/configuracoes?aba=atividade&pessoa=${m.userId}`)}>
+                    Ver atividade
+                  </Button>
+                )}
                 {m.status === "invited" && (
                   <Button size="sm" variant="secondary" onClick={() => resend(m)}>
                     Reenviar
@@ -722,6 +729,7 @@ export function SettingsView() {
     { value: "perfil", label: "Perfil", icon: <UserRound />, show: true },
     { value: "organizacao", label: "Organização", icon: <Building />, show: me.permissions.dataAll },
     { value: "equipe", label: "Equipe", icon: <Users />, show: true },
+    { value: "atividade", label: "Atividade", icon: <Activity />, show: me.permissions.teamManage },
     { value: "funis", label: "Funis", icon: <SlidersHorizontal />, show: me.permissions.pipelineEdit },
     { value: "integracoes", label: "Instagram", icon: <Plug />, show: true },
     { value: "respostas", label: "Respostas salvas", icon: <MessageSquareQuote />, show: true },
@@ -735,6 +743,7 @@ export function SettingsView() {
       {current === "perfil" && <ProfileTab />}
       {current === "organizacao" && <OrgTab />}
       {current === "equipe" && <TeamTab />}
+      {current === "atividade" && <TeamActivityTab />}
       {current === "funis" && <FunnelsTab />}
       {current === "integracoes" && <IntegrationsTab />}
       {current === "respostas" && <SavedRepliesTab />}

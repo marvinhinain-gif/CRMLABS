@@ -299,7 +299,10 @@ async function applyTags(tx: DbOrTx, orgId: string, contactId: string, names: st
 
 export async function setContactTags(ctx: Ctx, id: string, names: string[]) {
   const c = await getVisibleContact(ctx, id);
-  await db.transaction((tx) => applyTags(tx, ctx.orgId, c.id, names));
+  await db.transaction(async (tx) => {
+    await applyTags(tx, ctx.orgId, c.id, names);
+    await audit(tx, ctx, "contact.tags_set", "contact", c.id, { tags: names });
+  });
   await publish({ orgId: ctx.orgId, topic: "board", entityId: c.id, ownerIds: [c.ownerId] });
 }
 
@@ -313,6 +316,7 @@ export async function addNote(ctx: Ctx, contactId: string, body: string) {
   const text = cleanText(body, 5000);
   if (!text) throw invalid("Escreva a nota.");
   const [n] = await db.insert(notes).values({ orgId: ctx.orgId, contactId: c.id, authorId: ctx.userId, body: text }).returning();
+  await audit(db, ctx, "contact.note_added", "contact", c.id, { preview: text.slice(0, 120) });
   await publish({ orgId: ctx.orgId, topic: "contacts", entityId: c.id, ownerIds: [c.ownerId] });
   return n;
 }

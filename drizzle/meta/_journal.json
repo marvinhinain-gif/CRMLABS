@@ -162,6 +162,13 @@
       "when": 1793477877138,
       "tag": "0022_leads_sem_responsavel",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793640981007,
+      "tag": "0023_historico_atividade_equipe",
+      "breakpoints": true
     }
   ]
 }
