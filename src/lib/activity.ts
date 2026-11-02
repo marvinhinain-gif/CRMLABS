@@ -114,6 +114,7 @@ const LABELS: Record<string, string> = {
   "team_event.created": "Criou um compromisso na Agenda da equipe",
   "team_event.updated": "Editou um compromisso na Agenda da equipe",
   "team_event.canceled": "Cancelou um compromisso na Agenda da equipe",
+  "agenda.work_hours": "Mudou o horário de atendimento",
   "agenda.canceled": "Cancelou um compromisso",
   "calendar.google_connected": "Conectou o Google Agenda",
   "calendar.google_disconnected": "Desconectou o Google Agenda",

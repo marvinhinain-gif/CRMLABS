@@ -88,6 +88,9 @@ export const organizations = pgTable("organizations", {
   dailyNudges: boolean("daily_nudges").notNull().default(true),
   /** Dias para reter mensagens após desconectar uma conta (null = manter). */
   retentionDaysAfterDisconnect: integer("retention_days_after_disconnect"),
+  /** Horário de atendimento padrão da equipe ("HH:MM"), usado na Disponibilidade. */
+  workStart: text("work_start").notNull().default("08:00"),
+  workEnd: text("work_end").notNull().default("20:00"),
   createdAt: createdAt(),
 });
 
@@ -128,6 +131,9 @@ export const memberships = pgTable(
     requestNote: text("request_note"),
     /** Preferências de notificação por tipo (ausente = padrão do tipo). */
     notifyPrefs: jsonb("notify_prefs").$type<Record<string, boolean>>().notNull().default({}),
+    /** Horário de atendimento da pessoa ("HH:MM"); vazio = padrão da equipe. */
+    workStart: text("work_start"),
+    workEnd: text("work_end"),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("memberships_org_user_uq").on(t.orgId, t.userId)],
