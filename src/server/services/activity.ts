@@ -57,7 +57,7 @@ export async function listTeamActivity(ctx: Ctx, f: ActivityQuery) {
   if (f.tipo) conds.push(categoryCondition(f.tipo));
   if (f.cursor) {
     const [at, id] = f.cursor.split("|");
-    if (at && id && /^[0-9a-f-]{36}$/i.test(id)) {
+    if (at && id && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/.test(at) && !Number.isNaN(Date.parse(at)) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
       conds.push(sql`(${auditEvents.createdAt}, ${auditEvents.id}) < (${at}::timestamptz, ${id}::uuid)`);
     }
   }

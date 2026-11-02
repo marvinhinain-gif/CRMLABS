@@ -308,12 +308,17 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
       });
       await recordStageMove(ctx, u, current?.stageType ?? null, target.stageType, tx);
     }
-    const fields = Object.keys(patch).filter((k) => k !== "updatedAt" && k !== "version");
-    await audit(tx, ctx, "opportunity.updated", "opportunity", o.id, {
-      title: u.title,
-      fields,
-      ...(patch.stageId && target ? { from: current?.name ?? null, to: target.name } : {}),
-    });
+    // Só o que mudou de fato (reenviar o mesmo valor não conta como edição).
+    const fields = (Object.keys(patch) as (keyof typeof patch)[]).filter(
+      (k) => k !== "updatedAt" && k !== "version" && String(patch[k] ?? "") !== String((fresh as Record<string, unknown>)[k] ?? ""),
+    );
+    if (fields.length) {
+      await audit(tx, ctx, "opportunity.updated", "opportunity", o.id, {
+        title: u.title,
+        fields,
+        ...(patch.stageId && target ? { from: current?.name ?? null, to: target.name } : {}),
+      });
+    }
     return u;
   });
   await publish({ orgId: ctx.orgId, topic: "opportunities", entityId: o.id, ownerIds: [o.closerId, updated.closerId, o.sellerId] });

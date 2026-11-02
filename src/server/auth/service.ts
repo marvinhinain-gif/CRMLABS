@@ -51,7 +51,7 @@ async function recordAccess(userId: string, orgId: string | null, action: string
   }
 }
 
-const accessData = (ip?: string | null, userAgent?: string | null) => ({ ip: ip ?? null, device: deviceLabel(userAgent) });
+const accessData = (ip?: string | null, userAgent?: string | null) => ({ ip: ip?.slice(0, 64) ?? null, device: deviceLabel(userAgent) });
 
 async function assertNotRateLimited(keys: string[]) {
   const since = new Date(Date.now() - FAILURE_WINDOW_MS);

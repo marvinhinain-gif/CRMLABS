@@ -104,6 +104,12 @@ describe("atividade da equipe", () => {
     expect(seen.size).toBe(120);
   });
 
+  it("cursor inválido é ignorado em vez de dar erro", async () => {
+    const { ctx } = await setupOrg();
+    await expect(listTeamActivity(ctx.admin, { periodo: "today", cursor: "xyz|------------------------------------" })).resolves.toBeTruthy();
+    await expect(listTeamActivity(ctx.admin, { periodo: "today", cursor: "2026-13-99T99:99:99Z|00000000-0000-0000-0000-000000000000" })).resolves.toBeTruthy();
+  });
+
   it("só administrador vê", async () => {
     const { ctx } = await setupOrg();
     await expect(listTeamActivity(ctx.manager, { periodo: "7d" })).rejects.toMatchObject({ code: "forbidden" });
