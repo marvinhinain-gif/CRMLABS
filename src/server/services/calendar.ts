@@ -9,7 +9,7 @@
 import { and, eq, gt, gte, inArray, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { appointments, calendarConnections, contacts, memberships, oauthStates, teamEventParticipants, teamEvents, users } from "../db/schema";
+import { appointments, calendarConnections, contacts, memberships, oauthStates, organizations, teamEventParticipants, teamEvents, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { decryptSecret, encryptSecret, randomToken, sha256 } from "../crypto";
 import { appUrl } from "../env";
@@ -563,9 +563,44 @@ export async function busyTimes(ctx: Ctx, input: z.infer<typeof busySchema>) {
 
 export const availabilitySchema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
 
-/** Expediente usado para achar horários livres (fuso da operação). */
-export const WORK_START = 8;
-export const WORK_END = 20;
+/** Horário de atendimento padrão, quando a equipe ainda não definiu o dela. */
+export const WORK_START = "08:00";
+export const WORK_END = "20:00";
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+const minutesOf = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+
+export const workHoursSchema = z
+  .object({
+    /** Pessoa cujo horário muda; ausente = horário padrão da equipe. */
+    userId: z.string().uuid().optional(),
+    /** null volta a pessoa para o padrão da equipe. */
+    start: z.string().regex(HHMM).nullable(),
+    end: z.string().regex(HHMM).nullable(),
+  })
+  .refine((v) => (v.start == null) === (v.end == null), { message: "Informe o início e o fim." })
+  .refine((v) => v.start == null || v.end == null || minutesOf(v.end) - minutesOf(v.start) >= 30, { message: "O fim precisa ser pelo menos 30 minutos depois do início." });
+
+/** Muda o horário de atendimento de uma pessoa (ela mesma, gestor ou admin) ou o padrão da equipe (gestor ou admin). */
+export async function setWorkHours(ctx: Ctx, input: z.infer<typeof workHoursSchema>) {
+  const manager = ctx.role === "admin" || ctx.role === "manager";
+  if (!input.userId) {
+    if (!manager) throw forbidden("Só gestor ou administrador muda o horário da equipe.");
+    if (!input.start || !input.end) throw invalid("Informe o início e o fim.");
+    await db.update(organizations).set({ workStart: input.start, workEnd: input.end }).where(eq(organizations.id, ctx.orgId));
+    await audit(db, ctx, "agenda.work_hours", "organization", ctx.orgId, { start: input.start, end: input.end });
+    return { ok: true };
+  }
+  if (input.userId !== ctx.userId && !manager) throw forbidden("Você só pode mudar o seu próprio horário.");
+  const [row] = await db
+    .update(memberships)
+    .set({ workStart: input.start, workEnd: input.end })
+    .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, input.userId)))
+    .returning({ id: memberships.id });
+  if (!row) throw invalid("Pessoa não encontrada na equipe.");
+  await audit(db, ctx, "agenda.work_hours", "user", input.userId, { start: input.start, end: input.end });
+  return { ok: true };
+}
 
 type Slot = { start: string; end: string };
 
@@ -581,11 +616,11 @@ export function mergeSlots(slots: Slot[]): Slot[] {
   return out;
 }
 
-/** Horários livres de pelo menos `minMinutes` dentro do expediente. */
-export function freeSlots(busy: Slot[], date: string, minMinutes = 30): Slot[] {
-  const day = (h: number) => new Date(`${date}T${String(h).padStart(2, "0")}:00:00-03:00`).getTime();
-  let cursor = day(WORK_START);
-  const end = day(WORK_END);
+/** Horários livres de pelo menos `minMinutes` dentro do horário de atendimento. */
+export function freeSlots(busy: Slot[], date: string, start = WORK_START, finish = WORK_END, minMinutes = 30): Slot[] {
+  const day0 = new Date(`${date}T00:00:00-03:00`).getTime();
+  let cursor = day0 + minutesOf(start) * 60000;
+  const end = day0 + minutesOf(finish) * 60000;
   const out: Slot[] = [];
   for (const b of mergeSlots(busy)) {
     const bs = new Date(b.start).getTime();
@@ -606,8 +641,11 @@ export function freeSlots(busy: Slot[], date: string, minMinutes = 30): Slot[] {
 export async function teamAvailability(ctx: Ctx, input: z.infer<typeof availabilitySchema>) {
   const from = new Date(`${input.date}T00:00:00-03:00`);
   const to = new Date(from.getTime() + 86400000);
+  const [org] = await db.select({ start: organizations.workStart, end: organizations.workEnd }).from(organizations).where(eq(organizations.id, ctx.orgId));
+  const teamStart = org?.start ?? WORK_START;
+  const teamEnd = org?.end ?? WORK_END;
   const members = await db
-    .select({ userId: memberships.userId, name: users.name })
+    .select({ userId: memberships.userId, name: users.name, workStart: memberships.workStart, workEnd: memberships.workEnd })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
     .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, "active")));
@@ -652,21 +690,28 @@ export async function teamAvailability(ctx: Ctx, input: z.infer<typeof availabil
         if (c?.refresh) google = "error";
       }
       busy.sort((a, b) => a.start.localeCompare(b.start));
+      const own = !!(m.workStart && m.workEnd);
+      const workStart = own ? m.workStart! : teamStart;
+      const workEnd = own ? m.workEnd! : teamEnd;
       return {
         userId: m.userId,
         name: m.name,
         google,
         count: crm.length + googleCount + allDay,
         allDay,
+        workStart,
+        workEnd,
+        ownHours: own,
         busy,
-        free: freeSlots(busy, input.date),
+        free: freeSlots(busy, input.date, workStart, workEnd),
       };
     }),
   );
   return {
     date: input.date,
-    workStart: WORK_START,
-    workEnd: WORK_END,
+    workStart: teamStart,
+    workEnd: teamEnd,
+    canEditTeam: ctx.role === "admin" || ctx.role === "manager",
     people: people.sort((a, b) => (a.userId === ctx.userId ? -1 : b.userId === ctx.userId ? 1 : a.name.localeCompare(b.name))),
   };
 }

@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/server/db";
 import { appointments, calendarConnections } from "@/server/db/schema";
 import { encryptSecret } from "@/server/crypto";
-import { busyTimes, handleGoogleCallback, icsFeed, myCalendar, regenerateFeed, saveGoogleClient, startGoogleConnect, syncAppointment, syncTeamEvent, syncUpcoming, teamAvailability, teamEventGoogleId, freeSlots } from "@/server/services/calendar";
+import { busyTimes, handleGoogleCallback, icsFeed, myCalendar, regenerateFeed, saveGoogleClient, startGoogleConnect, syncAppointment, syncTeamEvent, syncUpcoming, teamAvailability, teamEventGoogleId, freeSlots, setWorkHours } from "@/server/services/calendar";
 import { cancelTeamEvent, createTeamEvent, updateTeamEvent } from "@/server/services/teamAgenda";
 import { createAppointment, updateAppointment } from "@/server/services/commercial";
 import { createContact } from "@/server/services/contacts";
@@ -193,6 +193,39 @@ describe("agenda do closer", () => {
     expect(mariana).toMatchObject({ google: "not_connected", count: 1 });
     // Intervalo menor que 30 min não conta como livre.
     expect(freeSlots([{ start: tomorrowAt(8).toISOString(), end: new Date(tomorrowAt(19).getTime() + 40 * 60000).toISOString() }], date)).toEqual([]);
+  });
+
+  it("horário de atendimento: padrão da equipe, horário próprio e quem pode mudar", async () => {
+    const { ctx, users: u } = await setupOrg();
+    const c = await createContact(ctx.admin, { name: "Bia" });
+    await createAppointment(ctx.admin, { contactId: c.id, ownerId: u.closer.id, title: "Call Bia", startsAt: tomorrowAt(10), endsAt: tomorrowAt(11), timezone: "America/Bahia" });
+    const date = tomorrowAt(12).toISOString().slice(0, 10);
+    const ms = (p: { free: { start: string; end: string }[] }) => p.free.map((f) => [new Date(f.start).getTime(), new Date(f.end).getTime()]);
+
+    await expect(setWorkHours(ctx.seller, { start: "09:00", end: "18:00" })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(setWorkHours(ctx.seller, { userId: u.closer.id, start: "09:00", end: "18:00" })).rejects.toMatchObject({ code: "forbidden" });
+    await setWorkHours(ctx.manager, { start: "09:00", end: "18:00" });
+    let av = await teamAvailability(ctx.seller, { date });
+    expect(av).toMatchObject({ workStart: "09:00", workEnd: "18:00", canEditTeam: false });
+    let carla = av.people.find((p) => p.userId === u.closer.id)!;
+    expect(carla).toMatchObject({ workStart: "09:00", workEnd: "18:00", ownHours: false });
+    expect(ms(carla)).toEqual([
+      [tomorrowAt(9).getTime(), tomorrowAt(10).getTime()],
+      [tomorrowAt(11).getTime(), tomorrowAt(18).getTime()],
+    ]);
+
+    // A própria pessoa muda o dela (meia hora vale).
+    await setWorkHours(ctx.closer, { userId: u.closer.id, start: "10:30", end: "14:00" });
+    av = await teamAvailability(ctx.closer, { date });
+    carla = av.people.find((p) => p.userId === u.closer.id)!;
+    expect(carla).toMatchObject({ workStart: "10:30", workEnd: "14:00", ownHours: true });
+    expect(ms(carla)).toEqual([[tomorrowAt(11).getTime(), tomorrowAt(14).getTime()]]);
+    expect(av.people.find((p) => p.userId === u.seller.id)).toMatchObject({ workStart: "09:00", ownHours: false });
+
+    // Volta para o da equipe.
+    await setWorkHours(ctx.manager, { userId: u.closer.id, start: null, end: null });
+    av = await teamAvailability(ctx.closer, { date });
+    expect(av.people.find((p) => p.userId === u.closer.id)).toMatchObject({ workStart: "09:00", ownHours: false });
   });
 
   it("horários ocupados juntam CRM e Google; seller só consulta closer", async () => {
