@@ -252,6 +252,16 @@ async function googleFetch<T>(url: string, init: RequestInit & { token?: string 
   return body as T;
 }
 
+/** E-mail do id_token recebido direto do Google (pela conexão TLS do token), sem precisar validar a assinatura. */
+function emailFromIdToken(idToken: string | undefined) {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken!.split(".")[1], "base64url").toString("utf8")) as { email?: string };
+    return typeof payload.email === "string" ? payload.email : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleGoogleCallback(params: { code?: string | null; state?: string | null; error?: string | null }, sessionCtx: Ctx | null) {
   await loadInstanceSettings();
   if (!params.state) throw invalid("Retorno do Google sem state.");
@@ -272,15 +282,16 @@ export async function handleGoogleCallback(params: { code?: string | null; state
   });
   if (!tok.refresh_token) throw invalid("O Google não liberou acesso contínuo. Remova o CRMLABS em myaccount.google.com/permissions e conecte de novo.");
   if (!tok.scope?.includes("calendar.events")) throw invalid("Permissão de agenda não concedida. Marque a opção de ver e editar eventos ao autorizar.");
-  const cal = await googleFetch<{ id: string; summary?: string }>("https://www.googleapis.com/calendar/v3/calendars/primary", { token: tok.access_token });
+  // E-mail da conta: vem no id_token (escopos openid + email). Ler a agenda "primary" exigiria um escopo a mais.
+  const email = emailFromIdToken(tok.id_token) ?? (await googleFetch<{ email?: string }>("https://openidconnect.googleapis.com/v1/userinfo", { token: tok.access_token })).email ?? null;
   await db
     .update(calendarConnections)
-    .set({ googleEmail: cal.id, googleRefreshEnc: encryptSecret(tok.refresh_token), googleConnectedAt: new Date(), lastError: null })
+    .set({ googleEmail: email, googleRefreshEnc: encryptSecret(tok.refresh_token), googleConnectedAt: new Date(), lastError: null })
     .where(eq(calendarConnections.userId, st.userId));
-  await audit(db, sessionCtx, "calendar.google_connected", "user", st.userId, { email: cal.id });
+  await audit(db, sessionCtx, "calendar.google_connected", "user", st.userId, { email });
   // Reuniões futuras já entram na agenda.
   void syncUpcoming(st.userId).catch((e) => logger.warn("Falha ao sincronizar reuniões futuras", e));
-  return { email: cal.id };
+  return { email };
 }
 
 export async function disconnectGoogle(ctx: Ctx) {

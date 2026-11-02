@@ -61,8 +61,10 @@ describe("agenda do closer", () => {
     const state = new URL(url).searchParams.get("state")!;
     expect(new URL(url).searchParams.get("scope")).toContain("calendar.events");
     mockGoogle((u2) => {
-      if (u2.includes("oauth2.googleapis.com/token")) return { body: { access_token: "AT", refresh_token: "RT", scope: "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.freebusy" } };
-      if (u2.includes("/calendars/primary") && !u2.includes("/events")) return { body: { id: "carla@empresa.com" } };
+      const idToken = `x.${Buffer.from(JSON.stringify({ email: "carla@empresa.com" })).toString("base64url")}.y`;
+      if (u2.includes("oauth2.googleapis.com/token")) return { body: { access_token: "AT", refresh_token: "RT", id_token: idToken, scope: "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.freebusy openid email" } };
+      // Só os escopos pedidos: ler a agenda "primary" seria recusado pelo Google.
+      if (u2.includes("/calendars/primary") && !u2.includes("/events")) return { status: 403, body: { error: { message: "Request had insufficient authentication scopes." } } };
       return { body: {} };
     });
     await expect(handleGoogleCallback({ code: "c", state }, ctx.seller)).rejects.toMatchObject({ code: "forbidden" });
