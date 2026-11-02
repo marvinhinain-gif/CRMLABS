@@ -21,6 +21,7 @@ export function EventDialog({
   onOpenChange,
   editing,
   defaultDate,
+  defaultTime,
   defaultPeople,
   onSaved,
 }: {
@@ -28,6 +29,8 @@ export function EventDialog({
   onOpenChange: (v: boolean) => void;
   editing?: TeamEventDetail | null;
   defaultDate: string;
+  /** Horário sugerido ("HH:mm"), por exemplo ao escolher um horário livre. */
+  defaultTime?: string;
   defaultPeople: string[];
   onSaved: (id: string) => void;
 }) {
@@ -74,14 +77,14 @@ export function EventDialog({
       setAllDay(false);
       setDate(defaultDate);
       setEndDate(defaultDate);
-      setTime("10:00");
+      setTime(defaultTime ?? "10:00");
       setDuration(60);
       setLocation("");
       setContact(null);
       setReminder("30");
       setNotes("");
     }
-  }, [open, editing, defaultDate, defaultPeople, me.user.id]);
+  }, [open, editing, defaultDate, defaultTime, defaultPeople, me.user.id]);
 
   const range = useMemo(() => {
     if (!date) return null;
