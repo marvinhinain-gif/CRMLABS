@@ -19,7 +19,7 @@ import type { Ctx } from "../context";
 import { can, contactScope } from "../permissions";
 import { AppError, forbidden, notFound } from "../errors";
 import { publish } from "../realtime";
-import { getPipeline } from "./common";
+import { audit, getPipeline } from "./common";
 import { getStageInOrg, listStages } from "./stages";
 import { avatarUrl } from "./avatars";
 import { dayRange } from "../time";
@@ -242,7 +242,14 @@ export const addEntrySchema = z.object({ contactId: z.string().uuid(), stageId: 
 
 export async function addEntry(ctx: Ctx, input: z.infer<typeof addEntrySchema>) {
   const c = await assertContactVisible(ctx, input.contactId);
-  const entry = await db.transaction((tx) => addToBoard(ctx, c.id, input.stageId, tx));
+  const entry = await db.transaction(async (tx) => {
+    const e = await addToBoard(ctx, c.id, input.stageId, tx);
+    if (e) {
+      const [stage] = await tx.select({ name: pipelineStages.name }).from(pipelineStages).where(eq(pipelineStages.id, e.stageId));
+      await audit(tx, ctx, "board.card_added", "contact", c.id, { stage: stage?.name ?? null });
+    }
+    return e;
+  });
   if (!entry) throw new AppError("conflict", "Este contato já está no quadro.");
   await publish({ orgId: ctx.orgId, topic: "board", entityId: c.id, ownerIds: [c.ownerId] });
   return entry;
@@ -313,6 +320,7 @@ export async function moveEntry(ctx: Ctx, entryId: string, input: z.infer<typeof
       toStageName: to.name,
       actorId: ctx.userId,
     });
+    await audit(tx, ctx, "board.card_moved", "contact", entry.contactId, { from: from?.name ?? null, to: to.name });
     return { entry: updated, contact, changed: true, fromName: from?.name ?? null, toName: to.name };
   });
   if (result.changed) {
@@ -347,6 +355,7 @@ export async function closeEntry(ctx: Ctx, entryId: string) {
       actorId: ctx.userId,
       reason: "Removido do quadro",
     });
+    await audit(tx, ctx, "board.card_removed", "contact", entry.contactId, { stage: stage?.name ?? null });
   });
   await publish({ orgId: ctx.orgId, topic: "board", entityId: contact.id, ownerIds: [contact.ownerId] });
 }

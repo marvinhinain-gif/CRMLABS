@@ -4,6 +4,7 @@ import { db, type DbOrTx } from "../db";
 import type { Ctx } from "../context";
 import { AppError } from "../errors";
 import { publish } from "../realtime";
+import { audit } from "./common";
 
 export const boardCleanupSchema = z.object({ expectedTotal: z.number().int().min(0) });
 
@@ -115,6 +116,9 @@ export async function runBoardCleanup(ctx: Ctx, input: z.infer<typeof boardClean
     if (n !== input.expectedTotal) throw new AppError("conflict", "O quadro mudou, revise de novo.");
     return n;
   });
-  if (removed) await publish({ orgId: ctx.orgId, topic: "board" });
+  if (removed) {
+    await publish({ orgId: ctx.orgId, topic: "board" });
+    await audit(db, ctx, "board.cleanup", "pipeline", null, { removed });
+  }
   return { removed };
 }

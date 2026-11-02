@@ -7,7 +7,7 @@ import { assertCan, can, contactScope } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
 import { publish } from "../realtime";
 import { dayRange } from "../time";
-import { cleanText } from "./common";
+import { audit, cleanText } from "./common";
 import {
   CADENCE_ACTION_PREFIX,
   CADENCE_CHANNELS,
@@ -92,6 +92,7 @@ export async function saveSteps(ctx: Ctx, input: z.infer<typeof saveStepsSchema>
     // Nunca apaga: passos fora da lista apenas saem de uso.
     const removed = all.filter((s) => !kept.has(s.id) && !s.archivedAt).map((s) => s.id);
     if (removed.length) await tx.update(cadenceSteps).set({ archivedAt: new Date() }).where(inArray(cadenceSteps.id, removed));
+    await audit(tx, ctx, "cadence.steps_saved", "organization", ctx.orgId, { count: input.steps.length });
   });
   return listActiveSteps(ctx.orgId);
 }
@@ -199,8 +200,8 @@ export async function applyCadenceAction(ctx: Ctx, contactId: string, input: Cad
     const current: StepRow | null = entry.cadenceStepId
       ? ((steps.find((s) => s.id === entry.cadenceStepId) ?? (await tx.select().from(cadenceSteps).where(eq(cadenceSteps.id, entry.cadenceStepId)).then((r) => r[0]))) ?? null)
       : null;
-    const record = (outcome: string, step: StepRow | null, note?: string | null) =>
-      tx.insert(cadenceActivities).values({
+    const record = async (outcome: string, step: StepRow | null, note?: string | null) => {
+      await tx.insert(cadenceActivities).values({
         orgId: ctx.orgId,
         contactId,
         entryId: entry.id,
@@ -210,6 +211,8 @@ export async function applyCadenceAction(ctx: Ctx, contactId: string, input: Cad
         note: cleanText(note),
         actorId: ctx.userId,
       });
+      await audit(tx, ctx, "cadence.action", "contact", contactId, { outcome, step: step?.name ?? null });
+    };
     const setEntry = (v: Partial<typeof relationshipEntries.$inferInsert>) =>
       tx.update(relationshipEntries).set({ ...v, updatedAt: now }).where(eq(relationshipEntries.id, entry.id));
 
