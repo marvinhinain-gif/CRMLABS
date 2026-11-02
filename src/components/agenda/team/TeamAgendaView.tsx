@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, List, Lock, MapPin, SquareUser, Users, Video } from "lucide-react";
+import { CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, Clock, List, Lock, MapPin, SquareUser, Users, Video } from "lucide-react";
 import { fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useQueryParam } from "@/lib/nav";
@@ -12,6 +12,7 @@ import { dayKey, formatTime } from "@/lib/format";
 import { Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHeader, Tabs } from "@/components/ui";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
 import { dayTitle, monthGrid, MONTHS, nextKey, startIso, todayKey, WEEK } from "../calendarGrid";
+import { AvailabilityView } from "./AvailabilityView";
 import { EventDialog } from "./EventDialog";
 import { EventSheet } from "./EventSheet";
 import { GoogleAgendaHint } from "./GoogleAgendaHint";
@@ -112,6 +113,8 @@ export function TeamAgendaView() {
   const [selected, setSelected] = useQueryParam("dia", todayKey());
   const [eventId, setEventId] = useQueryParam("compromisso", "");
   const [creating, setCreating] = useState(false);
+  /** Horário livre escolhido na Disponibilidade: abre o diálogo já com dia, hora e pessoa. */
+  const [picked, setPicked] = useState<{ date: string; time: string; people: string[] } | null>(null);
   const [y, m] = month.split("-").map(Number);
   const grid = useMemo(() => monthGrid(y, m - 1), [y, m]);
   const people = useMemo(
@@ -150,15 +153,20 @@ export function TeamAgendaView() {
     <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
       <PageHeader
         title="Agenda da equipe"
-        subtitle={`${whole ? "Toda a equipe" : personName} · ${upcoming} compromisso(s) por vir ${view === "lista" ? "nos próximos 60 dias" : "neste mês"}.`}
+        subtitle={
+          view === "livre"
+            ? "Quem está livre e ocupado em cada horário, para marcar sem conflito."
+            : `${whole ? "Toda a equipe" : personName} · ${upcoming} compromisso(s) por vir ${view === "lista" ? "nos próximos 60 dias" : "neste mês"}.`
+        }
         actions={
           <>
             <Tabs
-              value={view as "mes" | "lista"}
+              value={view as "mes" | "lista" | "livre"}
               onChange={(v) => setView(v)}
               items={[
                 { value: "mes", label: "Calendário", icon: <CalendarDays /> },
                 { value: "lista", label: "Lista", icon: <List /> },
+                { value: "livre", label: "Disponibilidade", icon: <Clock /> },
               ]}
             />
             <Button icon={<CalendarPlus className="size-4" />} onClick={() => setCreating(true)}>
@@ -171,7 +179,7 @@ export function TeamAgendaView() {
       <GoogleAgendaHint />
 
       {/* De quem é a agenda: cada pessoa tem a sua. */}
-      <nav aria-label="Agenda de quem" className="anim-rise -mx-4 overflow-x-auto px-4 scroll-thin sm:mx-0 sm:px-0">
+      <nav aria-label="Agenda de quem" hidden={view === "livre"} className="anim-rise -mx-4 overflow-x-auto px-4 scroll-thin sm:mx-0 sm:px-0">
         <ul className="flex w-max gap-2 pb-1">
           {people.map((p) => {
             const on = person === p.userId;
@@ -206,6 +214,15 @@ export function TeamAgendaView() {
         </Card>
       ) : isLoading && !data ? (
         <LoadingState rows={5} />
+      ) : view === "livre" ? (
+        <AvailabilityView
+          date={selected < today ? today : selected}
+          onDate={setSelected}
+          onPick={(date, time, userId) => {
+            setPicked({ date, time, people: [userId] });
+            setCreating(true);
+          }}
+        />
       ) : view === "lista" ? (
         upcoming === 0 ? (
           <Card>
@@ -340,9 +357,13 @@ export function TeamAgendaView() {
 
       <EventDialog
         open={creating}
-        onOpenChange={setCreating}
-        defaultDate={view === "mes" && selected >= today ? selected : today}
-        defaultPeople={whole ? [] : [person]}
+        onOpenChange={(v) => {
+          setCreating(v);
+          if (!v) setPicked(null);
+        }}
+        defaultDate={picked?.date ?? (view === "mes" && selected >= today ? selected : today)}
+        defaultTime={picked?.time}
+        defaultPeople={picked?.people ?? (whole ? [] : [person])}
         onSaved={(id) => {
           toast.success("Compromisso marcado. Quem participa foi avisado.");
           void mutate();

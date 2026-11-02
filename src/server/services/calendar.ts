@@ -558,3 +558,115 @@ export async function busyTimes(ctx: Ctx, input: z.infer<typeof busySchema>) {
   return { ownerName: owner?.name ?? "", google, busy: busy.sort((a, b) => a.start.localeCompare(b.start)) };
 }
 
+
+// ---------- Disponibilidade da equipe ----------
+
+export const availabilitySchema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+
+/** Expediente usado para achar horários livres (fuso da operação). */
+export const WORK_START = 8;
+export const WORK_END = 20;
+
+type Slot = { start: string; end: string };
+
+/** Junta intervalos sobrepostos (ordenados pelo início). */
+export function mergeSlots(slots: Slot[]): Slot[] {
+  const out: Slot[] = [];
+  for (const s of [...slots].sort((a, b) => a.start.localeCompare(b.start))) {
+    const last = out.at(-1);
+    if (last && new Date(s.start).getTime() <= new Date(last.end).getTime()) {
+      if (new Date(s.end).getTime() > new Date(last.end).getTime()) last.end = s.end;
+    } else out.push({ ...s });
+  }
+  return out;
+}
+
+/** Horários livres de pelo menos `minMinutes` dentro do expediente. */
+export function freeSlots(busy: Slot[], date: string, minMinutes = 30): Slot[] {
+  const day = (h: number) => new Date(`${date}T${String(h).padStart(2, "0")}:00:00-03:00`).getTime();
+  let cursor = day(WORK_START);
+  const end = day(WORK_END);
+  const out: Slot[] = [];
+  for (const b of mergeSlots(busy)) {
+    const bs = new Date(b.start).getTime();
+    const be = new Date(b.end).getTime();
+    if (be <= cursor) continue;
+    if (bs >= end) break;
+    if (bs - cursor >= minMinutes * 60000) out.push({ start: new Date(cursor).toISOString(), end: new Date(bs).toISOString() });
+    cursor = Math.max(cursor, be);
+  }
+  if (end - cursor >= minMinutes * 60000) out.push({ start: new Date(cursor).toISOString(), end: new Date(end).toISOString() });
+  return out;
+}
+
+/**
+ * Disponibilidade de cada pessoa ativa no dia: horários ocupados (CRM + Google Agenda conectado) e livres.
+ * Nunca mostra o nome dos compromissos: só ocupado/livre e quantos são.
+ */
+export async function teamAvailability(ctx: Ctx, input: z.infer<typeof availabilitySchema>) {
+  const from = new Date(`${input.date}T00:00:00-03:00`);
+  const to = new Date(from.getTime() + 86400000);
+  const members = await db
+    .select({ userId: memberships.userId, name: users.name })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, "active")));
+  const { eventsOf } = await import("./teamAgenda");
+  await loadInstanceSettings();
+  const people = await Promise.all(
+    members.map(async (m) => {
+      const crm: Slot[] = (
+        await db
+          .select({ start: appointments.startsAt, end: appointments.endsAt })
+          .from(appointments)
+          .where(and(eq(appointments.orgId, ctx.orgId), eq(appointments.ownerId, m.userId), eq(appointments.status, "scheduled"), lt(appointments.startsAt, to), gt(appointments.endsAt, from)))
+      ).map((r) => ({ start: r.start.toISOString(), end: r.end.toISOString() }));
+      const events = await eventsOf(ctx.orgId, m.userId, from, to, { includeAllDay: true });
+      const allDay = events.filter((e) => e.allDay).length;
+      for (const e of events) if (!e.allDay) crm.push({ start: e.startsAt.toISOString(), end: e.endsAt.toISOString() });
+      const busy: (Slot & { source: "crm" | "google" })[] = crm.map((c) => ({ ...c, source: "crm" }));
+      let google: "connected" | "not_connected" | "error" = "not_connected";
+      let googleCount = 0;
+      const auth = await accessTokenFor(m.userId);
+      if (auth) {
+        try {
+          const fb = await googleFetch<{ calendars: Record<string, { busy: Slot[] }> }>("https://www.googleapis.com/calendar/v3/freeBusy", {
+            method: "POST",
+            token: auth.token,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ timeMin: from.toISOString(), timeMax: to.toISOString(), timeZone: TZ, items: [{ id: auth.conn.googleCalendarId }] }),
+          });
+          google = "connected";
+          for (const b of Object.values(fb.calendars ?? {}).flatMap((c) => c.busy ?? [])) {
+            // Eventos que o próprio CRM criou no Google já contam como CRM.
+            const same = crm.some((c) => Math.abs(new Date(c.start).getTime() - new Date(b.start).getTime()) < 60000);
+            if (same) continue;
+            googleCount++;
+            busy.push({ start: new Date(b.start).toISOString(), end: new Date(b.end).toISOString(), source: "google" });
+          }
+        } catch {
+          google = "error";
+        }
+      } else {
+        const [c] = await db.select({ refresh: calendarConnections.googleRefreshEnc }).from(calendarConnections).where(eq(calendarConnections.userId, m.userId));
+        if (c?.refresh) google = "error";
+      }
+      busy.sort((a, b) => a.start.localeCompare(b.start));
+      return {
+        userId: m.userId,
+        name: m.name,
+        google,
+        count: crm.length + googleCount + allDay,
+        allDay,
+        busy,
+        free: freeSlots(busy, input.date),
+      };
+    }),
+  );
+  return {
+    date: input.date,
+    workStart: WORK_START,
+    workEnd: WORK_END,
+    people: people.sort((a, b) => (a.userId === ctx.userId ? -1 : b.userId === ctx.userId ? 1 : a.name.localeCompare(b.name))),
+  };
+}

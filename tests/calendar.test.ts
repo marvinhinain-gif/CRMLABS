@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/server/db";
 import { appointments, calendarConnections } from "@/server/db/schema";
 import { encryptSecret } from "@/server/crypto";
-import { busyTimes, handleGoogleCallback, icsFeed, myCalendar, regenerateFeed, saveGoogleClient, startGoogleConnect, syncAppointment, syncTeamEvent, syncUpcoming, teamEventGoogleId } from "@/server/services/calendar";
+import { busyTimes, handleGoogleCallback, icsFeed, myCalendar, regenerateFeed, saveGoogleClient, startGoogleConnect, syncAppointment, syncTeamEvent, syncUpcoming, teamAvailability, teamEventGoogleId, freeSlots } from "@/server/services/calendar";
 import { cancelTeamEvent, createTeamEvent, updateTeamEvent } from "@/server/services/teamAgenda";
 import { createAppointment, updateAppointment } from "@/server/services/commercial";
 import { createContact } from "@/server/services/contacts";
@@ -159,6 +159,40 @@ describe("agenda do closer", () => {
     const ev = at(u.closer.id, d.id)!;
     expect(ev.start).toEqual({ date: tomorrowAt(12).toISOString().slice(0, 10) });
     expect(ev.reminders).toEqual({ useDefault: false, overrides: [] });
+  });
+
+  it("disponibilidade da equipe: ocupado do CRM e do Google, livres no expediente, sem nomes", async () => {
+    const { ctx, users: u } = await setupOrg();
+    await saveGoogleClient(ctx.admin, { clientId: "123456-abc.apps.googleusercontent.com", clientSecret: "segredo-google" });
+    await myCalendar(ctx.closer);
+    await db.update(calendarConnections).set({ googleRefreshEnc: encryptSecret("RT"), googleEmail: "carla@g.com" }).where(eq(calendarConnections.userId, u.closer.id));
+    const c = await createContact(ctx.admin, { name: "Rita" });
+    await createAppointment(ctx.admin, { contactId: c.id, ownerId: u.closer.id, title: "Call Rita", startsAt: tomorrowAt(10), endsAt: tomorrowAt(11), timezone: "America/Bahia" });
+    await createTeamEvent(ctx.manager, { title: "Alinhamento secreto", startsAt: tomorrowAt(14), endsAt: tomorrowAt(15), allDay: false, participantIds: [u.closer.id, u.seller.id] });
+    mockGoogle((u2) => {
+      if (u2.includes("oauth2.googleapis.com/token")) return { body: { access_token: "AT" } };
+      // O Google devolve a reunião do CRM (já sincronizada) e um compromisso pessoal das 16h às 17h30.
+      if (u2.includes("freeBusy")) return { body: { calendars: { primary: { busy: [{ start: tomorrowAt(10).toISOString(), end: tomorrowAt(11).toISOString() }, { start: tomorrowAt(16).toISOString(), end: new Date(tomorrowAt(17).getTime() + 30 * 60000).toISOString() }] } } } };
+      return { body: {} };
+    });
+    const date = tomorrowAt(12).toISOString().slice(0, 10);
+    const av = await teamAvailability(ctx.seller2, { date });
+    expect(av.people[0].userId).toBe(u.seller2.id);
+    const carla = av.people.find((p) => p.userId === u.closer.id)!;
+    expect(carla).toMatchObject({ google: "connected", count: 3 });
+    expect(carla.busy.map((b) => b.source)).toEqual(["crm", "crm", "google"]);
+    expect(carla.free.map((f) => [new Date(f.start).getTime(), new Date(f.end).getTime()])).toEqual([
+      [tomorrowAt(8).getTime(), tomorrowAt(10).getTime()],
+      [tomorrowAt(11).getTime(), tomorrowAt(14).getTime()],
+      [tomorrowAt(15).getTime(), tomorrowAt(16).getTime()],
+      [new Date(tomorrowAt(17).getTime() + 30 * 60000).getTime(), tomorrowAt(20).getTime()],
+    ]);
+    expect(JSON.stringify(av)).not.toContain("secreto");
+    expect(JSON.stringify(av)).not.toContain("Rita");
+    const mariana = av.people.find((p) => p.userId === u.seller.id)!;
+    expect(mariana).toMatchObject({ google: "not_connected", count: 1 });
+    // Intervalo menor que 30 min não conta como livre.
+    expect(freeSlots([{ start: tomorrowAt(8).toISOString(), end: new Date(tomorrowAt(19).getTime() + 40 * 60000).toISOString() }], date)).toEqual([]);
   });
 
   it("horários ocupados juntam CRM e Google; seller só consulta closer", async () => {
