@@ -25,7 +25,7 @@ import {
 } from "../db/schema";
 import type { Ctx } from "../context";
 import { AppError, forbidden, invalid, notFound } from "../errors";
-import { can, leadScope } from "../permissions";
+import { can, closerMembershipCond, leadScope } from "../permissions";
 import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
@@ -215,7 +215,7 @@ async function candidates(tx: DbOrTx, form: Integration) {
   }
   const conds: SQL[] = [active!];
   if (form.assigneeIds.length) conds.push(inArray(memberships.userId, form.assigneeIds));
-  else conds.push(eq(memberships.role, form.pipelineKind === "sales" ? "closer" : "seller"));
+  else conds.push(form.pipelineKind === "sales" ? closerMembershipCond() : eq(memberships.role, "seller"));
   const rows = await tx.select({ userId: memberships.userId }).from(memberships).where(and(...conds)).orderBy(asc(memberships.createdAt), asc(memberships.userId));
   return { pool: rows.map((r) => r.userId), fixed: false };
 }

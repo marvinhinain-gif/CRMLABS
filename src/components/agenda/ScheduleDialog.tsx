@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { CalendarCheck, TriangleAlert } from "lucide-react";
 import { fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
+import { actsAsCloser } from "@/lib/types";
 import { formatTime, fromLocalInputs, localInputs, longDayTime } from "@/lib/format";
 import { Button, Dialog, Field, Input, Select, Textarea } from "@/components/ui";
 
@@ -78,7 +79,7 @@ export function ScheduleDialog({
   const conflict = chosenStart && chosenEnd ? busy?.busy.find((b) => new Date(b.start).getTime() < chosenEnd && new Date(b.end).getTime() > chosenStart) : undefined;
 
   // Social seller: marca para si ou para um closer. Gestores: qualquer pessoa ativa.
-  const owners = team.filter((m) => m.status === "active" && (me.permissions.assign || m.userId === me.user.id || m.role === "closer"));
+  const owners = team.filter((m) => m.status === "active" && (me.permissions.assign || m.userId === me.user.id || actsAsCloser(m)));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,7 +150,7 @@ export function ScheduleDialog({
             <Select id="sch-owner" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
               {owners.map((m) => (
                 <option key={m.userId} value={m.userId}>
-                  {m.userId === me.user.id ? `Eu (${m.name})` : `${m.name}${m.role === "closer" ? " · closer" : ""}`}
+                  {m.userId === me.user.id ? `Eu (${m.name})` : `${m.name}${actsAsCloser(m) ? " · closer" : ""}`}
                 </option>
               ))}
             </Select>

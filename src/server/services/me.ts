@@ -8,7 +8,7 @@ import { canViewEngagement } from "./engagement";
 export async function buildMe(ctx: Ctx) {
   const [orgs, counts, avatarAt, engagement] = await Promise.all([listUserOrgs(ctx.userId), navCounts(ctx), myAvatarUpdatedAt(ctx.userId), canViewEngagement(ctx)]);
   return {
-    user: { id: ctx.userId, name: ctx.userName, email: ctx.userEmail, role: ctx.role, avatarUrl: avatarUrl(ctx.userId, avatarAt) },
+    user: { id: ctx.userId, name: ctx.userName, email: ctx.userEmail, role: ctx.role, alsoCloser: !!ctx.alsoCloser, avatarUrl: avatarUrl(ctx.userId, avatarAt) },
     org: { id: ctx.orgId, ...ctx.org },
     orgs,
     counts,

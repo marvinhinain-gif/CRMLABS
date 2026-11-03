@@ -2,15 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { Activity, Building, CircleCheck, CircleX, Copy, MessageSquareQuote, Plug, RefreshCw, Send, ShieldCheck, SlidersHorizontal, Trash2, Unplug, UserRound, Users } from "lucide-react";
 import { api, ApiError, fetcher } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useQueryParam } from "@/lib/nav";
-import { ROLE_LABEL, type Member, type Role, type Stage } from "@/lib/types";
+import { actsAsCloser, ROLE_LABEL, type Member, type Role, type Stage } from "@/lib/types";
 import { formatDateTime, relativeTime } from "@/lib/format";
-import { Avatar, Badge, Button, Card, Dialog, EmptyState, Field, Input, LoadingState, NoPermission, PageHeader, Select, Switch, Tabs, Textarea } from "@/components/ui";
+import { Avatar, Badge, Button, Card, Checkbox, Dialog, EmptyState, Field, Input, LoadingState, NoPermission, PageHeader, Select, Switch, Tabs, Textarea } from "@/components/ui";
 import { ProfilePhoto } from "./ProfilePhoto";
 import { Copyable } from "./Copyable";
 import { InstagramSetup } from "./InstagramSetup";
@@ -313,12 +313,13 @@ function TeamTab() {
       setLoading(false);
     }
   };
-  const update = async (m: Member, patch: { role?: Role; status?: "active" | "disabled" }) => {
+  const update = async (m: Member, patch: { role?: Role; status?: "active" | "disabled"; alsoCloser?: boolean }) => {
     if (patch.status === "disabled" && !confirm(`Desativar ${m.name}? A pessoa perde o acesso imediatamente.`)) return;
     try {
       await api.patch(`/api/team/${m.userId}`, patch);
-      toast.success("Equipe atualizada.");
+      toast.success(patch.alsoCloser === true ? `${m.name} agora também é closer: recebe leads, tem o próprio Kanban no Comercial e aparece em "Encaminhar para closer".` : "Equipe atualizada.");
       mutate();
+      if (m.userId === me.user.id) void globalMutate("/api/me");
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -369,6 +370,7 @@ function TeamTab() {
                 </p>
                 <p className="truncate text-[12.5px] text-muted">
                   {m.email ?? ROLE_LABEL[m.role]}
+                  {actsAsCloser(m) && m.role !== "closer" ? " · também closer" : ""}
                   {m.lastLoginAt ? ` · último acesso ${relativeTime(m.lastLoginAt)}` : ""}
                 </p>
               </div>
@@ -385,6 +387,9 @@ function TeamTab() {
                     </option>
                   ))}
                 </Select>
+                {(m.role === "admin" || m.role === "manager") && (
+                  <Checkbox label="Também é closer" checked={!!m.alsoCloser} onChange={(v) => update(m, { alsoCloser: v })} />
+                )}
                 {m.status !== "invited" && (
                   <Button size="sm" variant="ghost" onClick={() => router.push(`/configuracoes?aba=atividade&pessoa=${m.userId}`)}>
                     Ver atividade
@@ -412,7 +417,7 @@ function TeamTab() {
                 )}
               </div>
             ) : (
-              <Badge>{ROLE_LABEL[m.role]}</Badge>
+              <Badge>{actsAsCloser(m) && m.role !== "closer" ? `${ROLE_LABEL[m.role]} · closer` : ROLE_LABEL[m.role]}</Badge>
             )}
           </li>
         ))}
@@ -429,6 +434,9 @@ function TeamTab() {
         </p>
         <p>
           <strong className="text-ink">Closer:</strong> oportunidades e contatos atribuídos; reuniões, ganhos e perdas.
+        </p>
+        <p className="sm:col-span-2">
+          <strong className="text-ink">Também é closer:</strong> administrador ou gestor que também fecha vendas. Mantém o acesso do papel, ganha o próprio Kanban no Comercial, aparece em “Encaminhar para closer” e entra no rodízio de leads de vendas.
         </p>
       </div>
       <Dialog
