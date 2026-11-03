@@ -7,7 +7,7 @@ import { and, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { TZDate } from "@date-fns/tz";
 import { db } from "../db";
-import { quizEvents, quizForms, quizFormVersions, quizSubmissions, socialPosts } from "../db/schema";
+import { instagramStories, quizEvents, quizForms, quizFormVersions, quizSubmissions, socialPosts } from "../db/schema";
 import type { Ctx } from "../context";
 import { AppError, invalid, notFound } from "../errors";
 import { logger } from "../logger";
@@ -112,7 +112,7 @@ const allowedImageUrl = (raw: string) => {
   }
 };
 
-async function downloadImage(url: string): Promise<Buffer> {
+export async function downloadImage(url: string): Promise<Buffer> {
   if (!allowedImageUrl(url)) throw new Error("host da imagem não permitido");
   const res = await fetch(url, { signal: AbortSignal.timeout(10_000), redirect: "error" });
   if (!res.ok) throw new Error(`download ${res.status}`);
@@ -141,6 +141,18 @@ async function findMedia(account: Account, type: ContentType, externalId: string
   }
 }
 
+async function savedStoryImage(accountId: string, externalId: string) {
+  const [r] = await db.select({ imageId: instagramStories.imageId }).from(instagramStories).where(and(eq(instagramStories.accountId, accountId), eq(instagramStories.externalId, externalId)));
+  return r?.imageId ?? null;
+}
+
+/** Story que já saiu do ar: monta o conteúdo a partir da cópia guardada pelo CRM. */
+async function savedStoryContent(accountId: string, orgId: string, externalId: string): Promise<LinkContent | null> {
+  const [r] = await db.select().from(instagramStories).where(and(eq(instagramStories.orgId, orgId), eq(instagramStories.accountId, accountId), eq(instagramStories.externalId, externalId)));
+  if (!r) return null;
+  return { source: "instagram", mediaType: r.mediaType ?? null, externalId: r.externalId, permalink: igPermalink(r.permalink), caption: clip(r.caption, 500), postedAt: iso(r.postedAt), imageId: r.imageId };
+}
+
 export const snapshotSchema = z.object({ type: z.enum(CONTENT_TYPES), externalId: z.string().trim().min(1).max(100) });
 
 /** Busca o conteúdo no Instagram (nunca aceita URL do cliente) e guarda a foto. */
@@ -151,6 +163,10 @@ export async function snapshotContent(ctx: Ctx, input: z.infer<typeof snapshotSc
   let media: MediaItem | null;
   try {
     media = await findMedia(account, input.type, input.externalId);
+    if (!media && input.type === "stories") {
+      const savedStory = await savedStoryContent(account.id, ctx.orgId, input.externalId);
+      if (savedStory) return savedStory;
+    }
   } catch (e) {
     if (!(e instanceof ProviderError)) throw e;
     await recordProviderError(account, e);
@@ -158,8 +174,10 @@ export async function snapshotContent(ctx: Ctx, input: z.infer<typeof snapshotSc
     throw new AppError("provider_error", "Não foi possível buscar esse conteúdo no Instagram agora. Tente novamente em instantes.");
   }
   if (!media) throw notFound(GONE);
-  const url = media.mediaType === "VIDEO" ? (media.thumbnailUrl ?? media.mediaUrl) : (media.mediaUrl ?? media.thumbnailUrl);
-  let imageId: string | null = null;
+  // Story já guardado pelo CRM: reaproveita a foto salva em vez de baixar de novo.
+  const savedImage = input.type === "stories" ? await savedStoryImage(account.id, media.id) : null;
+  const url = savedImage ? null : media.mediaType === "VIDEO" ? (media.thumbnailUrl ?? media.mediaUrl) : (media.mediaUrl ?? media.thumbnailUrl);
+  let imageId: string | null = savedImage;
   if (url) {
     try {
       imageId = (await uploadAsset(ctx, await downloadImage(url), "image")).id;

@@ -1,16 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import useSWR from "swr";
+import { useEffect, useMemo, useRef, useState } from "react";
+import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { ArrowRight, Check, Copy, ExternalLink, Inbox, Link2, Plus, RefreshCw, Sparkles } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import { useQueryParam } from "@/lib/nav";
 import { formatDate, relativeTime, TZ } from "@/lib/format";
-import { LINK_KIND_LABEL, type LinkKind, type SourceLink } from "@/lib/quiz/types";
+import { LINK_KIND_LABEL, type LinkContent, type LinkKind, type SourceLink } from "@/lib/quiz/types";
 import { Button, Card, cx, Dialog, EmptyState, ErrorState, Field, Input, LoadingState, Select } from "@/components/ui";
-import { ContentPicker, ContentThumb, KindBadge, KindIcon, stripImageUrl, type LinkContentWithImage } from "./ContentPicker";
+import { ContentPicker, ContentThumb, KindBadge, KindIcon, stripImageUrl, withImageUrl, type ContentType, type LinkContentWithImage } from "./ContentPicker";
+import { TopContentSection } from "./TopContentSection";
 import { copyText, CopyField, Kpi, pct, type FormListItem } from "./shared";
 
 type TrackedKind = "stories" | "feed" | "bio";
@@ -38,6 +39,11 @@ export function ContentTrackingView() {
   const [days, setDays] = useQueryParam("periodo", "30");
   const { data, error, isLoading, mutate } = useSWR<Report>(`/api/forms/content-report?days=${days}`, fetcher, { keepPreviousData: true });
   const [tracking, setTracking] = useState(false);
+  const [preset, setPreset] = useState<Preset | null>(null);
+  const open = (v: boolean) => {
+    setTracking(v);
+    if (!v) setPreset(null);
+  };
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
@@ -90,7 +96,23 @@ export function ContentTrackingView() {
         </>
       ) : null}
 
-      <TrackDialog open={tracking} onOpenChange={setTracking} onCreated={() => mutate()} />
+      <TopContentSection
+        onTrack={(type, externalId) => {
+          setPreset({ kind: type, externalId, n: Date.now() });
+          setTracking(true);
+        }}
+      />
+
+      <TrackDialog
+        open={tracking}
+        preset={preset}
+        onOpenChange={open}
+        onCreated={() => {
+          mutate();
+          // O chip "Rastreado em" dos conteúdos com mais interação.
+          void globalMutate((k) => typeof k === "string" && k.startsWith("/api/forms/top-content"));
+        }}
+      />
     </div>
   );
 }
@@ -220,8 +242,10 @@ export function autoLabel(kind: TrackedKind, c: LinkContentWithImage | null) {
 }
 
 type Created = { link: SourceLink & { url: string }; live: boolean };
+/** Conteúdo já escolhido fora do diálogo (ex.: "Rastrear este post"); `n` muda a cada clique. */
+type Preset = { kind: ContentType; externalId: string; n: number };
 
-function TrackDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (v: boolean) => void; onCreated: () => void }) {
+function TrackDialog({ open, preset, onOpenChange, onCreated }: { open: boolean; preset?: Preset | null; onOpenChange: (v: boolean) => void; onCreated: () => void }) {
   const { data: forms, error: formsError, mutate: refreshForms } = useSWR<FormListItem[]>(open ? "/api/forms?status=active" : null, fetcher);
   const [kind, setKind] = useState<TrackedKind>("stories");
   const [formId, setFormId] = useState("");
@@ -231,6 +255,45 @@ function TrackDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenC
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
   const [created, setCreated] = useState<Created | null>(null);
+  const [presetLoading, setPresetLoading] = useState(false);
+  // Refs para o resultado do snapshot não desfazer o que a pessoa mudou enquanto carregava.
+  const touchedRef = useRef(false);
+  const presetRun = useRef(0);
+  const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    if (open) clearTimeout(resetTimer.current);
+  }, [open]);
+
+  // Aberto a partir de um post/Stories: já guarda a foto e preenche o nome.
+  useEffect(() => {
+    if (!open || !preset) return;
+    const run = ++presetRun.current;
+    const alive = () => run === presetRun.current;
+    setKind(preset.kind);
+    setContent(null);
+    setCreated(null);
+    setErr(undefined);
+    setTouched(false);
+    touchedRef.current = false;
+    setLabel(autoLabel(preset.kind, null));
+    setPresetLoading(true);
+    api
+      .post<LinkContent>("/api/forms/content-snapshot", { type: preset.kind, externalId: preset.externalId })
+      .then((c) => {
+        if (!alive()) return;
+        if (!c.imageId) toast.warning("Não deu para guardar a foto deste conteúdo, mas o link funciona normalmente.");
+        const w = withImageUrl(c);
+        setContent(w);
+        if (!touchedRef.current) setLabel(autoLabel(preset.kind, w));
+      })
+      .catch((e) => alive() && toast.error(`${(e as Error).message} Escolha o conteúdo na lista.`))
+      .finally(() => alive() && setPresetLoading(false));
+    return () => {
+      // Fechou ou trocou de conteúdo antes de terminar: descarta o resultado e destrava o diálogo.
+      presetRun.current++;
+      setPresetLoading(false);
+    };
+  }, [open, preset]);
 
   // Formulário padrão: o mais recente no ar.
   const sorted = useMemo(() => [...(forms ?? [])].sort((a, b) => Number(b.live) - Number(a.live) || (b.publishedAt ?? b.createdAt).localeCompare(a.publishedAt ?? a.createdAt)), [forms]);
@@ -243,14 +306,19 @@ function TrackDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenC
     setContent(null);
     setLabel(autoLabel("stories", null));
     setTouched(false);
+    touchedRef.current = false;
     setErr(undefined);
     setCreated(null);
+    setPresetLoading(false);
   };
   const close = (v: boolean) => {
     onOpenChange(v);
-    if (!v) setTimeout(reset, 200);
+    if (!v) resetTimer.current = setTimeout(reset, 200);
   };
   const chooseKind = (k: TrackedKind) => {
+    // Trocar o tipo cancela o conteúdo que estava carregando.
+    presetRun.current++;
+    setPresetLoading(false);
     setKind(k);
     setContent(null);
     if (!touched) setLabel(autoLabel(k, null));
@@ -260,7 +328,7 @@ function TrackDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenC
     if (!touched) setLabel(autoLabel(kind, c));
   };
   const form = sorted.find((f) => f.id === formId);
-  const ready = !!form && label.trim().length > 0 && (kind === "bio" || !!content);
+  const ready = !!form && !presetLoading && label.trim().length > 0 && (kind === "bio" || !!content);
 
   const create = async () => {
     if (!form) return;
@@ -370,7 +438,15 @@ function TrackDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenC
           {kind !== "bio" && (
             <div className="flex flex-col gap-1.5">
               <span className="text-[14px] font-medium text-ink">{kind === "stories" ? "Qual Stories?" : "Qual post?"}</span>
-              {content ? (
+              {presetLoading ? (
+                <div className="flex min-w-0 items-center gap-3 rounded-[16px] border border-line p-3" aria-busy="true" aria-label="Guardando a foto do conteúdo">
+                  <div className={cx("skeleton shrink-0 rounded-[14px]", kind === "stories" ? "aspect-[9/16] w-14" : "aspect-[4/5] w-16")} />
+                  <div className="flex min-w-0 flex-1 flex-col gap-2">
+                    <div className="skeleton h-3.5 w-full" />
+                    <div className="skeleton h-3.5 w-2/3" />
+                  </div>
+                </div>
+              ) : content ? (
                 <div className="flex min-w-0 items-center gap-3 rounded-[16px] border border-line p-3">
                   <div className={cx("shrink-0", kind === "stories" ? "w-14" : "w-16")}>
                     <ContentThumb kind={kind} imageUrl={content.imageUrl} />
@@ -397,6 +473,7 @@ function TrackDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenC
               onChange={(e) => {
                 setLabel(e.target.value);
                 setTouched(true);
+                touchedRef.current = true;
                 setErr(undefined);
               }}
             />

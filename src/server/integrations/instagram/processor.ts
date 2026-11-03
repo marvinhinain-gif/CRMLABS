@@ -144,7 +144,7 @@ type MessagingEvent = {
   };
 };
 
-type Att = { type: string; url?: string; previewUrl?: string; title?: string };
+type Att = { type: string; url?: string; previewUrl?: string; title?: string; storyId?: string };
 
 /** Texto curto da lista de conversas, no estilo da caixa de entrada do Instagram. */
 export function messagePreview(text: string | null | undefined, attachments: Att[], unsupported = false, outbound = false) {
@@ -176,7 +176,7 @@ async function handleMessage(account: Account, ev: MessagingEvent) {
   const at = ev.timestamp ? new Date(ev.timestamp) : new Date();
   const [org] = await db.select().from(organizations).where(eq(organizations.id, account.orgId));
   const attachments: Att[] = (msg.attachments ?? []).map((a) => ({ type: a.type === "ig_reel" || a.type === "reel" ? "share" : a.type, url: a.payload?.url, title: a.payload?.title }));
-  if (msg.reply_to?.story) attachments.unshift({ type: "story_reply", url: msg.reply_to.story.url });
+  if (msg.reply_to?.story) attachments.unshift({ type: "story_reply", url: msg.reply_to.story.url, storyId: msg.reply_to.story.id });
   const preview = messagePreview(msg.text, attachments, !!msg.is_unsupported, isEcho);
 
   const result = await db.transaction(async (tx) => {

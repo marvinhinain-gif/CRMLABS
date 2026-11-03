@@ -78,7 +78,7 @@ describe("Directs", () => {
     await sendMessage(ctx.admin, conv.id, { text: "Te mando os detalhes!", clientRequestId: randomUUID() });
     expect((await listConversations(ctx.admin, { filter: "pending", limit: 30 })).rows).toHaveLength(0);
     const detail = await getConversation(ctx.admin, conv.id, { limit: 40 });
-    expect(detail.messages.find((m) => m.body === "amei")?.attachments).toEqual([{ type: "story_reply", url: "https://cdn/story" }]);
+    expect(detail.messages.find((m) => m.body === "amei")?.attachments).toEqual([{ type: "story_reply", url: "https://cdn/story", storyId: "s1" }]);
     const h = await instagramHistory(ctx.admin, { kind: "directs" });
     expect(h.rows.map((x) => x.action)).toEqual(["instagram.dm_sent", "instagram.dm_resolved"]);
     expect(h.rows[0]).toMatchObject({ actorName: "Admin", roleLabel: "Administrador", link: `/instagram?aba=directs&c=${conv.id}` });

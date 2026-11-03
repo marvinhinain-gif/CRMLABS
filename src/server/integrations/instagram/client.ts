@@ -51,6 +51,7 @@ export type Attachment = { type: string; url?: string; previewUrl?: string; titl
 export type ConversationMessage = { id: string; createdTime: string; fromId?: string; fromUsername?: string; text?: string; attachments: Attachment[]; unsupported?: boolean };
 export type ConversationItem = { id: string; updatedTime?: string; participants: { id: string; username?: string }[]; messages: ConversationMessage[] };
 export type ConversationPage = { items: ConversationItem[]; next: string | null };
+export type MediaPage = { items: MediaDetails[]; next: string | null };
 export type MediaDetails = MediaItem & { likeCount?: number; commentsCount?: number; comments?: CommentItem[] };
 
 /**
@@ -79,6 +80,8 @@ export interface InstagramApi {
   listConversations(token: string, opts: { limit: number; after?: string | null; messages?: number }): Promise<ConversationPage>;
   listMediaWithComments(token: string, limit: number): Promise<MediaDetails[]>;
   getMedia(token: string, mediaId: string): Promise<MediaDetails>;
+  /** Uma página de publicações do feed (mais recentes primeiro) com curtidas, contagem e os primeiros comentários. */
+  listMediaPage(token: string, opts: { after?: string | null; limit: number; commentsLimit: number }): Promise<MediaPage>;
   commentOnMedia(token: string, mediaId: string, text: string): Promise<{ id: string }>;
   hideComment(token: string, commentId: string, hide: boolean): Promise<void>;
   deleteComment(token: string, commentId: string): Promise<void>;
@@ -331,6 +334,14 @@ export class GraphInstagramApi implements InstagramApi {
     const fields = `id,caption,media_type,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count,comments.limit(50){${COMMENT_FIELDS},replies{${COMMENT_FIELDS}}}`;
     const r = await this.request<{ data?: (Record<string, unknown> & { comments?: { data?: RawComment[] } })[] }>(`${this.graph}/me/media?fields=${encodeURIComponent(fields)}&limit=${limit}`, { token });
     return (r.data ?? []).map((m) => this.toMedia(m));
+  }
+
+  async listMediaPage(token: string, opts: { after?: string | null; limit: number; commentsLimit: number }): Promise<MediaPage> {
+    const fields = `id,caption,media_type,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count,comments.limit(${opts.commentsLimit}){text}`;
+    const q = new URLSearchParams({ fields, limit: String(opts.limit) });
+    if (opts.after) q.set("after", opts.after);
+    const r = await this.request<{ data?: (Record<string, unknown> & { comments?: { data?: RawComment[] } })[]; paging?: { cursors?: { after?: string }; next?: string } }>(`${this.graph}/me/media?${q}`, { token });
+    return { items: (r.data ?? []).map((m) => this.toMedia(m)), next: r.paging?.next ? (r.paging.cursors?.after ?? null) : null };
   }
 
   async getMedia(token: string, mediaId: string): Promise<MediaDetails> {

@@ -151,6 +151,15 @@ export class FakeInstagramApi implements InstagramApi {
     this.record("getMedia", id);
     return this.media.find((m) => m.id === id) ?? this.feed.find((m) => m.id === id) ?? { id };
   }
+  /** Páginas de `listMediaPage` vêm de `pageMedia` (cursor = posição da próxima página). */
+  pageMedia: import("@/server/integrations/instagram/client").MediaDetails[] = [];
+  async listMediaPage(_t: string, opts: { after?: string | null; limit: number; commentsLimit: number }) {
+    this.record("listMediaPage", opts.after ?? null, opts.limit);
+    const start = opts.after ? Number(opts.after) : 0;
+    const items = this.pageMedia.slice(start, start + opts.limit);
+    const end = start + items.length;
+    return { items, next: end < this.pageMedia.length ? String(end) : null };
+  }
   async commentOnMedia(t: string, mediaId: string, text: string) {
     this.record("commentOnMedia", t, mediaId, text);
     this.outcome();
