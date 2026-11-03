@@ -30,6 +30,7 @@ import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
 import { audit, cleanText, closerPipeline, CONTATO_KEY, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
+import { linkContentFor } from "./contentTracking";
 import { activeEntryFor, addToBoard, syncLeadsWithBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
@@ -753,6 +754,8 @@ async function leadScoreOf(l: typeof leads.$inferSelect) {
       override: quizSubmissions.override,
       needsReview: sql<boolean>`coalesce((${quizSubmissions.recommendation}->>'needsReview')::boolean, false) and ${quizSubmissions.override} is null`,
       completedAt: quizSubmissions.completedAt,
+      linkKey: quizSubmissions.linkKey,
+      formLinks: quizForms.links,
     })
     .from(quizSubmissions)
     .innerJoin(quizForms, eq(quizForms.id, quizSubmissions.formId))
@@ -766,7 +769,7 @@ async function leadScoreOf(l: typeof leads.$inferSelect) {
     class: (l.scoreClass as LeadClass | null) ?? auto,
     auto,
     manual: l.scoreClass ? { byName: by?.name ?? null, at: l.scoreClassAt } : null,
-    application: app ? { id: app.id, formId: app.formId, formTitle: app.formTitle, score: app.score, tierLabel: app.tierLabel, productLabel, needsReview: app.needsReview, completedAt: app.completedAt } : null,
+    application: app ? { id: app.id, formId: app.formId, formTitle: app.formTitle, score: app.score, tierLabel: app.tierLabel, productLabel, needsReview: app.needsReview, completedAt: app.completedAt, linkContent: linkContentFor(app.formLinks, app.linkKey) } : null,
   };
 }
 

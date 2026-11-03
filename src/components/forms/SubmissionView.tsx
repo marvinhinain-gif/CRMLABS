@@ -10,6 +10,7 @@ import { SESSION_INTEREST_LABEL, type SessionInterest } from "@/lib/quiz/types";
 import { Badge, Button, Dialog, ErrorState, Field, LoadingState, Select, Textarea } from "@/components/ui";
 import { PhoneWhatsAppLink, WhatsAppButton } from "@/components/ui/WhatsApp";
 import { InstagramRelationship } from "@/components/integrations/InstagramRelationship";
+import { LinkContentCard } from "./ContentPicker";
 import { LEAD_STATUS_LABEL, TierBadge, type RecommendationView, type SubmissionDetail } from "./shared";
 
 const ROUTE_LABEL: Record<string, string> = { sales: "Comercial (closer)", relationship: "Leads (Social Seller pelo botão)", none: "Somente base de contatos" };
@@ -67,6 +68,8 @@ export function SubmissionView({ id, onOpenContact }: { id: string; onOpenContac
           {s.route && <p className="mt-2 text-[12px] text-muted">Destino: {ROUTE_LABEL[s.route.mode] ?? s.route.mode}</p>}
         </div>
       </div>
+
+      {s.linkContent && (s.linkContent.content || ["stories", "feed", "bio"].includes(s.linkContent.kind)) && <LinkContentCard view={s.linkContent} />}
 
       {s.recommendation && <RecommendationCard id={s.id} rec={s.recommendation} onChanged={(next) => mutate(next, { revalidate: false })} />}
 

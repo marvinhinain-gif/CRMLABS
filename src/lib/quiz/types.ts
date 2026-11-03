@@ -195,8 +195,24 @@ export type QuizDefinition = {
 };
 
 /** Link de origem: o mesmo formulário divulgado em lugares diferentes (?origem=chave). */
-export const LINK_KIND_LABEL = { stories: "Stories", whatsapp_group: "Grupo de WhatsApp", traffic: "Tráfego pago", bio: "Link da bio", direct: "Direct", other: "Outro" } as const;
+export const LINK_KIND_LABEL = { stories: "Stories", feed: "Post do feed", bio: "Link da bio", whatsapp_group: "Grupo de WhatsApp", traffic: "Tráfego pago", direct: "Direct", other: "Outro" } as const;
 export type LinkKind = keyof typeof LINK_KIND_LABEL;
+/** Conteúdo do Instagram que trouxe os cadastros (foto guardada em quiz_assets: a do Instagram expira). */
+export type LinkContent = {
+  /** Escolhido da conta do Instagram ou print enviado. */
+  source: "instagram" | "upload";
+  /** IMAGE | VIDEO | CAROUSEL_ALBUM (Instagram) ou null. */
+  mediaType: string | null;
+  /** Id da mídia no Instagram. */
+  externalId: string | null;
+  permalink: string | null;
+  /** Até 500 caracteres. */
+  caption: string | null;
+  /** ISO. */
+  postedAt: string | null;
+  /** quiz_assets.id, servido em /api/public/form-assets/:id. */
+  imageId: string | null;
+};
 export type SourceLink = {
   key: string;
   label: string;
@@ -208,6 +224,8 @@ export type SourceLink = {
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;
+  /** Conteúdo (Stories, post do feed...) que este link divulga. */
+  content?: LinkContent | null;
 };
 
 /** Valor de uma resposta: texto, id(s) de alternativa, número ou booleano (consentimento). */

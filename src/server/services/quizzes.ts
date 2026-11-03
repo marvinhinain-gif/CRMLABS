@@ -318,6 +318,7 @@ const LINK_SOURCE: Partial<Record<LinkKind, { key: string; name: string; color: 
   stories: { key: "stories", name: "Stories", color: "pink" },
   traffic: { key: "trafego-pago", name: "Tráfego Pago", color: "blue" },
   whatsapp_group: { key: "grupo-whatsapp", name: "Grupo de WhatsApp", color: "green" },
+  feed: { key: "conteudo-organico", name: "Conteúdo Orgânico", color: "green" },
   bio: { key: "conteudo-organico", name: "Conteúdo Orgânico", color: "green" },
   direct: { key: "conteudo-organico", name: "Conteúdo Orgânico", color: "green" },
 };
@@ -349,7 +350,7 @@ async function sourceNamed(tx: DbOrTx, orgId: string, name: string) {
 }
 
 /** Valida os links, confere as origens e preenche a origem padrão de cada tipo. */
-async function prepareLinks(tx: DbOrTx, orgId: string, raw: unknown): Promise<SourceLink[]> {
+export async function prepareLinks(tx: DbOrTx, orgId: string, raw: unknown): Promise<SourceLink[]> {
   const r = linksSchema.safeParse(raw);
   if (!r.success) throw invalid(r.error.issues[0]?.message ?? "Links de origem inválidos.");
   const out: SourceLink[] = [];
@@ -362,7 +363,12 @@ async function prepareLinks(tx: DbOrTx, orgId: string, raw: unknown): Promise<So
       const [s] = await tx.select({ id: leadSources.id }).from(leadSources).where(and(eq(leadSources.id, sourceId), eq(leadSources.orgId, orgId)));
       if (!s) throw invalid(`A origem escolhida para o link “${l.label}” não existe mais.`);
     } else sourceId = await defaultSourceFor(tx, orgId, l.kind);
-    out.push({ ...l, sourceId, utmSource: l.utmSource || null, utmMedium: l.utmMedium || null, utmCampaign: l.utmCampaign || null });
+    let content = l.content;
+    if (content?.imageId) {
+      const [img] = await tx.select({ id: quizAssets.id }).from(quizAssets).where(and(eq(quizAssets.id, content.imageId), eq(quizAssets.orgId, orgId)));
+      if (!img) content = { ...content, imageId: null };
+    }
+    out.push({ ...l, ...(content !== undefined ? { content } : {}), sourceId, utmSource: l.utmSource || null, utmMedium: l.utmMedium || null, utmCampaign: l.utmCampaign || null });
   }
   return out;
 }

@@ -4,13 +4,15 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { CircleAlert, ExternalLink, Inbox, Link2, Plus, RefreshCw, Rocket, Trash2, Undo2 } from "lucide-react";
+import { CircleAlert, ExternalLink, ImagePlus, Inbox, Link2, Plus, RefreshCw, Rocket, Trash2, Undo2 } from "lucide-react";
 import { api, fetcher } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { personalLink } from "@/lib/quiz/instagramLink";
 import { LINK_KIND_LABEL, type LinkKind, type SourceLink } from "@/lib/quiz/types";
 import { Badge, Button, Dialog, Field, IconButton, Input, Select } from "@/components/ui";
 import { CopyField, EmbedCodes, StatusBadge, type EditorOptions, type FormDetail } from "../shared";
+import { ContentPickerDialog, ContentThumb, stripImageUrl, type ContentType } from "../ContentPicker";
+import { assetSrc } from "../QuizRunner";
 import { Panel, TagInput } from "./common";
 
 const ACTION_LABEL: Record<string, string> = {
@@ -32,6 +34,7 @@ const NEW_SOURCE = "__nova__";
 /** Origem usada quando o link fica em "Padrão do tipo" (igual ao servidor). */
 const DEFAULT_SOURCE_NAME: Record<LinkKind, string> = {
   stories: "Stories",
+  feed: "Conteúdo Orgânico",
   whatsapp_group: "Grupo de WhatsApp",
   traffic: "Tráfego Pago",
   bio: "Conteúdo Orgânico",
@@ -41,6 +44,7 @@ const DEFAULT_SOURCE_NAME: Record<LinkKind, string> = {
 
 const KIND_UTM: Record<LinkKind, [string, string]> = {
   stories: ["instagram", "stories"],
+  feed: ["instagram", "feed"],
   whatsapp_group: ["whatsapp", "grupo"],
   traffic: ["meta", "cpc"],
   bio: ["instagram", "bio"],
@@ -91,6 +95,7 @@ function LinksPanel({ form, links, setLinks, sources }: { form: FormDetail; link
     setLinks([...links, { key, label: "Novo link", kind: "other", sourceId: null, utmSource: null, utmMedium: null, utmCampaign: null }]);
   };
   const saved = (l: SourceLink) => form.links.some((x) => x.key === l.key);
+  const [picking, setPicking] = useState<{ i: number; type: ContentType } | null>(null);
   return (
     <Panel
       title="Links de origem"
@@ -156,6 +161,37 @@ function LinksPanel({ form, links, setLinks, sources }: { form: FormDetail; link
                   </Select>
                 </Field>
               </div>
+              {(l.content || l.kind === "stories" || l.kind === "feed") && (
+                <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-[14px] bg-page p-2.5">
+                  {l.content ? (
+                    <div className={l.kind === "stories" ? "w-10 shrink-0" : "w-12 shrink-0"}>
+                      <ContentThumb kind={l.kind} imageUrl={assetSrc(l.content.imageId)} className="rounded-[10px]" />
+                    </div>
+                  ) : (
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-white text-muted" aria-hidden>
+                      <ImagePlus className="size-5" />
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1 basis-[180px] text-[13px]">
+                    <p className="font-medium text-ink">{l.content ? "Conteúdo deste link" : "Nenhum conteúdo escolhido"}</p>
+                    <p className="line-clamp-2 break-words text-muted">
+                      {l.content ? (l.content.caption ?? (l.content.source === "upload" ? "Print enviado" : "Sem legenda")) : "Escolha o Stories ou post que vai divulgar este link para ver de onde vieram os cadastros."}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-1 max-sm:w-full max-sm:[&>*]:grow">
+                    {(l.kind === "stories" || l.kind === "feed") && (
+                      <Button size="sm" variant="secondary" onClick={() => setPicking({ i, type: l.kind as ContentType })}>
+                        {l.content ? "Trocar conteúdo" : "Escolher conteúdo"}
+                      </Button>
+                    )}
+                    {l.content && (
+                      <Button size="sm" variant="ghost" onClick={() => set(i, { content: null })}>
+                        Remover
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
               {l.newSourceName != null && (
                 <Field label="Nome da nova origem" htmlFor={`lk-n-${i}`} hint="Ex.: Live de terça, Parceria com @fulano. Se já existir uma origem com esse nome, ela é usada.">
                   <Input id={`lk-n-${i}`} value={l.newSourceName} maxLength={60} autoFocus placeholder="Como quer chamar essa origem?" onChange={(e) => set(i, { newSourceName: e.target.value })} />
@@ -191,6 +227,7 @@ function LinksPanel({ form, links, setLinks, sources }: { form: FormDetail; link
           <Link2 className="size-3.5" aria-hidden /> Vale na hora ao salvar, sem publicar. No site, use <code className="rounded bg-page px-1">data-crmlabs-origem=&quot;chave&quot;</code> no código de incorporação.
         </p>
       </div>
+      {picking && <ContentPickerDialog type={picking.type} open onOpenChange={(v) => !v && setPicking(null)} onPicked={(c) => set(picking.i, { content: stripImageUrl(c) })} />}
     </Panel>
   );
 }

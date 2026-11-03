@@ -15,6 +15,7 @@ import {
   Copy,
   Eye,
   FileText,
+  Images,
   Inbox,
   Link2,
   MoreHorizontal,
@@ -34,6 +35,7 @@ import { useQueryParam } from "@/lib/nav";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { PRIVACY_KIND_LABEL } from "@/lib/quiz/types";
 import { Badge, Button, Card, cx, Dialog, EmptyState, ErrorState, Field, IconButton, Input, LoadingState, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, NoPermission, PageHeader, Select, Tabs } from "@/components/ui";
+import { ContentTrackingView } from "./ContentTrackingView";
 import { BarList, copyText, DailyChart, EmbedDialog, Kpi, pct, StatusBadge, type Counted, type FormDetail, type FormListItem } from "./shared";
 
 type Dashboard = {
@@ -473,18 +475,19 @@ export function FormsView() {
           </Button>
         }
       />
-      {isAdmin && (
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          items={[
-            { value: "formularios", label: "Formulários", icon: <BarChart3 /> },
-            { value: "privacidade", label: "Pedidos LGPD", icon: <ShieldCheck /> },
-          ]}
-        />
-      )}
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: "formularios", label: "Formulários", icon: <BarChart3 /> },
+          { value: "conteudos", label: "Conteúdos", icon: <Images /> },
+          ...(isAdmin ? [{ value: "privacidade", label: "Pedidos LGPD", icon: <ShieldCheck /> }] : []),
+        ]}
+      />
       {tab === "privacidade" && isAdmin ? (
         <PrivacyRequests />
+      ) : tab === "conteudos" ? (
+        <ContentTrackingView />
       ) : (
         <>
           <DashboardSection days={days} setDays={setDays} />

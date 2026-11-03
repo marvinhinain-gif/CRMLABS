@@ -14,6 +14,8 @@ import { Avatar, Button, cx, ErrorState, LoadingState, Select, Sheet, SheetClose
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { JourneySection, OriginTrail, type Journey } from "@/components/integrations/Journey";
+import { LinkContentCard } from "@/components/forms/ContentPicker";
+import type { LinkContentView } from "@/components/forms/shared";
 import { LEAD_CLASS, LEAD_CLASSES, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
 import { ALL_SDRS, type ForwardToKanbanResult, type SdrBoard, type Stage } from "@/lib/types";
 
@@ -247,7 +249,7 @@ type LeadScore = {
   class: LeadClass | null;
   auto: LeadClass | null;
   manual: { byName: string | null; at: string } | null;
-  application: { id: string; formId: string; formTitle: string; score: number | null; tierLabel: string | null; productLabel: string | null; needsReview: boolean; completedAt: string } | null;
+  application: { id: string; formId: string; formTitle: string; score: number | null; tierLabel: string | null; productLabel: string | null; needsReview: boolean; completedAt: string; linkContent?: LinkContentView | null } | null;
 };
 
 /** Lead score por produto: classe valendo, de onde veio e troca manual. */
@@ -284,7 +286,9 @@ function LeadScoreCard({ s, busy, onSet, isAdmin }: { s: LeadScore; busy: string
             </span>
           </span>
         </div>
-      ) : (
+      ) : null}
+      {app?.linkContent && (app.linkContent.content || ["stories", "feed", "bio"].includes(app.linkContent.kind)) && <LinkContentCard view={app.linkContent} compact />}
+      {!app && (
         <p className="mt-2 text-[13px] text-muted">Este lead ainda não respondeu o quiz de aplicação. Classifique depois da conversa.</p>
       )}
       {!s.manual && !s.class && app?.needsReview && <p className="mt-2 rounded-[12px] bg-warning-soft px-3 py-2 text-[12.5px] text-warning">O quiz pediu análise da equipe: escolha a classificação abaixo.</p>}

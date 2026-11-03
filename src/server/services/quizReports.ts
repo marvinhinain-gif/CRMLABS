@@ -13,6 +13,7 @@ import { can, contactScope } from "../permissions";
 import { publish } from "../realtime";
 import { audit } from "./common";
 import { assertForms, originLabel } from "./quizzes";
+import { linkContentFor } from "./contentTracking";
 import { addTags, removeTags, scoreWith } from "./quizPublic";
 import { cleanText } from "./common";
 import { buildCsv, buildXlsx, type Cell } from "../xlsx";
@@ -40,6 +41,8 @@ export const responseFilterSchema = z.object({
   /** Produto final (ajuste manual, senão a sugestão); "none" = sem sugestão. */
   product: z.string().max(60).optional(),
   origin: z.string().max(120).optional(),
+  /** Chave do link de origem (?origem=). */
+  link: z.string().max(40).optional(),
   assignedTo: z.string().uuid().optional(),
   status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified"]).optional(),
   q: z.string().trim().max(100).optional(),
@@ -68,6 +71,7 @@ function filterConds(ctx: Ctx, formId: string, f: ResponseFilter): SQL[] {
   if (f.tier) conds.push(f.tier === "none" ? isNull(quizSubmissions.tierId) : eq(quizSubmissions.tierId, f.tier));
   if (f.product) conds.push(f.product === "none" ? sql`${productSql} is null` : sql`${productSql} = ${f.product}`);
   if (f.origin) conds.push(sql`${originSql} = ${f.origin}`);
+  if (f.link) conds.push(eq(quizSubmissions.linkKey, f.link));
   if (f.assignedTo) conds.push(eq(leads.assignedTo, f.assignedTo));
   if (f.status) conds.push(eq(leads.status, f.status));
   if (f.q) {
@@ -98,6 +102,7 @@ const baseSelect = {
   channel: quizSubmissions.channel,
   utm: quizSubmissions.utm,
   linkLabel: quizSubmissions.linkLabel,
+  linkKey: quizSubmissions.linkKey,
   origin: originSql,
   completedAt: quizSubmissions.completedAt,
   versionId: quizSubmissions.versionId,
@@ -126,7 +131,12 @@ export async function listResponses(ctx: Ctx, formId: string, f: ResponseFilter 
     .limit(PAGE)
     .offset((page - 1) * PAGE);
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(quizSubmissions).leftJoin(leads, eq(leads.id, quizSubmissions.leadId)).where(where);
-  return { rows, total, page, pageSize: PAGE };
+  // Tipo e foto do conteúdo vêm dos links do formulário, em memória (sem consulta por linha).
+  const out = rows.map(({ linkKey, ...r }) => {
+    const c = linkContentFor(form.links, linkKey);
+    return { ...r, linkKind: c?.kind ?? null, linkImageUrl: c?.content?.imageUrl ?? null };
+  });
+  return { rows: out, total, page, pageSize: PAGE };
 }
 
 /** Faixas, origens e responsáveis presentes (para os filtros). */
@@ -157,7 +167,7 @@ export async function responseFilterOptions(ctx: Ctx, formId: string) {
 export async function getSubmission(ctx: Ctx, submissionId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(submissionId)) throw notFound("Resposta não encontrada.");
   const [s] = await db
-    .select({ s: quizSubmissions, formName: quizForms.name, formTitle: sql<string>`${quizForms.draft}->'settings'->>'title'`, contactOwner: contacts.ownerId })
+    .select({ s: quizSubmissions, formName: quizForms.name, formLinks: quizForms.links, formTitle: sql<string>`${quizForms.draft}->'settings'->>'title'`, contactOwner: contacts.ownerId })
     .from(quizSubmissions)
     .innerJoin(quizForms, eq(quizForms.id, quizSubmissions.formId))
     .leftJoin(contacts, eq(contacts.id, quizSubmissions.contactId))
@@ -217,6 +227,7 @@ export async function getSubmission(ctx: Ctx, submissionId: string) {
     channel: s.s.channel,
     origin: originLabel(s.s.channel, s.s.utm.utm_source, s.s.linkLabel),
     linkLabel: s.s.linkLabel,
+    linkContent: linkContentFor(s.formLinks, s.s.linkKey),
     recommendation: recommendationView(def, s.s.recommendation as RecommendationResult | null, s.s.override),
     utm: s.s.utm,
     referrer: s.s.referrer,
@@ -319,6 +330,7 @@ export async function formAnalytics(ctx: Ctx, formId: string, f: ResponseFilter)
   const evConds: SQL[] = [eq(quizEvents.formId, form.id)];
   if (f.from) evConds.push(gte(quizEvents.createdAt, dayStart(f.from, ctx.org.timezone)));
   if (f.to) evConds.push(lt(quizEvents.createdAt, new Date(dayStart(f.to, ctx.org.timezone).getTime() + 86400000)));
+  if (f.link) evConds.push(eq(quizEvents.linkKey, f.link));
   const [ev] = await db
     .select({ views: sql<number>`count(*) filter (where ${quizEvents.kind} = 'view')::int`, starts: sql<number>`count(*) filter (where ${quizEvents.kind} = 'start')::int` })
     .from(quizEvents)
