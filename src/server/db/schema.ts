@@ -590,7 +590,7 @@ export const messages = pgTable(
     /** mid do provedor; único por conversa/organização para deduplicação. */
     externalId: text("external_id"),
     body: text("body"),
-    attachments: jsonb("attachments").$type<{ type: string; url?: string; previewUrl?: string; title?: string }[]>(),
+    attachments: jsonb("attachments").$type<{ type: string; url?: string; previewUrl?: string; title?: string; storyId?: string }[]>(),
     status: messageStatusEnum("status").notNull(),
     error: text("error"),
     /** Idempotência por clique: o cliente gera um id por tentativa de envio. */
@@ -605,6 +605,8 @@ export const messages = pgTable(
     index("messages_conversation_idx").on(t.conversationId, t.sentAt),
     /** Cursor da coleta do Top Engajados (ordem de gravação). */
     index("messages_created_idx").on(t.createdAt, t.id),
+    /** Respostas recebidas por período (ranking de stories por palavra-chave). */
+    index("messages_org_inbound_sent_idx").on(t.orgId, t.sentAt).where(sql`direction = 'in'`),
   ],
 );
 
@@ -636,6 +638,24 @@ export const socialPosts = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("social_posts_uq").on(t.accountId, t.externalId)],
+);
+
+/** Stories guardados pelo CRM (a API só devolve os das últimas 24h); a foto fica em quiz_assets. */
+export const instagramStories = pgTable(
+  "instagram_stories",
+  {
+    id: id(),
+    orgId: orgRef(),
+    accountId: uuid("account_id").notNull().references(() => connectedAccounts.id, { onDelete: "cascade" }),
+    externalId: text("external_id").notNull(),
+    mediaType: text("media_type"),
+    permalink: text("permalink"),
+    caption: text("caption"),
+    imageId: uuid("image_id").references(() => quizAssets.id, { onDelete: "set null" }),
+    postedAt: ts("posted_at"),
+    capturedAt: ts("captured_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("instagram_stories_uq").on(t.accountId, t.externalId), index("instagram_stories_org_idx").on(t.orgId, t.postedAt.desc())],
 );
 
 export const socialComments = pgTable(

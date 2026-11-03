@@ -176,6 +176,13 @@
       "when": 1793650140183,
       "tag": "0024_horario_atendimento",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793673303014,
+      "tag": "0025_stories_salvos",
+      "breakpoints": true
     }
   ]
 }

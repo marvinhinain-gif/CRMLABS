@@ -631,6 +631,11 @@ export const ASSET_MAX_UPLOAD = 8 * 1024 * 1024;
 
 export async function uploadAsset(ctx: Ctx, buf: Buffer, kind: "logo" | "cover" | "image") {
   assertForms(ctx);
+  return storeImage(ctx.orgId, buf, ctx.userId, kind);
+}
+
+/** Valida, reprocessa (WebP) e guarda a imagem em quiz_assets. Sem permissão: quem chama já autorizou. */
+export async function storeImage(orgId: string, buf: Buffer, createdBy: string | null, kind: "logo" | "cover" | "image") {
   if (!buf.length) throw invalid("Escolha uma imagem.");
   if (buf.length > ASSET_MAX_UPLOAD) throw invalid("Imagem grande demais (máximo 8 MB).");
   const type = sniffImage(buf);
@@ -655,7 +660,7 @@ export async function uploadAsset(ctx: Ctx, buf: Buffer, kind: "logo" | "cover" 
     logger.warn("Imagem do formulário guardada sem reprocessar", e);
     if (buf.length > 1_500_000) throw invalid("Não foi possível processar esta imagem. Tente um arquivo menor.");
   }
-  const [row] = await db.insert(quizAssets).values({ orgId: ctx.orgId, data, mime, width, height, createdBy: ctx.userId }).returning({ id: quizAssets.id });
+  const [row] = await db.insert(quizAssets).values({ orgId, data, mime, width, height, createdBy }).returning({ id: quizAssets.id });
   return { id: row.id, url: assetUrl(row.id) };
 }
 

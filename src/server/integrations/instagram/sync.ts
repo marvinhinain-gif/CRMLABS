@@ -1,11 +1,13 @@
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../../db";
-import { channelIdentities, connectedAccounts, contacts, conversations, messages, organizations, socialComments, socialPosts } from "../../db/schema";
+import { channelIdentities, connectedAccounts, contacts, conversations, instagramStories, messages, organizations, socialComments, socialPosts } from "../../db/schema";
 import { publish } from "../../realtime";
 import { logger } from "../../logger";
 import { getInstagramApi, ProviderError, type ConversationItem, type MediaDetails } from "./client";
 import { tsz } from "../../time";
 import { capabilitiesOf, getAccountToken, recordProviderError, type Account } from "./accounts";
+import { downloadImage } from "../../services/contentTracking";
+import { storeImage } from "../../services/quizzes";
 import { autoResolveThreads, enrichProfile, messagePreview, resolveContact } from "./processor";
 
 const g = globalThis as unknown as { __igSyncAt?: Map<string, number>; __igSyncRunning?: Set<string> };
@@ -80,6 +82,40 @@ export async function upsertMedia(account: Account, m: MediaDetails) {
   }
   await autoResolveThreads(account.id);
   return { post, created };
+}
+
+export type SyncPart = "directs" | "comments" | "stories";
+
+/**
+ * Guarda cada story ativo (a API só devolve os das últimas 24h) com a foto, para o histórico de stories crescer.
+ * Story já guardado é ignorado. Se a foto falhar, tenta de novo na próxima sincronização enquanto o story ainda está
+ * no ar (até 20h de vida); depois disso guarda sem foto para não perder o story.
+ */
+async function captureStories(account: Account, token: string) {
+  const list = await getInstagramApi().listStories(token);
+  let saved = 0;
+  for (const m of list) {
+    const [exists] = await db.select({ id: instagramStories.id }).from(instagramStories).where(and(eq(instagramStories.accountId, account.id), eq(instagramStories.externalId, m.id)));
+    if (exists) continue;
+    let imageId: string | null = null;
+    const url = m.mediaType === "VIDEO" ? (m.thumbnailUrl ?? m.mediaUrl) : (m.mediaUrl ?? m.thumbnailUrl);
+    if (url) {
+      try {
+        imageId = (await storeImage(account.orgId, await downloadImage(url), null, "image")).id;
+      } catch (e) {
+        logger.warn("Foto do story não foi guardada", e);
+        const ageMs = m.timestamp ? Date.now() - new Date(m.timestamp).getTime() : Infinity;
+        if (ageMs < 20 * 3600_000) continue;
+      }
+    }
+    const ins = await db
+      .insert(instagramStories)
+      .values({ orgId: account.orgId, accountId: account.id, externalId: m.id, mediaType: m.mediaType ?? null, permalink: m.permalink ?? null, caption: m.caption?.trim().slice(0, 500) || null, imageId, postedAt: m.timestamp ? new Date(m.timestamp) : null })
+      .onConflictDoNothing()
+      .returning({ id: instagramStories.id });
+    saved += ins.length;
+  }
+  return saved;
 }
 
 const PAGE_SIZE = 25;
@@ -244,8 +280,8 @@ async function syncConversations(account: Account, token: string, backfillPages 
  * Sincroniza a conta pela API oficial: Direct (conversas) e publicações com comentários.
  * Uma execução por vez por conta; chamadas repetidas em menos de `minIntervalMs` são ignoradas.
  */
-export async function syncAccount(account: Account, opts: { minIntervalMs?: number; parts?: ("directs" | "comments")[]; backfillPages?: number } = {}) {
-  const parts = opts.parts ?? ["directs", "comments"];
+export async function syncAccount(account: Account, opts: { minIntervalMs?: number; parts?: SyncPart[]; backfillPages?: number } = {}) {
+  const parts = opts.parts ?? ["directs", "comments", "stories"];
   const key = `${account.id}:${parts.join(",")}`;
   if (running.has(account.id)) return { skipped: true as const };
   const [org] = await db.select({ isDemo: organizations.isDemo }).from(organizations).where(eq(organizations.id, account.orgId));
@@ -254,7 +290,7 @@ export async function syncAccount(account: Account, opts: { minIntervalMs?: numb
   const caps = capabilitiesOf(account);
   running.add(account.id);
   lastSync.set(key, Date.now());
-  const result = { conversations: 0, newMessages: 0, media: 0, newComments: 0, backfill: null as { done: boolean; pages: number } | null, errors: [] as string[] };
+  const result = { conversations: 0, newMessages: 0, media: 0, newComments: 0, newStories: 0, backfill: null as { done: boolean; pages: number } | null, errors: [] as string[] };
   try {
     const token = await getAccountToken(account.id);
     if (parts.includes("directs") && caps.sendMessages) {
@@ -275,6 +311,14 @@ export async function syncAccount(account: Account, opts: { minIntervalMs?: numb
         result.errors.push(`Comentários: ${(e as Error).message}`);
       }
     }
+    if (parts.includes("stories") && (caps.readComments || caps.sendMessages)) {
+      try {
+        result.newStories = await captureStories(account, token);
+      } catch (e) {
+        await recordProviderError(account, e);
+        result.errors.push(`Stories: ${(e as Error).message}`);
+      }
+    }
     await db.update(connectedAccounts).set({ lastCheckedAt: new Date() }).where(eq(connectedAccounts.id, account.id));
   } catch (e) {
     await recordProviderError(account, e);
@@ -289,7 +333,7 @@ export async function syncAccount(account: Account, opts: { minIntervalMs?: numb
 }
 
 /** Abre a caixa de entrada → atualiza em segundo plano se a última sincronização tiver mais de 2 minutos. */
-export function syncSoon(account: Account | null, parts?: ("directs" | "comments")[]) {
+export function syncSoon(account: Account | null, parts?: SyncPart[]) {
   if (!account || account.status !== "connected" || process.env.VITEST === "true") return;
   void syncAccount(account, { minIntervalMs: 120_000, parts }).catch((e) => logger.warn("Falha na sincronização do Instagram", e));
 }
