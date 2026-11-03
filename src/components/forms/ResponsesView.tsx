@@ -9,9 +9,11 @@ import { fetcher, qs } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { formatDateTime } from "@/lib/format";
 import { PhoneWhatsAppLink, WhatsAppButton } from "@/components/ui/WhatsApp";
-import { Button, Card, EmptyState, ErrorState, IconButton, Input, LoadingState, NoPermission, Select, Sheet, SheetClose } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, ErrorState, IconButton, Input, LoadingState, NoPermission, Select, Sheet, SheetClose } from "@/components/ui";
 import { BarList, DailyChart, Kpi, LEAD_STATUS_LABEL, pct, TierBadge, type FormDetail } from "./shared";
 import { SubmissionView } from "./SubmissionView";
+import { KindIcon } from "./ContentPicker";
+import { LINK_KIND_LABEL, type LinkKind } from "@/lib/quiz/types";
 
 type Row = {
   id: string;
@@ -36,6 +38,8 @@ type Row = {
   anonymizedAt: string | null;
   leadStatus: string | null;
   assignedName: string | null;
+  linkKind?: LinkKind | null;
+  linkImageUrl?: string | null;
 };
 type Analytics = {
   views: number;
@@ -55,7 +59,7 @@ type Analytics = {
 };
 type FilterOptions = { tiers: { id: string; label: string; color: string }[]; products: { id: string; label: string; color: string }[]; origins: string[]; people: { id: string; name: string }[] };
 
-const FILTER_KEYS = ["from", "to", "scoreMin", "scoreMax", "tier", "product", "origin", "assignedTo", "status", "q", "duplicates"] as const;
+const FILTER_KEYS = ["from", "to", "scoreMin", "scoreMax", "tier", "product", "origin", "assignedTo", "status", "q", "duplicates", "link"] as const;
 
 export function ResponsesView({ id }: { id: string }) {
   const me = useMe();
@@ -221,6 +225,16 @@ export function ResponsesView({ id }: { id: string }) {
             </div>
           )}
         </div>
+        {filters.link && (
+          <div className="mt-3 flex min-w-0">
+            <Badge tone="brand" className="max-w-full pr-1">
+              <span className="truncate">Conteúdo: {form?.links.find((l) => l.key === filters.link)?.label ?? filters.link}</span>
+              <button type="button" aria-label="Tirar o filtro de conteúdo" title="Tirar o filtro" onClick={() => setParams({ link: null })} className="-my-1 inline-flex size-7 shrink-0 items-center justify-center rounded-full hover:bg-white/70">
+                <X className="size-3.5" />
+              </button>
+            </Badge>
+          </div>
+        )}
       </Card>
 
       {/* Indicadores */}
@@ -239,7 +253,7 @@ export function ResponsesView({ id }: { id: string }) {
             <Kpi i={5} icon={<Gauge />} label="Score médio" value={stats.avgScore ?? "—"} />
             <Kpi i={6} icon={<Star />} label="Qualificados" value={stats.qualified.toLocaleString("pt-BR")} />
           </div>
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-3">
             <Card className="p-5 lg:col-span-2">
               <h3 className="mb-4 text-[16px] font-semibold">Respostas por dia</h3>
               <DailyChart series={stats.series} />
@@ -360,7 +374,9 @@ export function ResponsesView({ id }: { id: string }) {
                           <ProductCell r={r} color={productColor(r.productId)} />
                         </td>
                       )}
-                      <td className="px-3 py-3 text-muted">{r.origin}</td>
+                      <td className="px-3 py-3 text-muted">
+                        <OriginCell r={r} />
+                      </td>
                       <td className="px-3 py-3 text-muted">{r.assignedName ?? "—"}</td>
                       <td className="py-3 pl-3 text-muted">{r.duplicateOf ? "Envio repetido" : r.leadStatus ? LEAD_STATUS_LABEL[r.leadStatus] : "—"}</td>
                     </tr>
@@ -382,7 +398,7 @@ export function ResponsesView({ id }: { id: string }) {
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
                       <TierBadge label={r.tierLabel} color={tierColor(r.tierId)} />
                       {hasProducts && <ProductCell r={r} color={productColor(r.productId)} />}
-                      <span>{r.origin}</span>
+                      <OriginCell r={r} />
                       {r.assignedName && <span>· {r.assignedName}</span>}
                     </div>
                   </button>
@@ -419,6 +435,25 @@ export function ResponsesView({ id }: { id: string }) {
         <div className="flex-1 overflow-y-auto scroll-thin px-5 py-5">{selected && <SubmissionView id={selected} onOpenContact={(cid) => setParams({ resposta: null, contato: cid })} />}</div>
       </Sheet>
     </div>
+  );
+}
+
+/** Origem com a foto (ou o tipo) do conteúdo que trouxe o cadastro. */
+function OriginCell({ r }: { r: Row }) {
+  if (!r.linkKind || (!r.linkImageUrl && !["stories", "feed", "bio"].includes(r.linkKind))) return <span>{r.origin}</span>;
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-center gap-2" title={LINK_KIND_LABEL[r.linkKind]}>
+      {r.linkImageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={r.linkImageUrl} alt="" loading="lazy" className="size-7 shrink-0 rounded-[8px] border border-line object-cover" />
+      ) : (
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-selected text-brand">
+          <KindIcon kind={r.linkKind} className="size-4" />
+        </span>
+      )}
+      <span className="min-w-0 truncate">{r.origin}</span>
+      <span className="sr-only">({LINK_KIND_LABEL[r.linkKind]})</span>
+    </span>
   );
 }
 

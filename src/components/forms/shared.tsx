@@ -4,7 +4,7 @@ import { useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Check, Copy } from "lucide-react";
 import { Badge, Button, Card, cx, Dialog, Tabs } from "@/components/ui";
-import { FORM_STATUS_LABEL, type FormStatus, type QuizDefinition, type SessionInterest, type SourceLink } from "@/lib/quiz/types";
+import { FORM_STATUS_LABEL, type FormStatus, type LinkContent, type LinkKind, type QuizDefinition, type SessionInterest, type SourceLink } from "@/lib/quiz/types";
 
 // ---------- Tipos das respostas da API ----------
 
@@ -73,6 +73,7 @@ export type SubmissionDetail = {
   channel: "link" | "embed";
   origin: string;
   linkLabel: string | null;
+  linkContent?: LinkContentView | null;
   recommendation: RecommendationView | null;
   utm: Record<string, string | undefined>;
   referrer: string | null;
@@ -87,6 +88,8 @@ export type SubmissionDetail = {
   consents: { kind: string; granted: boolean; textVersion: string; text: string; createdAt: string }[];
   history: { id: string; score: number | null; rawPoints: number; maxPoints: number; tierLabel: string | null; productLabel: string | null; reason: string; createdAt: string; actorName: string | null; version: number | null }[];
 };
+
+export type LinkContentView = { key: string; label: string; kind: LinkKind; content: (LinkContent & { imageUrl: string | null }) | null };
 
 export type RecommendationView = {
   productId: string | null;
@@ -286,7 +289,7 @@ export function DailyChart({ series, label = "Respostas" }: { series: { day: str
       </div>
       <div className="mt-2 flex gap-[3px] text-[11px] text-muted">
         {series.map((s, i) => (
-          <span key={s.day} className="flex-1 text-center">
+          <span key={s.day} className="min-w-0 flex-1 whitespace-nowrap text-center">
             {i % tick === 0 ? shortDay(s.day) : ""}
           </span>
         ))}

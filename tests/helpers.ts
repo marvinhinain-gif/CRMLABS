@@ -118,8 +118,17 @@ export class FakeInstagramApi implements InstagramApi {
     this.record("findConversationMessages", t, id);
     return this.providerMessages;
   }
-  async listMedia() {
-    return [];
+  /** Publicações devolvidas por listMedia (feed). */
+  feed: import("@/server/integrations/instagram/client").MediaItem[] = [];
+  /** Stories ativos devolvidos por listStories. */
+  stories: import("@/server/integrations/instagram/client").MediaItem[] = [];
+  async listMedia(_t?: string, limit = 25) {
+    this.record("listMedia", limit);
+    return this.feed.slice(0, limit);
+  }
+  async listStories() {
+    this.record("listStories");
+    return this.stories;
   }
   async listComments() {
     return [];
@@ -140,7 +149,7 @@ export class FakeInstagramApi implements InstagramApi {
   }
   async getMedia(_t: string, id: string) {
     this.record("getMedia", id);
-    return this.media.find((m) => m.id === id) ?? { id };
+    return this.media.find((m) => m.id === id) ?? this.feed.find((m) => m.id === id) ?? { id };
   }
   async commentOnMedia(t: string, mediaId: string, text: string) {
     this.record("commentOnMedia", t, mediaId, text);

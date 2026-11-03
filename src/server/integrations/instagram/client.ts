@@ -72,6 +72,8 @@ export interface InstagramApi {
   getUserProfile(token: string, igsid: string): Promise<UserProfile>;
   findConversationMessages(token: string, igsid: string): Promise<ProviderMessage[]>;
   listMedia(token: string, limit: number): Promise<MediaItem[]>;
+  /** Stories ativos (só os das últimas 24h existem na API). */
+  listStories(token: string): Promise<MediaItem[]>;
   listComments(token: string, mediaId: string, limit: number): Promise<CommentItem[]>;
   /** Uma página de conversas (mais recentes primeiro). `after` = cursor da página anterior. */
   listConversations(token: string, opts: { limit: number; after?: string | null; messages?: number }): Promise<ConversationPage>;
@@ -283,6 +285,14 @@ export class GraphInstagramApi implements InstagramApi {
   async listMedia(token: string, limit: number): Promise<MediaItem[]> {
     const r = await this.request<{ data: { id: string; caption?: string; media_type?: string; permalink?: string; thumbnail_url?: string; media_url?: string; timestamp?: string }[] }>(
       `${this.graph}/me/media?fields=id,caption,media_type,permalink,thumbnail_url,media_url,timestamp&limit=${limit}`,
+      { token },
+    );
+    return (r.data ?? []).map((m) => ({ id: m.id, caption: m.caption, mediaType: m.media_type, permalink: m.permalink, thumbnailUrl: m.thumbnail_url, mediaUrl: m.media_url, timestamp: m.timestamp }));
+  }
+
+  async listStories(token: string): Promise<MediaItem[]> {
+    const r = await this.request<{ data: { id: string; caption?: string; media_type?: string; permalink?: string; thumbnail_url?: string; media_url?: string; timestamp?: string }[] }>(
+      `${this.graph}/me/stories?fields=id,caption,media_type,permalink,thumbnail_url,media_url,timestamp`,
       { token },
     );
     return (r.data ?? []).map((m) => ({ id: m.id, caption: m.caption, mediaType: m.media_type, permalink: m.permalink, thumbnailUrl: m.thumbnail_url, mediaUrl: m.media_url, timestamp: m.timestamp }));

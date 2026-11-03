@@ -95,16 +95,32 @@ const recommendationSchema = z.object({
 
 const label = z.string().trim().max(60).nullable().optional();
 
+export const linkContentSchema = z.object({
+  source: z.enum(["instagram", "upload"]),
+  mediaType: z.string().trim().max(40).nullable(),
+  externalId: z.string().trim().max(100).nullable(),
+  permalink: z
+    .string()
+    .trim()
+    .max(500)
+    .regex(/^https:\/\/(www\.)?instagram\.com\//, "O link do conteúdo precisa ser do Instagram.")
+    .nullable(),
+  caption: z.string().trim().max(500).nullable(),
+  postedAt: z.string().datetime({ offset: true }).nullable(),
+  imageId: uuid.nullable(),
+});
+
 export const linkSchema = z.object({
   key: z.string().trim().toLowerCase().regex(/^[a-z0-9-]{1,40}$/, "Use letras minúsculas, números e hífen na chave do link."),
   label: z.string().trim().min(1, "Dê um nome ao link.").max(80),
-  kind: z.enum(["stories", "whatsapp_group", "traffic", "bio", "direct", "other"]),
+  kind: z.enum(["stories", "feed", "whatsapp_group", "traffic", "bio", "direct", "other"]),
   sourceId: uuid.nullable(),
   /** Nome de uma origem nova (criada ao salvar; vira sourceId). */
   newSourceName: z.string().trim().max(60).nullable().optional(),
   utmSource: z.string().trim().max(120).nullable(),
   utmMedium: z.string().trim().max(120).nullable(),
   utmCampaign: z.string().trim().max(160).nullable(),
+  content: linkContentSchema.nullable().optional(),
 });
 export const linksSchema = z
   .array(linkSchema)
