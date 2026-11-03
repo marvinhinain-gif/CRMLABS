@@ -7,7 +7,7 @@ import { CalendarPlus, CalendarDays, CircleX, Plus, RotateCcw, Send, Trophy, Han
 import { api, ApiError, fetcher, qs } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { useOpenContact, useQueryParam } from "@/lib/nav";
-import type { Stage } from "@/lib/types";
+import { actsAsCloser, type Stage } from "@/lib/types";
 import { dayLabel, formatBRL, formatDate, formatDateTime, fromLocalInput, parseBRLToCents } from "@/lib/format";
 import { Avatar, Badge, Button, Card, cx, DemoBadge, Dialog, EmptyState, ErrorState, Field, IconButton, Input, LoadingState, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, PageHeader, Select, Tabs, Textarea } from "@/components/ui";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
@@ -54,7 +54,7 @@ function NewOpportunityDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const [fields, setFields] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value, ...(k === "closerId" ? { stageId: "" } : {}) }));
-  const stageOwner = form.closerId || (me.user.role === "closer" ? me.user.id : "");
+  const stageOwner = form.closerId || (actsAsCloser(me.user) ? me.user.id : "");
   const { data: stageList } = useSWR<Stage[]>(open ? `/api/stages${qs({ kind: "sales", ownerId: stageOwner })}` : null, fetcher);
   const stages = (stageList ?? []).filter((s) => s.stageType !== "won" && s.stageType !== "lost");
   const submit = async () => {
@@ -109,7 +109,7 @@ function NewOpportunityDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           </Field>
           <Field label="Closer" htmlFor="op-closer">
             <Select id="op-closer" value={form.closerId} onChange={set("closerId")}>
-              <option value="">{me.user.role === "closer" ? "Eu" : "Sem closer"}</option>
+              <option value="">{actsAsCloser(me.user) ? "Eu" : "Sem closer"}</option>
               {team
                 .filter((m) => m.status === "active" && ["closer", "manager", "admin"].includes(m.role))
                 .map((m) => (

@@ -1,0 +1,1 @@
+ALTER TABLE "memberships" ADD COLUMN "also_closer" boolean DEFAULT false NOT NULL;

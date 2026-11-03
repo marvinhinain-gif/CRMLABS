@@ -14,7 +14,7 @@ import type { Ctx } from "../context";
 import { decryptSecret, encryptSecret, randomToken, sha256 } from "../crypto";
 import { appUrl } from "../env";
 import { AppError, forbidden, invalid } from "../errors";
-import { assertCan, can } from "../permissions";
+import { actsAsCloser, assertCan, can } from "../permissions";
 import { logger } from "../logger";
 import { audit } from "./common";
 import { dayKey } from "@/lib/format";
@@ -517,8 +517,8 @@ export const busySchema = z.object({ ownerId: z.string().uuid(), date: z.string(
 /** Horários ocupados do responsável no dia: reuniões do CRM + agenda Google (se conectada). */
 export async function busyTimes(ctx: Ctx, input: z.infer<typeof busySchema>) {
   if (input.ownerId !== ctx.userId && !can(ctx, "contacts.assign")) {
-    const [m] = await db.select({ role: memberships.role }).from(memberships).where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, input.ownerId), eq(memberships.status, "active")));
-    if (m?.role !== "closer") throw forbidden("Você só vê a agenda de closers e a sua.");
+    const [m] = await db.select({ role: memberships.role, alsoCloser: memberships.alsoCloser }).from(memberships).where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, input.ownerId), eq(memberships.status, "active")));
+    if (!m || !actsAsCloser(m)) throw forbidden("Você só vê a agenda de closers e a sua.");
   }
   const from = new Date(`${input.date}T00:00:00-03:00`);
   const to = new Date(from.getTime() + 86400000);

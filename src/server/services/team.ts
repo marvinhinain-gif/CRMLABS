@@ -21,6 +21,7 @@ export async function listMembers(ctx: Ctx) {
       name: users.name,
       email: users.email,
       role: memberships.role,
+      alsoCloser: memberships.alsoCloser,
       status: memberships.status,
       requestNote: memberships.requestNote,
       requestedAt: memberships.createdAt,
@@ -36,7 +37,7 @@ export async function listMembers(ctx: Ctx) {
   // Pedidos pendentes só aparecem para quem pode aprová-los.
   return rows
     .filter((r) => r.status !== "pending" || ctx.role === "admin")
-    .map(({ avatarAt, ...r }) => ({ ...r, avatarUrl: avatarUrl(r.userId, avatarAt) }))
+    .map(({ avatarAt, ...r }) => ({ ...r, alsoCloser: r.alsoCloser && (r.role === "admin" || r.role === "manager"), avatarUrl: avatarUrl(r.userId, avatarAt) }))
     .map((r) => (isAdmin ? r : { ...r, email: undefined, lastLoginAt: undefined, requestNote: undefined }));
 }
 
@@ -109,6 +110,8 @@ export async function createAccessLink(ctx: Ctx, userId: string) {
 export const updateMemberSchema = z.object({
   role: roleSchema.optional(),
   status: z.enum(["active", "disabled"]).optional(),
+  /** Administrador/gestor que também fecha vendas. */
+  alsoCloser: z.boolean().optional(),
 });
 
 export async function updateMember(ctx: Ctx, userId: string, input: z.infer<typeof updateMemberSchema>) {
@@ -125,6 +128,11 @@ export async function updateMember(ctx: Ctx, userId: string, input: z.infer<type
   const patch: Partial<typeof memberships.$inferInsert> = {};
   if (input.role) patch.role = input.role;
   if (input.status) patch.status = input.status;
+  if (input.alsoCloser !== undefined) {
+    const role = input.role ?? m.role;
+    if (input.alsoCloser && role !== "admin" && role !== "manager") throw invalid("Só administrador ou gestor pode ser marcado como \"Também é closer\".");
+    patch.alsoCloser = input.alsoCloser;
+  }
   if (!Object.keys(patch).length) return;
   await db.update(memberships).set(patch).where(eq(memberships.id, m.id));
   // Usuário desativado perde acesso imediatamente.

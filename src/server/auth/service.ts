@@ -172,6 +172,7 @@ export async function resolveSession(token: string | undefined | null): Promise<
     userEmail: row.u.email,
     orgId: row.o.id,
     role: row.m.role,
+    alsoCloser: row.m.alsoCloser && (row.m.role === "admin" || row.m.role === "manager"),
     sessionId: row.s.id,
     org: {
       name: row.o.name,

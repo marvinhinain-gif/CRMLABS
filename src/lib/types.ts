@@ -3,7 +3,7 @@ import type { CadenceChannel, CadenceStatus } from "./cadence";
 export type Role = "admin" | "manager" | "seller" | "closer";
 
 export type Me = {
-  user: { id: string; name: string; email: string; role: Role; avatarUrl: string | null };
+  user: { id: string; name: string; email: string; role: Role; /** Administrador/gestor que também atua como closer. */ alsoCloser?: boolean; avatarUrl: string | null };
   org: { id: string; name: string; isDemo: boolean; sharedInbox: boolean; timezone: string; autoEntryStageId: string | null };
   orgs: { id: string; name: string; isDemo: boolean; role: Role }[];
   counts: { unreadConversations: number; newLeads: number; pendingDirects: number; pendingComments: number };
@@ -23,7 +23,7 @@ export type Me = {
   };
 };
 
-export type Member = { userId: string; name: string; email?: string; role: Role; status: "active" | "invited" | "disabled" | "pending"; lastLoginAt?: string | null; requestNote?: string | null; requestedAt?: string; avatarUrl?: string | null };
+export type Member = { userId: string; name: string; email?: string; role: Role; alsoCloser?: boolean; status: "active" | "invited" | "disabled" | "pending"; lastLoginAt?: string | null; requestNote?: string | null; requestedAt?: string; avatarUrl?: string | null };
 
 export type Stage = { id: string; key: string; name: string; color: string; position: number; archivedAt: string | null; stageType?: string };
 
@@ -64,6 +64,11 @@ export const ALL_SDRS = "todos";
 export type Board = { stages: (Stage & { total: number; cards: BoardCard[] })[]; pageSize: number };
 
 export const ROLE_LABEL: Record<Role, string> = { admin: "Administrador", manager: "Gestor", seller: "Social seller", closer: "Closer" };
+
+/** Quem fecha vendas: closer, ou administrador/gestor marcado como "Também é closer". */
+export function actsAsCloser(m: { role: Role; alsoCloser?: boolean | null }) {
+  return m.role === "closer" || (!!m.alsoCloser && (m.role === "admin" || m.role === "manager"));
+}
 
 // ---------- Cadência (respostas da API) ----------
 

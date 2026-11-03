@@ -38,7 +38,7 @@ export type CommercialCard = {
   createdAt: string;
 };
 type BoardStage = { id: string; key: string; name: string; color: string; position: number; stageType: string };
-export type CommercialBoardData = { ownerId: string | null; pipelineId: string; canEdit: boolean; people: { id: string; name: string; role: string }[]; stages: BoardStage[]; cards: CommercialCard[] };
+export type CommercialBoardData = { ownerId: string | null; pipelineId: string; canEdit: boolean; people: { id: string; name: string; role: string; isCloser: boolean }[]; stages: BoardStage[]; cards: CommercialCard[] };
 
 function CardBody({ c, dragging }: { c: CommercialCard; dragging?: boolean }) {
   const meetingSoon = c.nextMeetingAt && new Date(c.nextMeetingAt).getTime() > Date.now() - 2 * 3600_000;
@@ -176,7 +176,7 @@ export function CommercialKanban({ onOpen, ownerParam, setOwnerParam }: { onOpen
           <Select aria-label="Kanban de" value={data.ownerId ?? ""} onChange={(e) => setOwnerParam(e.target.value)} className="h-10 w-auto min-w-[200px] bg-white">
             {data.people.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.role === "closer" ? `Closer: ${p.name}` : p.name}
+                {p.isCloser ? `Closer: ${p.name}` : p.name}
               </option>
             ))}
           </Select>

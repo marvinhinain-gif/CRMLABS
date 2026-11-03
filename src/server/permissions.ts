@@ -1,5 +1,5 @@
 import { and, eq, exists, isNull, or, sql, type SQL } from "drizzle-orm";
-import { contacts, conversations, opportunities, tasks, appointments, socialComments, leads } from "./db/schema";
+import { contacts, conversations, opportunities, tasks, appointments, socialComments, leads, memberships } from "./db/schema";
 import type { Role } from "./db/schema";
 import type { Ctx } from "./context";
 import { forbidden } from "./errors";
@@ -40,6 +40,16 @@ export function can(ctx: Pick<Ctx, "role">, action: Action) {
 
 export function assertCan(ctx: Pick<Ctx, "role">, action: Action, message?: string) {
   if (!can(ctx, action)) throw forbidden(message);
+}
+
+/** Quem fecha vendas: closer, ou administrador/gestor marcado como "Também é closer". */
+export function actsAsCloser(m: { role: Role; alsoCloser?: boolean | null }) {
+  return m.role === "closer" || (!!m.alsoCloser && (m.role === "admin" || m.role === "manager"));
+}
+
+/** Condição SQL (tabela memberships) para quem atua como closer. */
+export function closerMembershipCond(): SQL {
+  return or(eq(memberships.role, "closer"), and(eq(memberships.alsoCloser, true), sql`${memberships.role} in ('admin', 'manager')`))!;
 }
 
 export const ROLE_LABEL: Record<Role, string> = {

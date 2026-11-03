@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db, type DbOrTx } from "../db";
 import { appointments, channelIdentities, contactTags, contacts, relationshipEntries, leadForms, leads, memberships, notes, opportunities, pipelineStages, products, stageHistory, tags, users } from "../db/schema";
 import type { Ctx } from "../context";
-import { appointmentScope, assertCan, can, contactScope, opportunityScope, ROLE_LABEL } from "../permissions";
+import { actsAsCloser, appointmentScope, assertCan, can, closerMembershipCond, contactScope, opportunityScope, ROLE_LABEL } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
 import { publish } from "../realtime";
 import { audit, cleanText, getPipeline, notifyUser, salesPipelineFor } from "./common";
@@ -69,7 +69,7 @@ export async function listOpportunities(ctx: Ctx, f: z.infer<typeof listOpportun
     .where(and(...conds))
     .orderBy(desc(opportunities.updatedAt))
     .limit(300);
-  const stages = await listStages(ctx, "sales", { ownerId: ctx.role === "closer" ? ctx.userId : (f.closerId ?? null) });
+  const stages = await listStages(ctx, "sales", { ownerId: ctx.role === "closer" ? ctx.userId : (f.closerId ?? (actsAsCloser(ctx) ? ctx.userId : null)) });
   return { stages, rows };
 }
 
@@ -132,7 +132,7 @@ export async function createOpportunity(ctx: Ctx, input: z.infer<typeof opportun
   const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, input.contactId), contactScope(ctx)));
   if (!contact) throw invalid("Contato inválido.");
   await assertCloser(ctx, input.closerId);
-  const closerId = input.closerId ?? (ctx.role === "closer" ? ctx.userId : null);
+  const closerId = input.closerId ?? (actsAsCloser(ctx) ? ctx.userId : null);
   const pipeline = await salesPipelineFor(ctx.orgId, closerId);
   const list = await stagesOf(pipeline.id);
   let stage = input.stageId ? list.find((s) => s.id === input.stageId) : equivalent(list, "entry");
@@ -429,7 +429,7 @@ export async function forwardStatus(ctx: Ctx, contactId: string) {
     .select({ id: users.id, name: users.name })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
-    .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, "active"), eq(memberships.role, "closer")))
+    .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, "active"), closerMembershipCond()))
     .orderBy(asc(users.name));
   return { current: o ? { ...o, forwardedAt: o.forwardedAt ?? o.createdAt } : null, closers };
 }
@@ -544,13 +544,15 @@ export async function getCommercialBoard(ctx: Ctx, f: z.infer<typeof boardSchema
   if (ctx.role === "seller") throw forbidden("O Kanban comercial é dos closers. Acompanhe seus encaminhamentos na aba Encaminhados.");
   const people = can(ctx, "data.all")
     ? await db
-        .select({ id: users.id, name: users.name, role: memberships.role })
+        .select({ id: users.id, name: users.name, role: memberships.role, alsoCloser: memberships.alsoCloser })
         .from(memberships)
         .innerJoin(users, eq(users.id, memberships.userId))
         .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, "active"), inArray(memberships.role, ["closer", "manager", "admin"])))
-        .orderBy(sql`${memberships.role} <> 'closer'`, asc(users.name))
+        .orderBy(sql`not (${closerMembershipCond()})`, asc(users.name))
+        .then((rows) => rows.map(({ alsoCloser, ...p }) => ({ ...p, isCloser: actsAsCloser({ role: p.role, alsoCloser }) })))
     : [];
-  const ownerId = ctx.role === "closer" ? ctx.userId : (f.ownerId ?? people.find((p) => p.role === "closer")?.id ?? null);
+  // Quem também é closer abre no próprio Kanban; os demais gestores, no do primeiro closer.
+  const ownerId = ctx.role === "closer" ? ctx.userId : (f.ownerId ?? (actsAsCloser(ctx) ? ctx.userId : (people.find((p) => p.isCloser)?.id ?? null)));
   const pipeline = await salesPipelineFor(ctx.orgId, ownerId);
   const stages = await stagesOf(pipeline.id);
 
@@ -731,7 +733,7 @@ export async function createAppointment(ctx: Ctx, input: z.infer<typeof appointm
   const ownerId = input.ownerId ?? ctx.userId;
   const ownerMember = await assertMember(ctx.orgId, ownerId, { activeOnly: true });
   // Social sellers podem marcar para si ou direto com um closer; gestores, para qualquer pessoa.
-  if (ownerId !== ctx.userId && !can(ctx, "contacts.assign") && ownerMember.role !== "closer") {
+  if (ownerId !== ctx.userId && !can(ctx, "contacts.assign") && !actsAsCloser(ownerMember)) {
     throw forbidden("Você pode agendar para você ou para um closer.");
   }
   if (input.opportunityId) await getVisibleOpportunity(ctx, input.opportunityId);

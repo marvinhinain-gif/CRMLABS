@@ -6,6 +6,8 @@ export type Ctx = {
   userEmail: string;
   orgId: string;
   role: Role;
+  /** Administrador/gestor que também atua como closer (fecha vendas, tem o próprio Kanban comercial). */
+  alsoCloser?: boolean;
   sessionId: string;
   org: {
     name: string;

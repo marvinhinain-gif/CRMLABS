@@ -183,6 +183,13 @@
       "when": 1793673303014,
       "tag": "0025_stories_salvos",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793747480820,
+      "tag": "0026_tambem_closer",
+      "breakpoints": true
     }
   ]
 }

@@ -134,6 +134,8 @@ export const memberships = pgTable(
     /** Horário de atendimento da pessoa ("HH:MM"); vazio = padrão da equipe. */
     workStart: text("work_start"),
     workEnd: text("work_end"),
+    /** Administrador/gestor que também fecha vendas: entra nas listas e distribuições de closer. */
+    alsoCloser: boolean("also_closer").notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("memberships_org_user_uq").on(t.orgId, t.userId)],
