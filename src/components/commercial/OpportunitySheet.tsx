@@ -8,7 +8,7 @@ import { ArrowRightLeft, CalendarCheck, CalendarPlus, CircleX, History, Mail, Me
 import { api, ApiError, fetcher } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useOpenContact } from "@/lib/nav";
-import { formatBRL, formatDateTime, formatPhone, longDayTime, parseBRLToCents, relativeTime, whatsappLink } from "@/lib/format";
+import { formatBRL, formatDateTime, formatPhone, longDayTime, parseBRLToCents, relativeTime, whatsappLink, whatsappOpener } from "@/lib/format";
 import { STAGE_TYPE_LABEL } from "@/lib/stageTypes";
 import { Avatar, Button, cx, Dialog, ErrorState, Field, Input, LoadingState, Select, Sheet, SheetClose, Textarea } from "@/components/ui";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
@@ -195,7 +195,7 @@ function Body({ o, onClose }: { o: OppDetail; onClose: () => void }) {
   };
 
   const first = c?.name.split(" ")[0] ?? "";
-  const wa = whatsappLink(c?.phone, `Olá, ${first}! Aqui é ${me.user.name.split(" ")[0]}, da ${me.org.name}.`);
+  const wa = whatsappLink(c?.phone, whatsappOpener(first));
   const next = o.meetings.find((m) => m.status === "scheduled" && new Date(m.startsAt).getTime() > Date.now() - 2 * 3600_000);
 
   return (

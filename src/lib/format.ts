@@ -134,6 +134,24 @@ export function formatPhone(v: string | null | undefined) {
   return rest.length === 9 ? `(${ddd}) ${rest.slice(0, 5)}-${rest.slice(5)}` : `(${ddd}) ${rest.slice(0, 4)}-${rest.slice(4)}`;
 }
 
+/** "Bom dia" (5h–11h59), "Boa tarde" (12h–17h59) ou "Boa noite" (18h–4h59), no horário de Salvador. */
+export function greetingForHour(now: Date = new Date()) {
+  const h = Number(new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", hourCycle: "h23" }).format(now));
+  if (h >= 5 && h < 12) return "Bom dia";
+  if (h >= 12 && h < 18) return "Boa tarde";
+  return "Boa noite";
+}
+
+/**
+ * Mensagem padrão ao abrir o WhatsApp de um lead/contato:
+ * "Boa tarde Ana, tá por aí?👀" (saudação muda com o horário de Salvador).
+ */
+export function whatsappOpener(name: string | null | undefined, now: Date = new Date()) {
+  const raw = (name ?? "").trim().split(/\s+/)[0] ?? "";
+  const first = raw ? raw.charAt(0).toLocaleUpperCase("pt-BR") + raw.slice(1).toLocaleLowerCase("pt-BR") : "";
+  return `${greetingForHour(now)}${first ? ` ${first}` : ""}, tá por aí?👀`;
+}
+
 /** Link do WhatsApp com mensagem pronta. */
 export function whatsappLink(phone: string | null | undefined, text?: string) {
   if (!phone) return null;

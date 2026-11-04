@@ -9,7 +9,7 @@ import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { LeadTasks } from "@/components/tasks/TaskParts";
 import { api, fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
-import { formatDateTime, formatPhone, longDayTime, relativeTime, whatsappLink } from "@/lib/format";
+import { formatDateTime, formatPhone, longDayTime, relativeTime, whatsappLink, whatsappOpener } from "@/lib/format";
 import { Avatar, Button, cx, Dialog, ErrorState, LoadingState, Select, Sheet, SheetClose } from "@/components/ui";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
@@ -466,7 +466,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
   };
 
   const first = l.name.split(" ")[0];
-  const wa = whatsappLink(l.phone, `Olá, ${first}! Aqui é ${me.user.name.split(" ")[0]}, da ${me.org.name}. Recebi seu cadastro e quero combinar um horário para conversarmos.`);
+  const wa = whatsappLink(l.phone, whatsappOpener(first));
   const st = LEAD_STATUS[l.status];
   const utm = Object.entries(l.utm ?? {});
   const open = l.status !== "scheduled" && l.status !== "disqualified";

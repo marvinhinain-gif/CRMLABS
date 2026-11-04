@@ -1,16 +1,18 @@
 "use client";
 
 import { MessageCircle } from "lucide-react";
-import { useMe } from "@/lib/me";
-import { formatPhone, whatsappLink } from "@/lib/format";
+import { formatPhone, whatsappLink, whatsappOpener } from "@/lib/format";
 import { cx } from "./index";
 
-/** Saudação curta padrão (mesma ideia do LeadSheet): "Olá, Ana! Aqui é Marvin, da AXION." */
+/** Mensagem padrão: "Boa tarde Ana, tá por aí?👀" (saudação pelo horário de Salvador). */
 export function useWhatsAppGreeting(name: string | null | undefined) {
-  const me = useMe();
-  const first = (name ?? "").trim().split(/\s+/)[0];
-  const mine = me.user.name.trim().split(/\s+/)[0];
-  return `Olá${first ? `, ${first}` : ""}! Aqui é ${mine}, da ${me.org.name}.`;
+  return whatsappOpener(name);
+}
+
+/** Recalcula a saudação na hora do clique (a página pode ficar aberta de manhã até a tarde). */
+function refreshHref(e: React.SyntheticEvent<HTMLAnchorElement>, phone: string | null | undefined, name: string | null | undefined) {
+  const href = whatsappLink(phone, whatsappOpener(name));
+  if (href) e.currentTarget.href = href;
 }
 
 /** Impede que o clique no link abra a linha/cartão onde ele está. */
@@ -32,7 +34,7 @@ export function WhatsAppButton({
 }: {
   phone: string | null | undefined;
   name?: string | null;
-  /** Mensagem pronta. Sem ela, usa a saudação curta padrão. */
+  /** Mensagem pronta. Sem ela, usa a mensagem padrão ("Boa tarde Ana, tá por aí?👀"). */
   text?: string;
   variant?: "full" | "icon";
   label?: string;
@@ -52,8 +54,10 @@ export function WhatsAppButton({
         aria-label={a11y}
         title={a11y}
         data-no-open
+        suppressHydrationWarning
         onClick={(e) => {
           stop(e);
+          if (text === undefined) refreshHref(e, phone, name);
           onOpened?.();
         }}
         onKeyDown={stop}
@@ -74,8 +78,10 @@ export function WhatsAppButton({
       rel="noreferrer"
       aria-label={a11y}
       data-no-open
+      suppressHydrationWarning
       onClick={(e) => {
         stop(e);
+        if (text === undefined) refreshHref(e, phone, name);
         onOpened?.();
       }}
       onKeyDown={stop}
@@ -103,7 +109,11 @@ export function PhoneWhatsAppLink({ phone, name, className }: { phone: string | 
       target="_blank"
       rel="noreferrer"
       data-no-open
-      onClick={stop}
+      suppressHydrationWarning
+      onClick={(e) => {
+        stop(e);
+        refreshHref(e, phone, name);
+      }}
       onKeyDown={stop}
       onPointerDown={stop}
       title="Abrir conversa no WhatsApp"
