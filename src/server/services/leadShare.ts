@@ -21,7 +21,8 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{32,64}$/;
 export const shareUrlFor = (token: string | null) => (token ? `${appUrl()}/ficha/${token}` : null);
 
 async function visibleLead(ctx: Ctx, id: string) {
-  const [l] = await db.select({ id: leads.id, shareToken: leads.shareToken, sharedAt: leads.sharedAt }).from(leads).where(and(eq(leads.id, id), leadScope(ctx)));
+  const [l] = await db.select({ id: leads.id, shareToken: leads.shareToken, sharedAt: leads.sharedAt }).from(leads).where(and(eq(leads.id, id), leadScope(ctx, "edit")));
+  // Closer só compartilha os leads que chegaram a ele (os demais ele apenas acompanha).
   if (!l) throw notFound("Lead não encontrado.");
   return l;
 }

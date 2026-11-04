@@ -75,6 +75,8 @@ export function canReceive(ctx: Ctx, e: RealtimeEvent) {
   if (e.topic === "comments" && ctx.role === "seller") return true;
   // Top Engajados: o evento só pede "recarregue"; a API decide o que cada papel vê.
   if (e.topic === "engagement" && ctx.role !== "closer") return true;
+  // Leads: o closer vê todos os leads que chegam (o evento só pede "recarregue").
+  if (e.topic === "leads" && ctx.role === "closer") return true;
   return false;
 }
 

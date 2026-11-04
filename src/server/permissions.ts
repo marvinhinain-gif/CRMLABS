@@ -132,10 +132,15 @@ export function commentScope(ctx: Ctx): SQL {
   return and(base, visibleContact)!;
 }
 
-/** Leads: gestores veem todos; social sellers veem os distribuídos a eles (ou de contatos seus). */
-export function leadScope(ctx: Ctx): SQL {
+/**
+ * Leads: gestores veem todos; social sellers veem os distribuídos a eles (ou de contatos seus) e a fila.
+ * O closer vê todos os leads que chegam (leitura, para conhecer quem vem para ele); em "edit" ele só mexe
+ * nos que já chegaram a ele (oportunidade ou reunião dele).
+ */
+export function leadScope(ctx: Ctx, mode: "view" | "edit" = "view"): SQL {
   const base = eq(leads.orgId, ctx.orgId);
   if (can(ctx, "data.all")) return base;
+  if (mode === "view" && ctx.role === "closer") return base;
   return and(
     base,
     or(

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Ban, CalendarCheck, CalendarClock, Check, Copy, ExternalLink, LayoutDashboard, Link2, Link2Off, Mail, MessageCircle, Phone, PhoneOff, Plus, Send, Share2, SquareUser, X } from "lucide-react";
+import { Ban, CalendarCheck, CalendarClock, Check, Copy, ExternalLink, Eye, LayoutDashboard, Link2, Link2Off, Mail, MessageCircle, Phone, PhoneOff, Plus, Send, Share2, SquareUser, X } from "lucide-react";
 import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { LeadTasks } from "@/components/tasks/TaskParts";
 import { api, fetcher } from "@/lib/api";
@@ -83,6 +83,8 @@ type LeadDetail = {
   journey: Journey | null;
   leadScore: LeadScore;
   board: LeadBoard;
+  /** false: closer acompanhando um lead que ainda está com o SDR (só leitura). */
+  canEdit: boolean;
   shareUrl: string | null;
 };
 
@@ -254,7 +256,7 @@ type LeadScore = {
 };
 
 /** Lead score por produto: classe valendo, de onde veio e troca manual. */
-function LeadScoreCard({ s, busy, onSet, isAdmin }: { s: LeadScore; busy: string | null; onSet: (c: LeadClass | null) => void; isAdmin: boolean }) {
+function LeadScoreCard({ s, busy, onSet, isAdmin, readOnly }: { s: LeadScore; busy: string | null; onSet: (c: LeadClass | null) => void; isAdmin: boolean; readOnly?: boolean }) {
   const app = s.application;
   return (
     <section className="mt-4 rounded-[18px] border border-line p-4" aria-labelledby="lead-score-title">
@@ -297,11 +299,14 @@ function LeadScoreCard({ s, busy, onSet, isAdmin }: { s: LeadScore; busy: string
         <p className="mt-2 text-[12.5px] text-muted">
           Ajustado {s.manual.byName ? `por ${s.manual.byName} ` : ""}
           {relativeTime(s.manual.at)}.{" "}
+          {!readOnly && (
           <button type="button" className="font-medium text-brand hover:underline disabled:opacity-50" disabled={!!busy} onClick={() => onSet(null)}>
             Voltar para a classificação do quiz{s.auto ? ` (${LEAD_CLASS[s.auto].label})` : ""}
           </button>
+          )}
         </p>
       )}
+      {!readOnly && (
       <div className="mt-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Classificar lead">
         {LEAD_CLASSES.map((c) => {
           const active = s.class === c;
@@ -321,6 +326,7 @@ function LeadScoreCard({ s, busy, onSet, isAdmin }: { s: LeadScore; busy: string
           );
         })}
       </div>
+      )}
     </section>
   );
 }
@@ -464,6 +470,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
   const st = LEAD_STATUS[l.status];
   const utm = Object.entries(l.utm ?? {});
   const open = l.status !== "scheduled" && l.status !== "disqualified";
+  const readOnly = !l.canEdit;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -479,6 +486,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
             <LeadClassBadge cls={l.leadScore.class} score={l.leadScore.application?.score} manual={!!l.leadScore.manual} />
           </span>
         </div>
+        {!readOnly && (
         <button
           type="button"
           className={cx("flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-page", l.shareUrl ? "text-brand" : "text-muted")}
@@ -488,6 +496,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
         >
           <Share2 className="size-5" />
         </button>
+        )}
         <SheetClose asChild>
           <button className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-page" aria-label="Fechar" onClick={onClose}>
             <X className="size-5" />
@@ -503,7 +512,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
             target="_blank"
             rel="noreferrer"
             aria-disabled={!wa}
-            onClick={() => wa && l.status === "new" && patch({ status: "contacted" }, "Marcado como em contato.", "auto")}
+            onClick={() => wa && !readOnly && l.status === "new" && patch({ status: "contacted" }, "Marcado como em contato.", "auto")}
             className={cx("flex flex-col items-center gap-1 rounded-[16px] border px-2 py-3 text-[13px] font-medium transition-colors", wa ? "border-[#bfe8d3] bg-[#e9f9f1] text-[#0f7a4f] hover:brightness-[0.98]" : "pointer-events-none border-line text-muted opacity-50")}
           >
             <MessageCircle className="size-5" aria-hidden /> WhatsApp
@@ -520,10 +529,17 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           s={l.leadScore}
           busy={busy}
           isAdmin={me.user.role === "admin"}
+          readOnly={readOnly}
           onSet={(c) => patch({ scoreClass: c }, c ? `Lead classificado como ${LEAD_CLASS[c].label}.` : "Classificação do quiz restaurada.", "score")}
         />
 
-        {me.user.role !== "closer" ? (
+        {readOnly ? (
+          l.board.inBoard || l.assignedName || l.board.ownerName ? (
+            <p className="mt-4 rounded-[18px] border border-line p-4 text-[13.5px] text-muted">
+              {l.board.inBoard ? `No Kanban do Social Seller${l.board.ownerName ? ` de ${l.board.ownerName}` : ""}, etapa ${l.board.stageName}.` : `Com ${l.assignedName ?? l.board.ownerName}, ainda fora do Kanban.`}
+            </p>
+          ) : null
+        ) : me.user.role !== "closer" ? (
           <SdrKanbanCard
             leadId={l.id}
             b={l.board}
@@ -589,9 +605,11 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
 
         <div className="mt-6 flex items-center justify-between gap-2">
           <h3 className="min-w-0 text-[13px] font-semibold uppercase tracking-wide text-muted">Formulário / Aplicação{l.formName ? ` · ${l.formName}` : ""}</h3>
+          {!readOnly && (
           <button type="button" onClick={() => setSharing(true)} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full px-2 text-[13px] font-semibold text-brand hover:bg-page">
             <Share2 className="size-4" aria-hidden /> {l.shareUrl ? "Link ativo" : "Compartilhar"}
           </button>
+          )}
         </div>
         <dl className="mt-1 divide-y divide-line">
           {l.productName && <Row label="Produto de interesse">{l.productName}</Row>}
@@ -653,18 +671,26 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           {l.previous.length > 0 && <Row label="Já preencheu antes">{l.previous.map((p) => `${formatDateTime(p.createdAt)}${p.formName ? ` · ${p.formName}` : ""}`).join("\n")}</Row>}
         </dl>
         <div className="mt-6">
-          <JourneySection contactId={l.contactId} initial={l.journey} />
+          <JourneySection contactId={l.contactId} initial={l.journey} readOnly={readOnly} />
         </div>
-        <div className="mt-6">
-          <LeadTasks contact={{ id: l.contactId, name: l.name }} />
-        </div>
-        <Link href={`?contato=${l.contactId}`} className="mt-4 inline-flex items-center gap-1.5 text-[14px] font-semibold text-brand hover:underline">
-          <SquareUser className="size-4" aria-hidden /> Abrir ficha completa do contato
-        </Link>
+        {!readOnly && (
+          <>
+            <div className="mt-6">
+              <LeadTasks contact={{ id: l.contactId, name: l.name }} />
+            </div>
+            <Link href={`?contato=${l.contactId}`} className="mt-4 inline-flex items-center gap-1.5 text-[14px] font-semibold text-brand hover:underline">
+              <SquareUser className="size-4" aria-hidden /> Abrir ficha completa do contato
+            </Link>
+          </>
+        )}
       </div>
 
       <footer className="border-t border-line bg-white px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
-        {open ? (
+        {readOnly ? (
+          <p className="flex items-center gap-2 text-[13.5px] text-muted">
+            <Eye className="size-4 shrink-0" aria-hidden /> Você está acompanhando este lead. Quem atende é o SDR; ele chega para você quando for encaminhado ou tiver reunião.
+          </p>
+        ) : open ? (
           <div className="flex flex-col gap-2">
             <Button size="lg" className="w-full" icon={<CalendarCheck className="size-5" />} onClick={() => setScheduling(true)}>
               Confirmar reunião
