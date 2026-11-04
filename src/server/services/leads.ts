@@ -29,6 +29,7 @@ import { can, closerMembershipCond, leadScope } from "../permissions";
 import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
+import { appUrl } from "../env";
 import { audit, cleanText, closerPipeline, CONTATO_KEY, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
 import { linkContentFor } from "./contentTracking";
 import { activeEntryFor, addToBoard, syncLeadsWithBoard } from "./board";
@@ -737,11 +738,13 @@ export async function getLead(ctx: Ctx, id: string) {
     journey: await contactJourney(ctx, l.contactId),
     leadScore,
     board: await boardStatusOf(ctx, l, leadScore.class),
+    /** Link público da ficha (só leitura). null = não compartilhada. */
+    shareUrl: l.shareToken ? `${appUrl()}/ficha/${l.shareToken}` : null,
   };
 }
 
 /** Lead score do lead: classe valendo, sugestão do quiz e quem ajustou à mão. */
-async function leadScoreOf(l: typeof leads.$inferSelect) {
+export async function leadScoreOf(l: typeof leads.$inferSelect) {
   const [app] = await db
     .select({
       id: quizSubmissions.id,

@@ -190,6 +190,13 @@
       "when": 1793747480820,
       "tag": "0026_tambem_closer",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1793804028676,
+      "tag": "0027_ficha_compartilhada",
+      "breakpoints": true
     }
   ]
 }

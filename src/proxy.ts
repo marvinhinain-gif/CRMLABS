@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC = ["/login", "/cadastro", "/recuperar-senha", "/redefinir-senha", "/convite", "/privacidade", "/termos", "/f", "/forms"];
+const PUBLIC = ["/login", "/cadastro", "/recuperar-senha", "/redefinir-senha", "/convite", "/privacidade", "/termos", "/f", "/forms", "/ficha"];
 
 /**
  * Redireciona visitantes sem cookie de sessão para o login.
