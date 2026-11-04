@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbOrTx } from "../db";
-import { appointments, channelIdentities, contactTags, contacts, relationshipEntries, leadForms, leads, memberships, notes, opportunities, pipelineStages, products, stageHistory, tags, users } from "../db/schema";
+import { appointments, channelIdentities, contactTags, contacts, relationshipEntries, leadForms, leads, memberships, notes, opportunities, pipelineStages, products, stageHistory, tags, tasks, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { actsAsCloser, appointmentScope, assertCan, can, closerMembershipCond, contactScope, opportunityScope, ROLE_LABEL } from "../permissions";
 import { AppError, forbidden, invalid, notFound } from "../errors";
@@ -250,9 +250,12 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
     await assertCloser(ctx, input.closerId);
     const list = await stagesOf((await salesPipelineFor(ctx.orgId, input.closerId)).id);
     target = equivalent(list, current?.stageType);
-    const [nu] = input.closerId ? await db.select({ name: users.name }).from(users).where(eq(users.id, input.closerId)) : [];
-    reason = `Responsável comercial: ${nu?.name ?? "sem closer"}`;
+    const ids = [o.closerId, input.closerId].filter((x): x is string => !!x);
+    const ns = ids.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids)) : [];
+    const nm = (uid: string | null) => ns.find((n) => n.id === uid)?.name ?? "sem closer";
+    reason = o.closerId ? `Transferido de ${nm(o.closerId)} para ${nm(input.closerId)}` : `Responsável comercial: ${nm(input.closerId)}`;
   }
+  const closerChanged = input.closerId !== undefined && input.closerId !== o.closerId;
   if (input.stageId && input.stageId !== o.stageId) {
     const to = await getStageInOrg(ctx.orgId, input.stageId, "sales");
     if (to.archivedAt) throw invalid("Etapa arquivada.");
@@ -293,7 +296,7 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
   const updated = await db.transaction(async (tx) => {
     const [u] = await tx.update(opportunities).set(patch).where(and(eq(opportunities.id, o.id), eq(opportunities.version, fresh.version))).returning();
     if (!u) throw new AppError("conflict", "Esta oportunidade foi alterada por outra pessoa. Os dados foram atualizados.");
-    if (patch.stageId && target) {
+    if ((patch.stageId || closerChanged) && target) {
       await tx.insert(stageHistory).values({
         orgId: ctx.orgId,
         entityType: "opportunity",
@@ -306,12 +309,19 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
         actorId: ctx.userId,
         reason,
       });
-      await recordStageMove(ctx, u, current?.stageType ?? null, target.stageType, tx);
+      if (patch.stageId) await recordStageMove(ctx, u, current?.stageType ?? null, target.stageType, tx);
     }
     // Só o que mudou de fato (reenviar o mesmo valor não conta como edição).
     const fields = (Object.keys(patch) as (keyof typeof patch)[]).filter(
       (k) => k !== "updatedAt" && k !== "version" && String(patch[k] ?? "") !== String((fresh as Record<string, unknown>)[k] ?? ""),
     );
+    // Transferência: as tarefas abertas deste lead que eram do closer antigo vão junto para o novo.
+    if (closerChanged && o.closerId && input.closerId) {
+      await tx
+        .update(tasks)
+        .set({ ownerId: input.closerId, updatedAt: new Date() })
+        .where(and(eq(tasks.orgId, ctx.orgId), eq(tasks.opportunityId, o.id), eq(tasks.ownerId, o.closerId), sql`${tasks.status} <> 'done'`));
+    }
     if (fields.length) {
       await audit(tx, ctx, "opportunity.updated", "opportunity", o.id, {
         title: u.title,
@@ -326,9 +336,11 @@ export async function updateOpportunity(ctx: Ctx, id: string, input: z.infer<typ
     await applyStageEffects(ctx, updated, target).catch((e) => logger.warn("Falha ao aplicar efeitos da etapa", e));
     const [c] = await db.select({ name: contacts.name }).from(contacts).where(eq(contacts.id, o.contactId));
     await alertOpportunityStage(ctx, { contactName: c?.name ?? "Contato", title: updated.title, from: current?.name ?? null, to: target.name }).catch((e) => logger.warn("Falha no alerta de etapa comercial", e));
-    if (input.closerId !== undefined && input.closerId && input.closerId !== ctx.userId) {
-      await notifyUser({ orgId: ctx.orgId, userId: input.closerId, type: "opportunity.assigned", title: `🔥 Novo Lead recebido`, body: `${c?.name ?? "Um lead"} foi encaminhado para você por ${ctx.userName}.`, link: `/comercial?op=${o.id}` });
-    }
+  }
+  // Novo closer é avisado mesmo quando a etapa equivalente não muda.
+  if (closerChanged && input.closerId && input.closerId !== ctx.userId) {
+    const [c] = await db.select({ name: contacts.name }).from(contacts).where(eq(contacts.id, o.contactId));
+    await notifyUser({ orgId: ctx.orgId, userId: input.closerId, type: "opportunity.assigned", title: `🔥 Novo Lead recebido`, body: `${c?.name ?? "Um lead"} agora está com você (transferido por ${ctx.userName}).`, link: `/comercial?op=${o.id}` });
   }
   return updated;
 }

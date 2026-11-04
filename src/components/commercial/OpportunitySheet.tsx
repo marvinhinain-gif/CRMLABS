@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { CalendarCheck, CalendarPlus, CircleX, History, Mail, MessageCircle, Phone, RotateCcw, Send, Trophy, X } from "lucide-react";
+import { ArrowRightLeft, CalendarCheck, CalendarPlus, CircleX, History, Mail, MessageCircle, Phone, RotateCcw, Send, Trophy, X } from "lucide-react";
 import { api, ApiError, fetcher } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import { useOpenContact } from "@/lib/nav";
@@ -15,6 +15,7 @@ import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { JourneySection, type Journey } from "@/components/integrations/Journey";
 import { LeadTasks } from "@/components/tasks/TaskParts";
+import { TransferCloserDialog } from "./TransferCloserDialog";
 
 export type OppDetail = {
   id: string;
@@ -128,11 +129,14 @@ function Body({ o, onClose }: { o: OppDetail; onClose: () => void }) {
   const openContact = useOpenContact();
   const [closing, setClosing] = useState<"won" | "lost" | null>(null);
   const [schedule, setSchedule] = useState(false);
+  const [transfer, setTransfer] = useState(false);
   const [note, setNote] = useState("");
   const [value, setValue] = useState("");
   const c = o.contact;
   const refresh = () => refreshCommercial(mutate);
   const decider = me.permissions.decide;
+  /** Gestor e administrador trocam o closer de um lead em andamento. */
+  const canTransfer = me.permissions.assign && o.status === "open" && !!c;
 
   const move = async (stageId: string) => {
     const to = o.stages.find((s) => s.id === stageId);
@@ -283,7 +287,16 @@ function Body({ o, onClose }: { o: OppDetail; onClose: () => void }) {
                 formatBRL(o.valueCents)
               )}
             </Row>
-            <Row label="Closer">{o.closerName ?? "—"}</Row>
+            <Row label="Closer">
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {o.closerName ?? "—"}
+                {canTransfer && (
+                  <button onClick={() => setTransfer(true)} className="inline-flex items-center gap-1 text-[13px] font-medium text-brand hover:underline">
+                    <ArrowRightLeft className="size-3.5" aria-hidden /> Transferir para outro closer
+                  </button>
+                )}
+              </span>
+            </Row>
           </dl>
           {c && (
             <button onClick={() => openContact(c.id)} className="mt-1 text-[13px] font-medium text-brand hover:underline">
@@ -387,6 +400,14 @@ function Body({ o, onClose }: { o: OppDetail; onClose: () => void }) {
         </footer>
       )}
       <CloseDealDialog mode={closing} title={c?.name ?? o.title} valueCents={o.valueCents} onConfirm={close} onClose={() => setClosing(null)} />
+      {canTransfer && c && (
+        <TransferCloserDialog
+          open={transfer}
+          onOpenChange={setTransfer}
+          opportunity={{ id: o.id, version: o.version, closerId: o.closerId, closerName: o.closerName, stageName: o.stage?.name ?? null, contactId: c.id, contactName: c.name }}
+          onDone={refresh}
+        />
+      )}
       <ScheduleDialog open={schedule} onOpenChange={setSchedule} title="Agendar reunião" subtitle={c?.name} defaultTitle={`Reunião com ${first}`} defaultOwnerId={o.closerId} submitLabel="Agendar" onSubmit={book} />
     </div>
   );
