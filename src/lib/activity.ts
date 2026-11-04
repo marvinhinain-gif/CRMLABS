@@ -52,6 +52,8 @@ const LABELS: Record<string, string> = {
   "lead.added_to_board": "Adicionou um lead ao CRM do Social Seller",
   "lead.forwarded_to_kanban": "Encaminhou um lead para o Kanban",
   "lead.scheduled": "Agendou reunião com um lead",
+  "lead.shared": "Criou o link de compartilhamento da ficha de um lead",
+  "lead.unshared": "Desativou o link da ficha de um lead",
   "lead.received": "Recebeu um lead",
   "instagram.lead_created": "Transformou em Lead",
   "instagram.lead_forwarded": "Encaminhou um lead para o closer",
