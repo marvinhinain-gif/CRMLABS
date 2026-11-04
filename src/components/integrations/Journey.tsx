@@ -108,8 +108,9 @@ function AddTouchpoint({ contactId, open, onOpenChange, onSaved }: { contactId: 
 }
 
 /** Origem (primeira/última), dados qualificados e linha do tempo de pontos de contato. */
-export function JourneySection({ contactId, initial, compact, closerView }: { contactId: string; initial?: Journey | null; compact?: boolean; closerView?: boolean }) {
-  const { data, mutate } = useSWR<Journey | null>(`/api/contacts/${contactId}/journey`, fetcher, { fallbackData: initial ?? undefined });
+export function JourneySection({ contactId, initial, compact, closerView, readOnly }: { contactId: string; initial?: Journey | null; compact?: boolean; closerView?: boolean; readOnly?: boolean }) {
+  // readOnly: closer acompanhando um lead que ainda está com o SDR (sem acesso ao contato): mostra só o que veio no lead.
+  const { data, mutate } = useSWR<Journey | null>(readOnly ? null : `/api/contacts/${contactId}/journey`, fetcher, { fallbackData: initial ?? (readOnly ? null : undefined) });
   const [adding, setAdding] = useState(false);
   if (data === undefined) return <LoadingState rows={2} />;
   if (!data) return null;
@@ -148,16 +149,18 @@ export function JourneySection({ contactId, initial, compact, closerView }: { co
           <div className="mt-1">{data.last ? <OriginTrail source={data.last} parts={[]} at={data.last.at} /> : <span className="text-[13.5px] text-muted">Não registrada</span>}</div>
         </div>
       </div>
-      <InstagramRelationship contactId={contactId} compact={compact} />
+      {!readOnly && <InstagramRelationship contactId={contactId} compact={compact} />}
       {!compact && (
         <div>
           <div className="mb-2 flex items-center justify-between">
             <p className="flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-wide text-muted">
               <Footprints className="size-4" aria-hidden /> Jornada
             </p>
-            <Button size="sm" variant="ghost" icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>
-              Registrar origem
-            </Button>
+            {!readOnly && (
+              <Button size="sm" variant="ghost" icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>
+                Registrar origem
+              </Button>
+            )}
           </div>
           {tps.length === 0 ? (
             <p className="text-[13.5px] text-muted">Nenhum ponto de contato registrado ainda.</p>

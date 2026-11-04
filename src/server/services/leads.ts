@@ -691,10 +691,23 @@ export async function leadSourceStats(ctx: Ctx, f: z.infer<typeof leadSourceStat
   };
 }
 
-async function getVisibleLead(ctx: Ctx, id: string) {
-  const [l] = await db.select().from(leads).where(and(eq(leads.id, id), leadScope(ctx)));
-  if (!l) throw notFound("Lead não encontrado.");
+async function getVisibleLead(ctx: Ctx, id: string, mode: "view" | "edit" = "view") {
+  const [l] = await db.select().from(leads).where(and(eq(leads.id, id), leadScope(ctx, mode)));
+  if (!l) {
+    if (mode === "edit") {
+      const [seen] = await db.select({ id: leads.id }).from(leads).where(and(eq(leads.id, id), leadScope(ctx)));
+      if (seen) throw forbidden("Este lead está com o SDR. Você pode acompanhar, mas só mexe nele quando chegar para você.");
+    }
+    throw notFound("Lead não encontrado.");
+  }
   return l;
+}
+
+/** Pode mexer no lead (status, score, Kanban, reunião)? O closer vê todos, mas só edita os que chegaram a ele. */
+async function canEditLead(ctx: Ctx, id: string) {
+  if (can(ctx, "data.all") || ctx.role !== "closer") return true;
+  const [l] = await db.select({ id: leads.id }).from(leads).where(and(eq(leads.id, id), leadScope(ctx, "edit")));
+  return !!l;
 }
 
 export async function getLead(ctx: Ctx, id: string) {
@@ -737,6 +750,7 @@ export async function getLead(ctx: Ctx, id: string) {
     journey: await contactJourney(ctx, l.contactId),
     leadScore,
     board: await boardStatusOf(ctx, l, leadScore.class),
+    canEdit: await canEditLead(ctx, l.id),
   };
 }
 
@@ -781,7 +795,7 @@ export const updateLeadSchema = z.object({
 });
 
 export async function updateLead(ctx: Ctx, id: string, input: z.infer<typeof updateLeadSchema>) {
-  const l = await getVisibleLead(ctx, id);
+  const l = await getVisibleLead(ctx, id, "edit");
   const patch: Partial<typeof leads.$inferInsert> = { updatedAt: new Date() };
   if (input.status) {
     if (l.status === "scheduled" && input.status !== "disqualified") throw invalid("Este lead já tem reunião. Altere a reunião em Agendamentos.");
@@ -874,7 +888,7 @@ export const addLeadToBoardSchema = z.object({ stageId: z.string().uuid().option
 
 /** "Adicionar ao CRM do Social Seller": único caminho para um lead de formulário entrar no Kanban. */
 export async function addLeadToBoard(ctx: Ctx, id: string, input: z.infer<typeof addLeadToBoardSchema>) {
-  const l = await getVisibleLead(ctx, id);
+  const l = await getVisibleLead(ctx, id, "edit");
   const [form] = l.formId ? await db.select({ name: leadForms.name }).from(leadForms).where(eq(leadForms.id, l.formId)) : [];
   const stageId = input.stageId ?? (await suggestedStageFor(ctx, l, (await leadScoreOf(l)).class))?.id;
   if (!stageId) throw invalid("O Kanban do Social Seller não tem etapas.");
@@ -907,7 +921,7 @@ export const forwardLeadSchema = z.object({ sdrId: z.string().uuid().optional(),
  * Kanban do Social Seller, e deixa de aparecer nas abas de trabalho de Leads.
  */
 export async function forwardLeadToKanban(ctx: Ctx, id: string, input: z.infer<typeof forwardLeadSchema>) {
-  const l = await getVisibleLead(ctx, id);
+  const l = await getVisibleLead(ctx, id, "edit");
   const sdrId = input.sdrId ?? ctx.userId;
   const manager = can(ctx, "contacts.assign");
   if (sdrId !== ctx.userId && !manager) throw forbidden("Somente gestores encaminham para o Kanban de outra pessoa.");
@@ -999,7 +1013,7 @@ export const scheduleLeadSchema = z
 
 /** O social seller confirma a reunião com o lead: cria o agendamento e marca o lead como agendado. */
 export async function scheduleLead(ctx: Ctx, id: string, input: z.infer<typeof scheduleLeadSchema>) {
-  const l = await getVisibleLead(ctx, id);
+  const l = await getVisibleLead(ctx, id, "edit");
   if (l.status === "scheduled" && l.appointmentId) {
     const [a] = await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, l.appointmentId));
     if (a && a.status === "scheduled") throw new AppError("conflict", "Este lead já tem uma reunião marcada. Remarque em Agendamentos.");
@@ -1032,6 +1046,6 @@ export async function newLeadCount(ctx: Ctx) {
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(leads)
-    .where(and(leadScope(ctx), eq(leads.status, "new"), sql`not ${inKanbanSql}`, can(ctx, "data.all") ? undefined : or(eq(leads.assignedTo, ctx.userId), isNull(leads.assignedTo))));
+    .where(and(leadScope(ctx, "edit"), eq(leads.status, "new"), sql`not ${inKanbanSql}`, can(ctx, "data.all") ? undefined : or(eq(leads.assignedTo, ctx.userId), isNull(leads.assignedTo))));
   return n;
 }
