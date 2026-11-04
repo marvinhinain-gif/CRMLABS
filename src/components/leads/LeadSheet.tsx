@@ -4,13 +4,13 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Ban, CalendarCheck, CalendarClock, Check, ExternalLink, LayoutDashboard, Mail, MessageCircle, Phone, PhoneOff, Plus, Send, SquareUser, X } from "lucide-react";
+import { Ban, CalendarCheck, CalendarClock, Check, Copy, ExternalLink, LayoutDashboard, Link2, Link2Off, Mail, MessageCircle, Phone, PhoneOff, Plus, Send, Share2, SquareUser, X } from "lucide-react";
 import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { LeadTasks } from "@/components/tasks/TaskParts";
 import { api, fetcher } from "@/lib/api";
 import { useMe, useTeam } from "@/lib/me";
 import { formatDateTime, formatPhone, longDayTime, relativeTime, whatsappLink } from "@/lib/format";
-import { Avatar, Button, cx, ErrorState, LoadingState, Select, Sheet, SheetClose } from "@/components/ui";
+import { Avatar, Button, cx, Dialog, ErrorState, LoadingState, Select, Sheet, SheetClose } from "@/components/ui";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { JourneySection, OriginTrail, type Journey } from "@/components/integrations/Journey";
@@ -83,6 +83,7 @@ type LeadDetail = {
   journey: Journey | null;
   leadScore: LeadScore;
   board: LeadBoard;
+  shareUrl: string | null;
 };
 
 type LeadBoard = { inBoard: boolean; stageId: string | null; stageName: string | null; suggestedStageId: string | null; ownerId: string | null; ownerName: string | null; contatoStageId: string | null };
@@ -324,6 +325,97 @@ function LeadScoreCard({ s, busy, onSet, isAdmin }: { s: LeadScore; busy: string
   );
 }
 
+/** Link público da ficha: quem recebe vê os dados e as respostas do formulário, sem login e sem poder mudar nada. */
+function ShareDialog({ open, onOpenChange, leadId, leadName, url, onChanged }: { open: boolean; onOpenChange: (v: boolean) => void; leadId: string; leadName: string; url: string | null; onChanged: () => Promise<void> | void }) {
+  const [busy, setBusy] = useState<"create" | "revoke" | null>(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const run = async (kind: "create" | "revoke") => {
+    setBusy(kind);
+    try {
+      if (kind === "create") {
+        const r = await api.post<{ url: string }>(`/api/leads/${leadId}/share`, {});
+        await onChanged();
+        await copy(r.url, "Link criado e copiado.");
+      } else {
+        await api.del(`/api/leads/${leadId}/share`);
+        await onChanged();
+        setConfirmRevoke(false);
+        toast.success("Link desativado. Quem tiver o endereço antigo não vê mais a ficha.");
+      }
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const copy = (value: string, msg = "Link copiado.") =>
+    navigator.clipboard
+      .writeText(value)
+      .then(() => toast.success(msg))
+      .catch(() => toast.message("Selecione o link e copie manualmente."));
+  const wa = url ? `https://wa.me/?text=${encodeURIComponent(`Ficha de ${leadName}: ${url}`)}` : null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) setConfirmRevoke(false);
+        onOpenChange(v);
+      }}
+      size="sm"
+      title="Compartilhar ficha"
+      description="Qualquer pessoa com o link vê os dados de contato e as respostas do formulário deste lead, sem precisar entrar no CRM. Só leitura."
+    >
+      {url ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-1 rounded-[12px] border border-line bg-page/60 py-1 pl-3 pr-1">
+            <input readOnly value={url} aria-label="Link da ficha" onFocus={(e) => e.currentTarget.select()} className="min-w-0 flex-1 truncate bg-transparent text-[13px] outline-none" />
+            <button type="button" onClick={() => copy(url)} className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted hover:bg-white hover:text-ink" aria-label="Copiar link">
+              <Copy className="size-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="secondary" icon={<Copy className="size-4" />} onClick={() => copy(url)}>
+              Copiar link
+            </Button>
+            <a href={wa ?? undefined} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-[14px] border border-[#bfe8d3] bg-[#e9f9f1] text-[14px] font-semibold text-[#0f7a4f] hover:brightness-[0.98]">
+              <MessageCircle className="size-4" aria-hidden /> WhatsApp
+            </a>
+          </div>
+          <a href={url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-1.5 self-start text-[13.5px] font-medium text-brand hover:underline">
+            <ExternalLink className="size-4" aria-hidden /> Ver como a pessoa vai ver
+          </a>
+          <div className="border-t border-line pt-3">
+            {confirmRevoke ? (
+              <div className="flex flex-col gap-2 rounded-[14px] bg-danger-soft p-3">
+                <p className="text-[13px] text-danger">Quem já recebeu o link deixa de ver a ficha. Se compartilhar de novo, sai um link novo.</p>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="danger" loading={busy === "revoke"} onClick={() => run("revoke")}>
+                    Desativar link
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmRevoke(false)}>
+                    Cancelar
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setConfirmRevoke(true)} className="inline-flex min-h-11 items-center gap-1.5 text-[13.5px] font-medium text-muted hover:text-danger">
+                <Link2Off className="size-4" aria-hidden /> Desativar link
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <p className="text-[13.5px] text-muted">Este lead ainda não tem link. Ao criar, ele já vai copiado para você colar no WhatsApp, e-mail ou onde quiser. Você pode desativar quando quiser.</p>
+          <Button loading={busy === "create"} icon={<Link2 className="size-4" />} onClick={() => run("create")}>
+            Criar link da ficha
+          </Button>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 py-2.5">
@@ -341,6 +433,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [scheduling, setScheduling] = useState(false);
   const [forwarding, setForwarding] = useState(false);
+  const [sharing, setSharing] = useState(false);
   if (error) return <ErrorState error={error} onRetry={() => mutate()} className="p-6" />;
   if (!l) return <LoadingState rows={6} className="p-6" />;
 
@@ -386,6 +479,15 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
             <LeadClassBadge cls={l.leadScore.class} score={l.leadScore.application?.score} manual={!!l.leadScore.manual} />
           </span>
         </div>
+        <button
+          type="button"
+          className={cx("flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-page", l.shareUrl ? "text-brand" : "text-muted")}
+          aria-label={l.shareUrl ? "Compartilhar ficha (link ativo)" : "Compartilhar ficha"}
+          title="Compartilhar ficha por link"
+          onClick={() => setSharing(true)}
+        >
+          <Share2 className="size-5" />
+        </button>
         <SheetClose asChild>
           <button className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-page" aria-label="Fechar" onClick={onClose}>
             <X className="size-5" />
@@ -485,7 +587,12 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           {l.adName && <p className="mt-1.5 text-[12.5px] text-muted">Conteúdo / anúncio: {l.adName}</p>}
         </div>
 
-        <h3 className="mt-6 text-[13px] font-semibold uppercase tracking-wide text-muted">Formulário / Aplicação{l.formName ? ` · ${l.formName}` : ""}</h3>
+        <div className="mt-6 flex items-center justify-between gap-2">
+          <h3 className="min-w-0 text-[13px] font-semibold uppercase tracking-wide text-muted">Formulário / Aplicação{l.formName ? ` · ${l.formName}` : ""}</h3>
+          <button type="button" onClick={() => setSharing(true)} className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full px-2 text-[13px] font-semibold text-brand hover:bg-page">
+            <Share2 className="size-4" aria-hidden /> {l.shareUrl ? "Link ativo" : "Compartilhar"}
+          </button>
+        </div>
         <dl className="mt-1 divide-y divide-line">
           {l.productName && <Row label="Produto de interesse">{l.productName}</Row>}
           {l.customValues.map((c) => (
@@ -590,6 +697,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
         )}
       </footer>
 
+      <ShareDialog open={sharing} onOpenChange={setSharing} leadId={l.id} leadName={l.name} url={l.shareUrl} onChanged={async () => void (await mutate())} />
       <ForwardDialog open={forwarding} onOpenChange={setForwarding} contactId={l.contactId} contactName={l.name} onDone={() => refresh()} />
       <ScheduleDialog
         open={scheduling}

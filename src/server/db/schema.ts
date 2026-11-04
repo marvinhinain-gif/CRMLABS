@@ -995,10 +995,14 @@ export const leads = pgTable(
     scoreClass: text("score_class"),
     scoreClassBy: uuid("score_class_by").references(() => users.id, { onDelete: "set null" }),
     scoreClassAt: ts("score_class_at"),
+    /** Link público da ficha (só leitura, sem login): /ficha/{token}. null = não compartilhada ou link desativado. */
+    shareToken: text("share_token"),
+    sharedAt: ts("shared_at"),
+    sharedBy: uuid("shared_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("leads_org_idx").on(t.orgId, t.createdAt), index("leads_assigned_idx").on(t.orgId, t.assignedTo, t.status)],
+  (t) => [index("leads_org_idx").on(t.orgId, t.createdAt), index("leads_assigned_idx").on(t.orgId, t.assignedTo, t.status), uniqueIndex("leads_share_token_uq").on(t.shareToken)],
 );
 
 // ---------- Origens, produtos, campos personalizados e jornada ----------
