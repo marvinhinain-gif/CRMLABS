@@ -64,6 +64,19 @@ function ProfileTab() {
 }
 
 function ChangePassword() {
+  const me = useMe();
+  const [resetting, setResetting] = useState(false);
+  /** Administrador que esqueceu a senha atual: cria um link de nova senha para si e abre na hora. */
+  const resetOwn = async () => {
+    setResetting(true);
+    try {
+      const r = await api.post<{ link: string }>(`/api/team/${me.user.id}/access-link`);
+      window.location.href = r.link;
+    } catch (e) {
+      toast.error((e as Error).message);
+      setResetting(false);
+    }
+  };
   const [form, setForm] = useState({ current: "", next: "", confirm: "" });
   const [fields, setFields] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -97,7 +110,14 @@ function ChangePassword() {
         <Field label="Confirme a nova senha" htmlFor="pw-conf" error={fields.confirm}>
           <Input id="pw-conf" type="password" autoComplete="new-password" value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} />
         </Field>
-        <div className="sm:col-span-3 flex justify-end">
+        <div className="sm:col-span-3 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+          {me.permissions.teamManage ? (
+            <Button type="button" variant="ghost" loading={resetting} onClick={resetOwn}>
+              Não lembro a senha atual
+            </Button>
+          ) : (
+            <span />
+          )}
           <Button type="submit" loading={loading} disabled={!form.current || !form.next}>
             Salvar nova senha
           </Button>
