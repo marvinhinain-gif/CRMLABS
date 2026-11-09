@@ -25,7 +25,9 @@ import {
 } from "../db/schema";
 import type { Ctx } from "../context";
 import { AppError, forbidden, invalid, notFound } from "../errors";
-import { can, closerMembershipCond, leadScope } from "../permissions";
+import { assertCan, can, closerMembershipCond, leadScope } from "../permissions";
+import { buildCsv, buildXlsx, type Cell } from "../xlsx";
+import { formatPhone } from "@/lib/format";
 import { publish } from "../realtime";
 import { parseLocalDateTime } from "../time";
 import { logger } from "../logger";
@@ -35,7 +37,7 @@ import { linkContentFor } from "./contentTracking";
 import { activeEntryFor, addToBoard, syncLeadsWithBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
-import { classFromProduct, LEAD_CLASSES, LEAD_CLASS_FILTERS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, type LeadClass } from "@/lib/leadScore";
+import { classFromProduct, LEAD_CLASS, LEAD_CLASSES, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
 
 // ---------- Normalização ----------
 
@@ -499,9 +501,9 @@ function sourceCond(fonte: string) {
 
 const PAGE = 30;
 
-export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
+/** Filtros da lista de Leads (aba, formulário, responsável, fonte, período e busca), sem o lead score. */
+function leadListConds(ctx: Ctx, f: Omit<z.infer<typeof listLeadsSchema>, "page">) {
   const conds: SQL[] = [leadScope(ctx)];
-  const top = f.status === "top20";
   if (f.status === "open") conds.push(inArray(leads.status, [...WORK_STATUSES]), sql`not ${inKanbanSql}`);
   else if (f.status === "top20") conds.push(...topLeadsConds());
   else if (f.status === "kanban") conds.push(inKanbanSql);
@@ -515,13 +517,21 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     const like = `%${f.q.replace(/[%_]/g, "")}%`;
     conds.push(or(ilike(leads.name, like), ilike(leads.email, like), ilike(leads.phone, like), ilike(leads.instagram, like))!);
   }
+  return conds;
+}
+
+const classeCond = (classe: NonNullable<z.infer<typeof listLeadsSchema>["classe"]>) => (classe === "none" ? sql`${leadClassSql} is null` : sql`${leadClassSql} = ${classe}`);
+
+export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
+  const conds = leadListConds(ctx, f);
+  const top = f.status === "top20";
   // Contagem por classe respeita os outros filtros (situação, responsável, busca).
   const classCounts = await db
     .select({ cls: leadClassSql, n: sql<number>`count(*)::int` })
     .from(leads)
     .where(and(...conds))
     .groupBy(sql`1`);
-  if (f.classe) conds.push(f.classe === "none" ? sql`${leadClassSql} is null` : sql`${leadClassSql} = ${f.classe}`);
+  if (f.classe) conds.push(classeCond(f.classe));
   const where = and(...conds);
   const rows = await db
     .select({
@@ -593,6 +603,136 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     topCount: Math.min(top20, TOP_LEADS_LIMIT),
     classCounts: Object.fromEntries(classCounts.map((c) => [c.cls ?? "none", c.n])) as Record<string, number>,
   };
+}
+
+// ---------- Exportar leads (Excel/CSV) ----------
+
+export const exportLeadsSchema = listLeadsSchema.omit({ page: true }).extend({ format: z.enum(["csv", "xlsx"]).default("xlsx") });
+
+const LEAD_STATUS_LABEL: Record<string, string> = { new: "Novo", contacted: "Em contato", no_answer: "Sem resposta", scheduled: "Reunião marcada", disqualified: "Descartado" };
+const EXPORT_LIMIT = 20000;
+
+/**
+ * Planilha com os leads da lista (mesma aba e filtros da tela) e todas as respostas de cada um:
+ * uma coluna por pergunta (pelo texto da pergunta), mais os campos personalizados.
+ */
+export async function exportLeads(ctx: Ctx, f: z.infer<typeof exportLeadsSchema>) {
+  assertCan(ctx, "leads.manage", "Só administradores e gestores podem exportar os leads.");
+  const { format, ...filters } = f;
+  const top = filters.status === "top20";
+  const conds = leadListConds(ctx, filters);
+  if (filters.classe) conds.push(classeCond(filters.classe));
+  const rows = await db
+    .select({
+      createdAt: leads.createdAt,
+      name: leads.name,
+      phone: leads.phone,
+      email: leads.email,
+      instagram: leads.instagram,
+      status: leads.status,
+      answers: leads.answers,
+      custom: leads.custom,
+      utm: leads.utm,
+      preferredAt: leads.preferredAt,
+      preferredText: leads.preferredText,
+      assignedName: users.name,
+      formName: leadForms.name,
+      campaign: sql<string | null>`coalesce(${leads.campaign}, ${leads.utm}->>'utm_campaign')`,
+      sourceName: leadSources.name,
+      productName: products.name,
+      appointmentAt: appointments.startsAt,
+      scoreClass: leadClassSql,
+      score: sql<number | null>`${latestApplication(sql`s.score`)}`,
+      revenue: sql<string | null>`${revenueSql}`,
+      boardOwnerName: sql<string | null>`case when ${inKanbanSql} then (select u.name from contacts c join users u on u.id = c.owner_id where c.id = ${sql.raw('"leads"."contact_id"')}) end`,
+      boardStageName: sql<string | null>`case when ${inKanbanSql} then (select ps.name from relationship_entries re join pipeline_stages ps on ps.id = re.stage_id where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created limit 1) end`,
+    })
+    .from(leads)
+    .leftJoin(users, eq(users.id, leads.assignedTo))
+    .leftJoin(leadForms, eq(leadForms.id, leads.formId))
+    .leftJoin(appointments, eq(appointments.id, leads.appointmentId))
+    .leftJoin(leadSources, eq(leadSources.id, leads.sourceId))
+    .leftJoin(products, eq(products.id, leads.productId))
+    .where(and(...conds))
+    .orderBy(...(top ? [sql`${latestApplication(sql`s.score`)} desc nulls last`, desc(leads.createdAt)] : [desc(leads.createdAt)]))
+    .limit(top ? TOP_LEADS_LIMIT : EXPORT_LIMIT);
+
+  // Uma coluna por pergunta, na ordem em que aparecem (o mesmo texto em formulários diferentes cai na mesma coluna).
+  const questions: string[] = [];
+  const seen = new Set<string>();
+  const answerMaps = rows.map((r) => {
+    const m = new Map<string, string>();
+    for (const a of r.answers ?? []) {
+      const label = (a.label ?? "").trim();
+      if (!label) continue;
+      const key = label.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        questions.push(label);
+      }
+      const value = String(a.value ?? "").trim();
+      m.set(key, m.has(key) && value ? `${m.get(key)} | ${value}` : value || (m.get(key) ?? ""));
+    }
+    return m;
+  });
+  const fieldIds = [...new Set(rows.flatMap((r) => Object.keys(r.custom ?? {})))];
+  const fields = fieldIds.length ? await db.select({ id: customFields.id, label: customFields.label }).from(customFields).where(and(eq(customFields.orgId, ctx.orgId), inArray(customFields.id, fieldIds))).orderBy(asc(customFields.position)) : [];
+  const extraFields = fields.filter((cf) => !seen.has(cf.label.trim().toLowerCase()));
+
+  const fmt = new Intl.DateTimeFormat("pt-BR", { timeZone: ctx.org.timezone, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const when = (d: Date | null) => (d ? fmt.format(d) : "");
+  const header = [
+    "Data de entrada",
+    "Nome",
+    "WhatsApp",
+    "E-mail",
+    "Instagram",
+    "Situação",
+    "Lead score",
+    "Pontuação do quiz",
+    "Faturamento mensal",
+    "Interesse",
+    "Formulário",
+    "Fonte",
+    "Campanha",
+    "Responsável",
+    "Kanban",
+    "Reunião",
+    "Horário preferido",
+    "utm_source",
+    "utm_medium",
+    "utm_content",
+    ...questions,
+    ...extraFields.map((cf) => cf.label),
+  ];
+  const data: Cell[][] = rows.map((r, i) => [
+    when(r.createdAt),
+    r.name,
+    formatPhone(r.phone),
+    r.email,
+    r.instagram ? `@${r.instagram}` : "",
+    LEAD_STATUS_LABEL[r.status] ?? r.status,
+    r.scoreClass ? LEAD_CLASS[r.scoreClass].label : UNCLASSIFIED.label,
+    r.score,
+    r.revenue ? (REVENUE_OPTIONS[r.revenue]?.label ?? r.revenue) : "",
+    r.productName,
+    r.formName,
+    r.sourceName,
+    r.campaign,
+    r.assignedName,
+    r.boardOwnerName || r.boardStageName ? [r.boardOwnerName, r.boardStageName].filter(Boolean).join(" · ") : "",
+    when(r.appointmentAt),
+    r.preferredAt ? when(r.preferredAt) : r.preferredText,
+    r.utm?.utm_source,
+    r.utm?.utm_medium,
+    r.utm?.utm_content,
+    ...questions.map((q) => answerMaps[i].get(q.toLowerCase()) ?? ""),
+    ...extraFields.map((cf) => r.custom?.[cf.id] ?? ""),
+  ]);
+  await audit(db, ctx, "leads.exported", "lead", null, { format, rows: data.length, status: filters.status });
+  const base = `leads-${new Date().toISOString().slice(0, 10)}`;
+  if (format === "csv") return { filename: `${base}.csv`, type: "text/csv; charset=utf-8", body: Buffer.from(buildCsv(header, data), "utf8") };
+  return { filename: `${base}.xlsx`, type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", body: buildXlsx("Leads", header, data) };
 }
 
 // ---------- Gráfico: leads por fonte de tráfego ----------

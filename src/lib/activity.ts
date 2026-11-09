@@ -131,6 +131,7 @@ const LABELS: Record<string, string> = {
   "form.restored": "Restaurou um formulário",
   "form.deleted": "Apagou um formulário",
   "form.exported": "Exportou as respostas de um formulário",
+  "leads.exported": "Exportou a lista de leads",
   "form.recalculated": "Recalculou as notas de um formulário",
   "form.scoring_draft_changed": "Mudou as regras de pontuação (rascunho)",
   "form.scoring_published": "Publicou as regras de pontuação",
