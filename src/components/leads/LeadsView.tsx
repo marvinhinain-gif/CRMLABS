@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import Link from "next/link";
-import { CalendarCheck, ChevronRight, Inbox, LayoutDashboard, Loader2, Plug, Search, Trophy } from "lucide-react";
+import { CalendarCheck, ChevronRight, Download, Inbox, LayoutDashboard, Loader2, Plug, Search, Trophy } from "lucide-react";
 import { api, fetcher, qs } from "@/lib/api";
 import type { ForwardToKanbanResult } from "@/lib/types";
 import { useMe, useTeam } from "@/lib/me";
@@ -231,6 +231,16 @@ function LeadList() {
             </button>
           ))}
         </div>
+        {me.permissions.dataAll && (
+          <a
+            href={`/api/leads/export${qs({ status, q: debounced, assignedTo: owner, classe, fonte, periodo, format: "xlsx" })}`}
+            download
+            title="Baixa os leads desta lista (mesma aba e filtros) com todas as respostas dos formulários"
+            className="ml-auto inline-flex h-10 shrink-0 items-center gap-2 rounded-full border border-line bg-white px-4 text-[14px] font-medium text-ink hover:bg-page"
+          >
+            <Download className="size-4" aria-hidden /> Exportar para Excel
+          </a>
+        )}
       </div>
       <LeadSourceChart periodo={periodo} classe={classe} owner={owner} fonte={fonte} onPickSource={pickSource} />
       <div className="flex flex-col gap-3">
