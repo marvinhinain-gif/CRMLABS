@@ -6,6 +6,8 @@ import { checkoutOrders, contactTouchpoints, contacts, notifications } from "@/s
 import { catalog, createSource } from "@/server/services/integrations";
 import { caktoSetup, checkoutDashboard, importCaktoOrders, matchSource, receiveCaktoWebhook, saveCaktoSettings, setCaktoFetchForTests } from "@/server/services/checkout";
 import { parseOrder, toCents } from "@/server/integrations/cakto/parse";
+import { getCommercialDashboard, setGoal } from "@/server/services/metrics";
+import { salesEvents } from "@/server/db/schema";
 import { setupOrg } from "./helpers";
 
 const SECRET = "b3f1a9c2-7b4d-4a8e-9f01-2c6d5b8a4e37";
@@ -123,6 +125,32 @@ describe("Cakto: webhook de vendas", () => {
     expect(d.origins[0]).toMatchObject({ name: "Stories", sales: 1, share: 100 });
     expect(d.recent[0]).toMatchObject({ name: "João Comprador", product: "Mentoria AXION", amountCents: 99700, sourceVia: "utm" });
     await expect(checkoutDashboard(ctx.seller, { period: "month" })).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("meta do mês soma as vendas da Cakto (sem juros do parcelamento), sem contar duas vezes a venda marcada no CRM", async () => {
+    const { org, ctx, send } = await setup();
+    const now = new Date();
+    const month = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bahia", year: "numeric", month: "2-digit" }).format(now).slice(0, 7);
+    await setGoal(ctx.admin, { month, targetCents: 7_500_000 });
+    // À vista: R$ 10.000. Parcelado: oferta de R$ 1.600, comprador paga R$ 1.983,04 com juros.
+    await send(sale({ id: "p1", baseAmount: 10000, amount: 10000 }));
+    await send(sale({ id: "p2", baseAmount: 1600, amount: 1983.04, installments: 12, customer: { name: "Ana", email: "ana@ex.com.br", phone: null } }));
+    // Recusado e reembolsado não contam.
+    await send(sale({ id: "p3", status: "refused", paidAt: null, baseAmount: 3200, amount: 3200 }, "purchase_refused"));
+    await send(sale({ id: "p4", baseAmount: 500, amount: 500 }));
+    await send(sale({ id: "p4", status: "refunded", baseAmount: 500, amount: 500, refundedAt: now.toISOString() }, "refund"));
+    // O closer também marcou a venda do João no funil: não soma de novo. Venda de outra pessoa no CRM soma.
+    const [joao] = await db.select().from(checkoutOrders).where(eq(checkoutOrders.externalId, "p1"));
+    const [outro] = await db.insert(contacts).values({ orgId: org.id, name: "Bia" }).returning();
+    await db.insert(salesEvents).values([
+      { orgId: org.id, type: "sale_won", contactId: joao.contactId!, valueCents: 1_000_000, occurredAt: now },
+      { orgId: org.id, type: "sale_won", contactId: outro.id, valueCents: 200_000, occurredAt: now },
+    ]);
+
+    const { meta } = await getCommercialDashboard(ctx.admin, { period: "month" });
+    expect(meta).toMatchObject({ caktoCents: 1_160_000, caktoSales: 2, crmCents: 200_000, crmSales: 1, realizedCents: 1_360_000, remainingCents: 6_140_000, sales: 3 });
+    expect(meta.daysLeft).toBeGreaterThan(0);
+    expect(meta.perDayCents).toBe(Math.ceil(6_140_000 / meta.daysLeft));
   });
 
   it("assinatura no cabeçalho (HMAC) vale; envio repetido não duplica", async () => {
