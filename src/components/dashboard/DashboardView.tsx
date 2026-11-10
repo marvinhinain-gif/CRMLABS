@@ -20,7 +20,7 @@ import { CheckoutSales } from "./CheckoutSales";
 type Dash = {
   period: { key: string; start: string; end: string };
   scope: "org" | "seller" | "closer" | "manager" | "admin";
-  meta: { month: string; targetCents: number; realizedCents: number; remainingCents: number; progress: number | null; sales: number; daysLeft: number; forecastCents: number | null; canEdit: boolean };
+  meta: { month: string; targetCents: number; realizedCents: number; remainingCents: number; progress: number | null; sales: number; caktoCents: number; caktoSales: number; crmCents: number; crmSales: number; daysLeft: number; perDayCents: number | null; forecastCents: number | null; canEdit: boolean };
   kpis: { contacts: number; scheduled: number; done: number; noShow: number; sales: number; revenueCents: number; avgTicketCents: number; lost: number; forwarded: number };
   conversions: { contactToMeeting: number | null; meetingToShow: number | null; meetingToSale: number | null; contactToSale: number | null };
   closerRanking: { userId: string; name: string; sales: number; revenueCents: number; avgTicketCents: number }[];
@@ -129,6 +129,13 @@ function GoalDialog({ open, onOpenChange, month }: { open: boolean; onOpenChange
   );
 }
 
+/** 6180000 → "R$ 61,8 mil" */
+function formatMil(cents: number) {
+  const reais = cents / 100;
+  if (reais < 1000) return formatBRL(cents, true);
+  return `R$ ${(reais / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil`;
+}
+
 function MetaCard({ meta }: { meta: Dash["meta"] }) {
   const [edit, setEdit] = useState(false);
   const progress = meta.progress ?? 0;
@@ -183,8 +190,20 @@ function MetaCard({ meta }: { meta: Dash["meta"] }) {
           <div className="relative mt-5 h-4 sm:h-5 overflow-hidden rounded-full bg-[#e9f1ee]" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} aria-label="Progresso da meta">
             <span className="bar-grow bar-shine block h-full rounded-full bg-gradient-to-r from-[#00a878] to-[#008a65]" style={{ width: `${Math.min(100, Math.max(progress, progress > 0 ? 2 : 0))}%` }} />
           </div>
+          {!hit && meta.perDayCents !== null && (
+            <div className="relative mt-4 flex items-start gap-3 rounded-[16px] bg-selected/70 px-4 py-3">
+              <Flag className="mt-0.5 size-5 shrink-0 text-brand-dark" aria-hidden />
+              <p className="text-[14px] sm:text-[15px] leading-snug">
+                Faltam <b className="font-semibold">{formatMil(meta.remainingCents)}</b> em <b className="font-semibold">{meta.daysLeft} dia{meta.daysLeft > 1 ? "s" : ""}</b>
+                {meta.daysLeft > 1 && " (contando hoje)"}: precisamos vender <b className="font-semibold text-brand-dark">{formatBRL(meta.perDayCents, true)} por dia</b>
+                {meta.daysLeft >= 7 && <> (cerca de {formatMil(meta.perDayCents * 7)} por semana)</>} para bater a meta.
+              </p>
+            </div>
+          )}
           <p className="relative mt-2.5 text-[12.5px] text-muted">
             {meta.sales} venda{meta.sales === 1 ? "" : "s"} no mês
+            {meta.caktoSales > 0 && <> · {formatBRL(meta.caktoCents, true)} na Cakto ({meta.caktoSales})</>}
+            {meta.caktoSales > 0 && meta.crmSales > 0 && <> · {formatBRL(meta.crmCents, true)} marcadas no CRM ({meta.crmSales})</>}
             {meta.forecastCents !== null && !hit && <> · no ritmo atual, o mês fecha em <b className="font-semibold text-ink">{formatBRL(meta.forecastCents, true)}</b></>}
             {hit && " · meta batida! 🎉"}
           </p>

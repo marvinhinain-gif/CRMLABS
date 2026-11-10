@@ -1,9 +1,9 @@
-import { and, asc, eq, gte, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, notInArray, sql, type SQL } from "drizzle-orm";
 import { TZDate } from "@date-fns/tz";
 import { addMonths, startOfMonth } from "date-fns";
 import { z } from "zod";
 import { db } from "../db";
-import { contacts, leadSources, leads, memberships, products, salesEvents, salesGoals, users } from "../db/schema";
+import { checkoutOrders, contacts, leadSources, leads, memberships, products, salesEvents, salesGoals, users } from "../db/schema";
 import type { Ctx } from "../context";
 import { assertCan, can } from "../permissions";
 import { invalid } from "../errors";
@@ -69,6 +69,9 @@ function scopeConds(ctx: Ctx, f: Filters): SQL[] {
 const OUTER_CONTACT = sql.raw(`"contacts"."id"`);
 const OUTER = { appointment: sql.raw(`"sales_events"."appointment_id"`), contact: sql.raw(`"sales_events"."contact_id"`), at: sql.raw(`"sales_events"."occurred_at"`) };
 
+/** Pedidos da Cakto desfeitos (não contam como venda). */
+const CHECKOUT_UNDONE = ["refunded", "chargedback", "canceled"];
+
 const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 1000) / 10 : null);
 
 export async function getCommercialDashboard(ctx: Ctx, f: Filters) {
@@ -96,24 +99,56 @@ export async function getCommercialDashboard(ctx: Ctx, f: Filters) {
   const goalMonth = f.period === "last_month" ? monthKey(new Date(start.getTime() + 3600_000), tz) : monthKey(new Date(), tz);
   const gm = monthRange(goalMonth, tz);
   const [goal] = await db.select().from(salesGoals).where(and(eq(salesGoals.orgId, ctx.orgId), eq(salesGoals.month, goalMonth)));
-  const [mr] = await db
-    .select({ revenue: sql<number>`coalesce(sum(${salesEvents.valueCents}), 0)::bigint`, sales: sql<number>`count(*)::int` })
-    .from(salesEvents)
-    .where(and(eq(salesEvents.orgId, ctx.orgId), isNull(salesEvents.voidedAt), eq(salesEvents.type, "sale_won"), gte(salesEvents.occurredAt, gm.start), lt(salesEvents.occurredAt, gm.end)));
-  const realized = Number(mr.revenue);
+  // Realizado = vendas pagas na Cakto (valor da oferta, sem os juros do parcelamento que o comprador paga)
+  // + vendas marcadas no funil do CRM cujo contato não tem pedido pago na Cakto no mesmo mês (para não contar duas vezes).
+  const caktoPaid = and(
+    eq(checkoutOrders.orgId, ctx.orgId),
+    gte(checkoutOrders.paidAt, gm.start),
+    lt(checkoutOrders.paidAt, gm.end),
+    notInArray(checkoutOrders.status, CHECKOUT_UNDONE),
+  )!;
+  const [[cr0], [mr]] = await Promise.all([
+    db
+      .select({ revenue: sql<number>`coalesce(sum(coalesce(${checkoutOrders.baseAmountCents}, ${checkoutOrders.amountCents})), 0)::bigint`, sales: sql<number>`count(*)::int` })
+      .from(checkoutOrders)
+      .where(caktoPaid),
+    db
+      .select({ revenue: sql<number>`coalesce(sum(${salesEvents.valueCents}), 0)::bigint`, sales: sql<number>`count(*)::int` })
+      .from(salesEvents)
+      .where(
+        and(
+          eq(salesEvents.orgId, ctx.orgId),
+          isNull(salesEvents.voidedAt),
+          eq(salesEvents.type, "sale_won"),
+          gte(salesEvents.occurredAt, gm.start),
+          lt(salesEvents.occurredAt, gm.end),
+          sql`not exists (select 1 from ${checkoutOrders} co where co.org_id = ${ctx.orgId} and co.contact_id = ${OUTER.contact} and co.paid_at >= ${gm.start.toISOString()}::timestamptz and co.paid_at < ${gm.end.toISOString()}::timestamptz and co.status not in ('refunded', 'chargedback', 'canceled'))`,
+        ),
+      ),
+  ]);
+  const caktoCents = Number(cr0.revenue);
+  const crmCents = Number(mr.revenue);
+  const realized = caktoCents + crmCents;
   const now = Date.now();
   const totalDays = Math.round((gm.end.getTime() - gm.start.getTime()) / 86400000);
   const elapsedDays = Math.min(totalDays, Math.max(0, (now - gm.start.getTime()) / 86400000));
   const isCurrent = now >= gm.start.getTime() && now < gm.end.getTime();
   const target = goal ? Number(goal.targetCents) : 0;
+  const daysLeft = isCurrent ? Math.max(0, Math.ceil(totalDays - elapsedDays)) : 0;
   const meta = {
     month: goalMonth,
     targetCents: target,
     realizedCents: realized,
     remainingCents: Math.max(0, target - realized),
     progress: target ? Math.round((realized / target) * 1000) / 10 : null,
-    sales: mr.sales,
-    daysLeft: isCurrent ? Math.max(0, Math.ceil(totalDays - elapsedDays)) : 0,
+    sales: cr0.sales + mr.sales,
+    caktoCents,
+    caktoSales: cr0.sales,
+    crmCents,
+    crmSales: mr.sales,
+    daysLeft,
+    /** Quanto precisa vender por dia (contando hoje) para bater a meta. */
+    perDayCents: daysLeft > 0 && target > realized ? Math.ceil((target - realized) / daysLeft) : null,
     /** Projeção no ritmo atual (só no mês corrente, a partir do 7º dia, para não exagerar no começo do mês). */
     forecastCents: isCurrent && elapsedDays >= 7 ? Math.round((realized / elapsedDays) * totalDays) : null,
     canEdit: ctx.role === "admin",
