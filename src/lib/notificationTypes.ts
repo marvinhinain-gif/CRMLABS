@@ -6,7 +6,7 @@ export type NotifyPrefKey = "leads" | "leadStage" | "meeting" | "sale" | "messag
 
 export const NOTIFY_PREFS: { key: NotifyPrefKey; label: string; description: string; adminOnly?: boolean }[] = [
   { key: "leads", label: "Novos leads de anúncio", description: "Quando um lead chega para você confirmar a reunião." },
-  { key: "sale", label: "Venda fechada", description: "Valor, vendedor (closer) e social seller; e cada venda paga na Cakto." },
+  { key: "sale", label: "Venda fechada", description: "Valor, vendedor (closer) e social seller; e cada venda paga na Cakto (Mentoria e Consultoria avisam também o SDR e o closer do lead)." },
   { key: "meeting", label: "Reunião agendada", description: "Quando alguém agenda uma reunião com um lead.", adminOnly: true },
   { key: "leadStage", label: "Lead mudou de etapa", description: "Movimentos no funil de relacionamento e no comercial.", adminOnly: true },
   { key: "messages", label: "Novas mensagens", description: "Mensagens do Direct em conversas suas." },
