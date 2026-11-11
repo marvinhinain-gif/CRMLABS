@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/server/db";
-import { checkoutOrders, contactTouchpoints, contacts, notifications } from "@/server/db/schema";
+import { checkoutOrders, contactTouchpoints, contacts, notifications, opportunities, pipelineStages } from "@/server/db/schema";
 import { catalog, createSource } from "@/server/services/integrations";
-import { caktoSetup, checkoutDashboard, importCaktoOrders, matchSource, receiveCaktoWebhook, saveCaktoSettings, setCaktoFetchForTests } from "@/server/services/checkout";
+import { caktoSetup, checkoutDashboard, importCaktoOrders, mainProductKind, matchSource, receiveCaktoWebhook, saveCaktoSettings, setCaktoFetchForTests } from "@/server/services/checkout";
 import { parseOrder, toCents } from "@/server/integrations/cakto/parse";
 import { getCommercialDashboard, setGoal } from "@/server/services/metrics";
 import { salesEvents } from "@/server/db/schema";
@@ -125,6 +125,38 @@ describe("Cakto: webhook de vendas", () => {
     expect(d.origins[0]).toMatchObject({ name: "Stories", sales: 1, share: 100 });
     expect(d.recent[0]).toMatchObject({ name: "João Comprador", product: "Mentoria AXION", amountCents: 99700, sourceVia: "utm" });
     await expect(checkoutDashboard(ctx.seller, { period: "month" })).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("venda de Mentoria ou Consultoria avisa gestores, o SDR do contato e o closer do lead", async () => {
+    expect(mainProductKind("Consultoria - Axion Co")).toBe("Consultoria");
+    expect(mainProductKind("MENTORIA AXION")).toBe("Mentoria");
+    expect(mainProductKind("Ebook", "Oferta da consultória")).toBe("Consultoria");
+    expect(mainProductKind("Ebook de receitas")).toBeNull();
+
+    const { org, send, users: u } = await setup();
+    // Lead já no CRM: SDR responsável (Mariana) e oportunidade com a closer (Carla).
+    const [c] = await db.insert(contacts).values({ orgId: org.id, name: "Ana Lead", email: "ana@lead.com", ownerId: u.seller.id }).returning();
+    const [stage] = await db.select().from(pipelineStages).where(eq(pipelineStages.orgId, org.id)).limit(1);
+    await db.insert(opportunities).values({ orgId: org.id, contactId: c.id, title: "Consultoria", stageId: stage.id, closerId: u.closer.id, valueCents: 0 });
+
+    await send(
+      sale({
+        id: "pedido-consultoria",
+        customer: { name: "Ana Lead", email: "ana@lead.com", phone: null },
+        product: { id: "p2", name: "Consultoria - Axion Co", type: "unique" },
+        baseAmount: 1600,
+        amount: 1862.88,
+        installments: 12,
+      }),
+    );
+    const notes = await db.select().from(notifications).where(and(eq(notifications.orgId, org.id), eq(notifications.type, "checkout.sale")));
+    expect(notes.map((n) => n.userId).sort()).toEqual([u.admin.id, u.manager.id, u.seller.id, u.closer.id].sort());
+    expect(notes[0].title).toMatch(/^🎉 Venda de Consultoria na Cakto: R\$\s?1\.600,00$/);
+    expect(notes[0].body).toContain("Ana Lead");
+    expect(notes[0].body).toContain("em 12x");
+    expect(notes[0].link).toBe(`/contatos?contato=${c.id}`);
+    // O outro SDR não recebe.
+    expect(notes.some((n) => n.userId === u.seller2.id)).toBe(false);
   });
 
   it("meta do mês soma as vendas da Cakto (sem juros do parcelamento), sem contar duas vezes a venda marcada no CRM", async () => {

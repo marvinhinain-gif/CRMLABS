@@ -6,7 +6,7 @@
 import { and, desc, eq, gte, inArray, isNull, lt, notInArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbOrTx } from "../db";
-import { checkoutIntegrations, checkoutOrders, contactTouchpoints, contacts, integrationLogs, leadSources, memberships, quizForms } from "../db/schema";
+import { checkoutIntegrations, checkoutOrders, contactTouchpoints, contacts, integrationLogs, leadSources, memberships, opportunities, quizForms } from "../db/schema";
 import type { Ctx } from "../context";
 import { decryptSecret, encryptSecret, randomToken, sha256 } from "../crypto";
 import { appUrl } from "../env";
@@ -310,28 +310,74 @@ export async function ingestCaktoOrder(r: Pick<Row, "id" | "orgId">, order: Cakt
   });
 
   const { saved, becamePaid } = result;
-  if (becamePaid && opts.notify !== false) {
-    const [src] = saved.sourceId ? await db.select({ name: leadSources.name }).from(leadSources).where(eq(leadSources.id, saved.sourceId)) : [];
-    const managers = await db
-      .select({ userId: memberships.userId })
-      .from(memberships)
-      .where(and(eq(memberships.orgId, r.orgId), inArray(memberships.role, ["admin", "manager"]), eq(memberships.status, "active")));
-    const body = [saved.productName, fmtBRL(saved.amountCents, saved.currency), src?.name ?? saved.utm.utm_source ?? null].filter(Boolean).join(" · ");
-    for (const m of managers) {
-      await notifyUser({
-        orgId: r.orgId,
-        userId: m.userId,
-        type: "checkout.sale",
-        title: `Nova venda na Cakto: ${saved.customerName ?? "comprador"}`,
-        body,
-        link: saved.contactId ? `/contatos?contato=${saved.contactId}` : "/dashboard",
-        dedupeKey: `cakto:${saved.externalId}:paid`,
-      }).catch((e) => logger.warn("Falha ao avisar venda da Cakto", e));
-    }
-  }
+  if (becamePaid && opts.notify !== false) await notifyCaktoSale(r.orgId, saved).catch((e) => logger.warn("Falha ao avisar venda da Cakto", e));
   await publish({ orgId: r.orgId, topic: "sales", entityId: saved.id, managersOnly: true });
   if (saved.contactId) await publish({ orgId: r.orgId, topic: "contacts", entityId: saved.contactId, managersOnly: true });
   return result;
+}
+
+/** Mentoria ou Consultoria: os produtos principais, que avisam também quem cuidou do lead. */
+export function mainProductKind(...names: (string | null | undefined)[]): "Mentoria" | "Consultoria" | null {
+  const t = names
+    .filter(Boolean)
+    .join(" ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (/\bmentori/.test(t)) return "Mentoria";
+  if (/\bconsultori/.test(t)) return "Consultoria";
+  return null;
+}
+
+/**
+ * Aviso de venda paga na Cakto (no sino e no celular). Vai para administradores e gestores.
+ * Venda de Mentoria ou Consultoria vai também para o SDR responsável pelo contato e para o closer do lead.
+ */
+async function notifyCaktoSale(orgId: string, saved: typeof checkoutOrders.$inferSelect) {
+  const [src] = saved.sourceId ? await db.select({ name: leadSources.name }).from(leadSources).where(eq(leadSources.id, saved.sourceId)) : [];
+  const managers = await db
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .where(and(eq(memberships.orgId, orgId), inArray(memberships.role, ["admin", "manager"]), eq(memberships.status, "active")));
+  const kind = mainProductKind(saved.productName, saved.offerName);
+  const recipients = new Set(managers.map((m) => m.userId));
+  if (kind && saved.contactId) {
+    const [c] = await db.select({ ownerId: contacts.ownerId }).from(contacts).where(eq(contacts.id, saved.contactId));
+    const [opp] = await db
+      .select({ closerId: opportunities.closerId, sellerId: opportunities.sellerId })
+      .from(opportunities)
+      .where(and(eq(opportunities.orgId, orgId), eq(opportunities.contactId, saved.contactId)))
+      .orderBy(desc(opportunities.updatedAt))
+      .limit(1);
+    const team = [c?.ownerId, opp?.closerId, opp?.sellerId].filter((x): x is string => !!x);
+    if (team.length) {
+      // Só quem continua ativo na organização.
+      const active = await db
+        .select({ userId: memberships.userId })
+        .from(memberships)
+        .where(and(eq(memberships.orgId, orgId), eq(memberships.status, "active"), inArray(memberships.userId, team)));
+      for (const a of active) recipients.add(a.userId);
+    }
+  }
+  // Valor da oferta (sem juros do parcelamento), o mesmo que conta na meta.
+  const value = fmtBRL(saved.baseAmountCents ?? saved.amountCents, saved.currency);
+  const parcelas = saved.installments && saved.installments > 1 ? ` em ${saved.installments}x` : "";
+  const buyer = saved.customerName ?? "comprador";
+  const title = kind ? `🎉 Venda de ${kind} na Cakto: ${value}` : `Nova venda na Cakto: ${buyer}`;
+  const body = kind
+    ? [buyer, saved.productName, `${value}${parcelas}`, src?.name ?? saved.utm.utm_source ?? null].filter(Boolean).join(" · ")
+    : [saved.productName, fmtBRL(saved.amountCents, saved.currency), src?.name ?? saved.utm.utm_source ?? null].filter(Boolean).join(" · ");
+  for (const userId of recipients) {
+    await notifyUser({
+      orgId,
+      userId,
+      type: "checkout.sale",
+      title,
+      body,
+      link: saved.contactId ? `/contatos?contato=${saved.contactId}` : "/dashboard",
+      dedupeKey: `cakto:${saved.externalId}:paid`,
+    }).catch((e) => logger.warn("Falha ao avisar venda da Cakto", e));
+  }
 }
 
 /** Endpoint público do webhook: o token do endereço identifica a organização; o segredo valida o envio. */
