@@ -37,7 +37,7 @@ import { linkContentFor } from "./contentTracking";
 import { activeEntryFor, addToBoard, syncLeadsWithBoard } from "./board";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
-import { classFromProduct, LEAD_CLASS, LEAD_CLASSES, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
+import { buyingPowerLabel, classFromProduct, LEAD_CLASS, LEAD_CLASSES, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
 
 // ---------- Normalização ----------
 
@@ -459,7 +459,8 @@ const autoClassSql = latestApplication(
 export const leadClassSql = sql<LeadClass | null>`coalesce(${sql.raw('"leads"."score_class"')}, ${autoClassSql})`;
 
 /** Faixa de faturamento respondida na aplicação (id da alternativa). */
-const revenueSql = latestApplication(sql`coalesce(s.answers->>'monthly_revenue_range', s.answers->>'faturamento')`);
+const revenueAnswer = sql`coalesce(s.answers->>'monthly_revenue_range', s.answers->>'faturamento')`;
+const revenueSql = latestApplication(revenueAnswer);
 /** O contato do lead tem cartão ativo (não automático) no Kanban do Social Seller: o lead "saiu" de Leads e está com um SDR. */
 const inKanbanSql = sql`exists (select 1 from relationship_entries re where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created)`;
 const WORK_STATUSES = ["new", "contacted", "no_answer"] as const;
@@ -475,9 +476,40 @@ const topLeadsConds = () => [
   sql`${leadClassSql} is distinct from 'NAO_ICP'`,
 ];
 
+/**
+ * Comunidade (El Club): leads para atender que ninguém pegou (sem responsável, contato sem dono, fora de qualquer Kanban).
+ * "Quente" = informou poder de compra no formulário: quanto pode investir ou quanto fatura.
+ * Fontes, na ordem: campos personalizados "investimento"/"faturamento" do lead, respostas do quiz e respostas de
+ * formulários externos com pergunta sobre investimento/faturamento/orçamento. Respostas que não dizem valor
+ * ("Preciso conhecer as possibilidades", "Ainda não estou faturando") contam como não informado.
+ */
+const NO_POWER_RE = "(ainda n[aã]o|preciso conhecer|n[aã]o sei|^\\s*(n[aã]o|-|\\.)?\\s*$)";
+const POWER_LABEL_RE = "(investi|fatura|or[cç]amento|quanto.*pagar|poder de compra|renda)";
+const customPowerSql = (key: string, prefix: string) =>
+  sql`(select ${prefix} || nullif(trim(${sql.raw('"leads"."custom"')} ->> cf.id::text), '') from custom_fields cf where cf.org_id = ${sql.raw('"leads"."org_id"')} and cf.key = ${key} and (${sql.raw('"leads"."custom"')} ->> cf.id::text) !~* ${NO_POWER_RE} limit 1)`;
+const quizPowerSql = latestApplication(
+  sql`coalesce(case when coalesce(s.answers->>'investment_capacity', s.answers->>'investimento') not in ('B6') then coalesce(s.answers->>'investment_capacity', s.answers->>'investimento') end, case when ${revenueAnswer} not in ('R6') then ${revenueAnswer} end)`,
+);
+/** Perguntas que citam investimento mas não dizem valor (ex.: "Quem toma a decisão sobre investimentos?"). */
+const NOT_POWER_LABEL_RE = "(decis|decide|quem )";
+const answersPowerSql = sql`(select a->>'value' from jsonb_array_elements(${sql.raw('"leads"."answers"')}) a where (a->>'label') ~* ${POWER_LABEL_RE} and (a->>'label') !~* ${NOT_POWER_LABEL_RE} and coalesce(a->>'value', '') !~* ${NO_POWER_RE} limit 1)`;
+/** Poder de compra informado (texto da resposta ou id da alternativa do quiz); null = não informou. */
+export const buyingPowerSql = sql<string | null>`coalesce(${customPowerSql("investimento", "Investimento: ")}, ${customPowerSql("faturamento", "Faturamento: ")}, ${quizPowerSql}, ${answersPowerSql})`;
+const communityConds = () => [
+  inArray(leads.status, [...WORK_STATUSES]),
+  sql`not ${inKanbanSql}`,
+  isNull(leads.assignedTo),
+  sql`not exists (select 1 from contacts c where c.id = ${sql.raw('"leads"."contact_id"')} and c.owner_id is not null)`,
+];
+const hotCond = sql`${buyingPowerSql} is not null`;
+
 export const listLeadsSchema = z.object({
   /** top20 = TOP 20 Leads (melhores para entrar em contato). */
-  status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open", "top20", "kanban"]).default("open"),
+  status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open", "top20", "kanban", "comunidade"]).default("open"),
+  /** Comunidade: quente (informou poder de compra) ou frio (não informou). Sem valor = os dois, quentes primeiro. */
+  temp: z.enum(["quente", "frio"]).optional(),
+  /** Ordem por data de entrada (não vale para o TOP 20). */
+  ordem: z.enum(["recentes", "antigos"]).optional(),
   /** Lead score por produto (none = a classificar). */
   classe: z.enum(LEAD_CLASS_FILTERS).optional(),
   formId: z.string().uuid().optional(),
@@ -506,6 +538,11 @@ function leadListConds(ctx: Ctx, f: Omit<z.infer<typeof listLeadsSchema>, "page"
   const conds: SQL[] = [leadScope(ctx)];
   if (f.status === "open") conds.push(inArray(leads.status, [...WORK_STATUSES]), sql`not ${inKanbanSql}`);
   else if (f.status === "top20") conds.push(...topLeadsConds());
+  else if (f.status === "comunidade") {
+    conds.push(...communityConds());
+    if (f.temp === "quente") conds.push(hotCond);
+    else if (f.temp === "frio") conds.push(sql`not (${hotCond})`);
+  }
   else if (f.status === "kanban") conds.push(inKanbanSql);
   else if (f.status === "new" || f.status === "contacted" || f.status === "no_answer") conds.push(eq(leads.status, f.status), sql`not ${inKanbanSql}`);
   else if (f.status !== "all") conds.push(eq(leads.status, f.status));
@@ -518,6 +555,14 @@ function leadListConds(ctx: Ctx, f: Omit<z.infer<typeof listLeadsSchema>, "page"
     conds.push(or(ilike(leads.name, like), ilike(leads.email, like), ilike(leads.phone, like), ilike(leads.instagram, like))!);
   }
   return conds;
+}
+
+/** Ordem da lista: TOP 20 pela pontuação; Comunidade com os quentes primeiro; depois a data (recentes ou antigos). */
+function leadOrder(f: Pick<z.infer<typeof listLeadsSchema>, "status" | "ordem" | "temp">): SQL[] {
+  const byDate = f.ordem === "antigos" ? asc(leads.createdAt) : desc(leads.createdAt);
+  if (f.status === "top20") return [sql`${latestApplication(sql`s.score`)} desc nulls last`, desc(leads.createdAt)];
+  if (f.status === "comunidade" && !f.temp) return [sql`(${hotCond}) desc`, byDate];
+  return [byDate];
 }
 
 const classeCond = (classe: NonNullable<z.infer<typeof listLeadsSchema>["classe"]>) => (classe === "none" ? sql`${leadClassSql} is null` : sql`${leadClassSql} = ${classe}`);
@@ -557,6 +602,7 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
       scoreClassManual: sql<boolean>`${leads.scoreClass} is not null`,
       score: sql<number | null>`${latestApplication(sql`s.score`)}`,
       revenue: sql<string | null>`${revenueSql}`,
+      buyingPower: buyingPowerSql,
       boardOwnerName: sql<string | null>`case when ${inKanbanSql} then (select u.name from contacts c join users u on u.id = c.owner_id where c.id = ${sql.raw('"leads"."contact_id"')}) end`,
       boardStageName: sql<string | null>`case when ${inKanbanSql} then (select ps.name from relationship_entries re join pipeline_stages ps on ps.id = re.stage_id where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created limit 1) end`,
     })
@@ -567,7 +613,7 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     .leftJoin(leadSources, eq(leadSources.id, leads.sourceId))
     .leftJoin(products, eq(products.id, leads.productId))
     .where(where)
-    .orderBy(...(top ? [sql`${latestApplication(sql`s.score`)} desc nulls last`, desc(leads.createdAt)] : [desc(leads.createdAt)]))
+    .orderBy(...leadOrder(f))
     .limit(top ? TOP_LEADS_LIMIT : PAGE)
     .offset(top ? 0 : (f.page - 1) * PAGE);
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(leads).where(where);
@@ -592,8 +638,14 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     .select({ top20: sql<number>`count(*)::int` })
     .from(leads)
     .where(and(leadScope(ctx), ...topLeadsConds()));
+  // Comunidade (El Club): total, quentes e frios, respeitando os mesmos filtros de fora (fonte, período, busca…).
+  const [community] = await db
+    .select({ total: sql<number>`count(*)::int`, hot: sql<number>`count(*) filter (where ${hotCond})::int` })
+    .from(leads)
+    .where(and(...leadListConds(ctx, { ...f, status: "comunidade", temp: undefined }), ...(f.classe ? [classeCond(f.classe)] : [])));
   return {
     rows,
+    community: { total: community.total, quente: community.hot, frio: community.total - community.hot },
     total: top ? Math.min(total, TOP_LEADS_LIMIT) : total,
     page: top ? 1 : f.page,
     pageSize: top ? TOP_LEADS_LIMIT : PAGE,
@@ -644,6 +696,7 @@ export async function exportLeads(ctx: Ctx, f: z.infer<typeof exportLeadsSchema>
       scoreClass: leadClassSql,
       score: sql<number | null>`${latestApplication(sql`s.score`)}`,
       revenue: sql<string | null>`${revenueSql}`,
+      buyingPower: buyingPowerSql,
       boardOwnerName: sql<string | null>`case when ${inKanbanSql} then (select u.name from contacts c join users u on u.id = c.owner_id where c.id = ${sql.raw('"leads"."contact_id"')}) end`,
       boardStageName: sql<string | null>`case when ${inKanbanSql} then (select ps.name from relationship_entries re join pipeline_stages ps on ps.id = re.stage_id where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created limit 1) end`,
     })
@@ -654,7 +707,7 @@ export async function exportLeads(ctx: Ctx, f: z.infer<typeof exportLeadsSchema>
     .leftJoin(leadSources, eq(leadSources.id, leads.sourceId))
     .leftJoin(products, eq(products.id, leads.productId))
     .where(and(...conds))
-    .orderBy(...(top ? [sql`${latestApplication(sql`s.score`)} desc nulls last`, desc(leads.createdAt)] : [desc(leads.createdAt)]))
+    .orderBy(...leadOrder(filters))
     .limit(top ? TOP_LEADS_LIMIT : EXPORT_LIMIT);
 
   // Uma coluna por pergunta, na ordem em que aparecem (o mesmo texto em formulários diferentes cai na mesma coluna).
@@ -691,6 +744,7 @@ export async function exportLeads(ctx: Ctx, f: z.infer<typeof exportLeadsSchema>
     "Lead score",
     "Pontuação do quiz",
     "Faturamento mensal",
+    "Poder de compra",
     "Interesse",
     "Formulário",
     "Fonte",
@@ -715,6 +769,7 @@ export async function exportLeads(ctx: Ctx, f: z.infer<typeof exportLeadsSchema>
     r.scoreClass ? LEAD_CLASS[r.scoreClass].label : UNCLASSIFIED.label,
     r.score,
     r.revenue ? (REVENUE_OPTIONS[r.revenue]?.label ?? r.revenue) : "",
+    buyingPowerLabel(r.buyingPower) ?? "",
     r.productName,
     r.formName,
     r.sourceName,

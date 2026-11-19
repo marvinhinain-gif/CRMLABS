@@ -53,3 +53,26 @@ export const REVENUE_OPTIONS: Record<string, { label: string; top: boolean }> = 
   fat_ate_5k: { label: "Abaixo de R$ 5 mil", top: false },
 };
 export const TOP_REVENUE_OPTIONS = Object.keys(REVENUE_OPTIONS).filter((k) => REVENUE_OPTIONS[k].top);
+
+/**
+ * Comunidade (El Club): poder de compra informado no formulário.
+ * O valor vem como texto da resposta ou como id da alternativa do quiz; aqui vira o texto mostrado.
+ */
+export const INVESTMENT_OPTIONS: Record<string, string> = {
+  B1: "R$ 30.000 ou mais",
+  B2: "R$ 12.000 a R$ 29.999",
+  B3: "R$ 3.700 a R$ 11.999",
+  B4: "R$ 2.000 a R$ 3.699",
+  B5: "Abaixo de R$ 2.000",
+  iv_35k_mais: "R$ 35 mil ou mais",
+  iv_20_35k: "De R$ 20 mil a menos de R$ 35 mil",
+  iv_10_20k: "De R$ 10 mil a menos de R$ 20 mil",
+  iv_2_10k: "De R$ 2 mil a menos de R$ 10 mil",
+  iv_ate_2k: "Menos de R$ 2 mil",
+};
+export function buyingPowerLabel(v: string | null | undefined): string | null {
+  if (!v) return null;
+  if (INVESTMENT_OPTIONS[v]) return `Investimento: ${INVESTMENT_OPTIONS[v]}`;
+  if (REVENUE_OPTIONS[v]) return `Faturamento: ${REVENUE_OPTIONS[v].label}`;
+  return v;
+}
