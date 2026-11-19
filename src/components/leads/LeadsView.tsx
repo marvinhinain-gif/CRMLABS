@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import Link from "next/link";
-import { CalendarCheck, ChevronRight, Download, Inbox, LayoutDashboard, Loader2, Plug, Search, Trophy } from "lucide-react";
+import { CalendarCheck, ChevronRight, Download, Flame, Inbox, LayoutDashboard, Loader2, Plug, Search, Snowflake, Trophy, Users } from "lucide-react";
 import { api, fetcher, qs } from "@/lib/api";
 import type { ForwardToKanbanResult } from "@/lib/types";
 import { useMe, useTeam } from "@/lib/me";
@@ -14,7 +14,7 @@ import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, PageHea
 import { SourceChip } from "@/components/integrations/shared";
 import { WhatsAppButton } from "@/components/ui/WhatsApp";
 import { TeamAvatar } from "@/components/ui/TeamAvatar";
-import { LEAD_CLASS, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
+import { buyingPowerLabel, LEAD_CLASS, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
 import { LEAD_PERIOD_LABEL, LEAD_PERIODS, NO_SOURCE, type LeadPeriod } from "@/lib/leadSources";
 import { LeadClassBadge, LeadSheet, LEAD_STATUS } from "./LeadSheet";
 import { LeadSourceChart, useLeadSourceStats } from "./LeadSourceChart";
@@ -43,11 +43,13 @@ export type LeadRow = {
   score: number | null;
   /** Faixa de faturamento respondida na aplicação (id da alternativa). */
   revenue: string | null;
+  /** Poder de compra informado no formulário (Comunidade); null = não informou. */
+  buyingPower: string | null;
   /** Dono do contato e etapa do cartão quando o lead já está no Kanban de um SDR (null = fora do Kanban). */
   boardOwnerName: string | null;
   boardStageName: string | null;
 };
-type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; topCount: number; classCounts: Record<string, number>; allCount?: number };
+type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; topCount: number; classCounts: Record<string, number>; allCount?: number; community?: { total: number; quente: number; frio: number } };
 
 const FILTERS = [
   { value: "open", label: "Para atender" },
@@ -55,6 +57,7 @@ const FILTERS = [
   { value: "kanban", label: "No Kanban" },
   { value: "scheduled", label: "Agendados" },
   { value: "top20", label: "TOP 20 Leads" },
+  { value: "comunidade", label: "Comunidade El Club" },
   { value: "disqualified", label: "Descartados" },
   { value: "all", label: "Todos" },
 ] as const;
@@ -69,6 +72,12 @@ function useDebounced<T>(v: T, ms = 300) {
 }
 
 const WORK_STATUSES: readonly string[] = ["new", "contacted", "no_answer"];
+
+const TEMPS = [
+  { value: "", label: "Todos", icon: Users },
+  { value: "quente", label: "Comunidade quente", icon: Flame },
+  { value: "frio", label: "Comunidade frio", icon: Snowflake },
+] as const;
 
 /** Botão rápido "Para o meu Kanban" (≥ 44px de toque). Não abre o lead. */
 function ToKanbanButton({ busy, onClick, className }: { busy: boolean; onClick: () => void; className?: string }) {
@@ -88,7 +97,7 @@ function ToKanbanButton({ busy, onClick, className }: { busy: boolean; onClick: 
   );
 }
 
-function LeadCard({ l, i, rank, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow; i: number; rank?: number; onOpen: () => void; onToKanban?: () => void; toKanbanBusy?: boolean }) {
+function LeadCard({ l, i, rank, community, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow; i: number; rank?: number; community?: boolean; onOpen: () => void; onToKanban?: () => void; toKanbanBusy?: boolean }) {
   const st = LEAD_STATUS[l.status];
   const inKanban = !!(l.boardStageName || l.boardOwnerName);
   const quick = onToKanban && !inKanban && WORK_STATUSES.includes(l.status);
@@ -115,6 +124,16 @@ function LeadCard({ l, i, rank, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow
                 <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
               )}
               <LeadClassBadge cls={l.scoreClass} score={l.score} manual={l.scoreClassManual} />
+              {community &&
+                (l.buyingPower ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[#fff1e6] px-2.5 py-0.5 text-[12px] font-semibold text-[#b54708]">
+                    <Flame className="size-3.5" aria-hidden /> Quente
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-info-soft px-2.5 py-0.5 text-[12px] font-medium text-info">
+                    <Snowflake className="size-3.5" aria-hidden /> Frio
+                  </span>
+                ))}
             </span>
             <span className="mt-0.5 block truncate text-[13px] text-muted">
               {[formatPhone(l.phone), l.instagram && `@${l.instagram}`].filter(Boolean).join(" · ")}
@@ -132,6 +151,8 @@ function LeadCard({ l, i, rank, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow
                   </span>
                 </span>
               )}
+              {community && l.buyingPower && <span className="max-w-full rounded-full bg-success-soft px-2.5 py-0.5 font-medium text-success">{buyingPowerLabel(l.buyingPower)}</span>}
+              {community && !l.buyingPower && <span className="rounded-full bg-page px-2.5 py-0.5 text-muted">Não informou poder de compra</span>}
               {rank && l.revenue && REVENUE_OPTIONS[l.revenue] && <span className="rounded-full bg-success-soft px-2.5 py-0.5 font-medium text-success">Faturamento: {REVENUE_OPTIONS[l.revenue].label}</span>}
             </span>
             <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
@@ -180,6 +201,8 @@ function LeadList() {
   const [classe, setClasse] = useQueryParam("classe", "");
   const [fonte, setFonte] = useQueryParam("fonte", "");
   const [periodoParam, setPeriodo] = useQueryParam("periodo", "30d");
+  const [temp, setTemp] = useQueryParam("temp", "");
+  const [ordem, setOrdem] = useQueryParam("ordem", "recentes");
   const periodo: LeadPeriod = (LEAD_PERIODS as readonly string[]).includes(periodoParam) ? (periodoParam as LeadPeriod) : "30d";
   const setParams = useSetQueryParams();
   const [, setLeadParam] = useQueryParam("lead", "");
@@ -189,15 +212,16 @@ function LeadList() {
   const { mutate: globalMutate } = useSWRConfig();
   const isSdr = me.user.role !== "closer";
   const [forwarding, setForwarding] = useState<string | null>(null);
-  const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, q: debounced, assignedTo: owner, classe, fonte, periodo, page })}`, fetcher, { keepPreviousData: true });
+  const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, temp: status === "comunidade" ? temp : "", ordem, q: debounced, assignedTo: owner, classe, fonte, periodo, page })}`, fetcher, { keepPreviousData: true });
   const { data: stats } = useLeadSourceStats({ periodo, classe, owner });
-  useEffect(() => setPage(1), [status, debounced, owner, classe, fonte, periodo]);
+  useEffect(() => setPage(1), [status, temp, ordem, debounced, owner, classe, fonte, periodo]);
   // Clicar numa fonte do gráfico mostra todos os leads dela no período (qualquer situação), para bater com o número do gráfico.
   const pickSource = (id: string) => (fonte === id ? setFonte(null) : setParams({ fonte: id, status: "all" }, { status: "open" }));
   const sourceOptions = stats?.sources ?? [];
   const counts = data?.counts ?? {};
   const top = status === "top20";
-  const countFor = (v: string) => (v === "top20" ? (data?.topCount ?? 0) : v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? (data?.allCount ?? Object.entries(counts).reduce((a, [k, n]) => (k === "kanban" ? a : a + n), 0)) : (counts[v] ?? 0));
+  const community = status === "comunidade";
+  const countFor = (v: string) => (v === "top20" ? (data?.topCount ?? 0) : v === "comunidade" ? (data?.community?.total ?? 0) : v === "open" ? (counts.new ?? 0) + (counts.contacted ?? 0) + (counts.no_answer ?? 0) : v === "all" ? (data?.allCount ?? Object.entries(counts).reduce((a, [k, n]) => (k === "kanban" ? a : a + n), 0)) : (counts[v] ?? 0));
   const toKanban = async (l: LeadRow) => {
     setForwarding(l.id);
     try {
@@ -233,7 +257,7 @@ function LeadList() {
         </div>
         {me.permissions.dataAll && (
           <a
-            href={`/api/leads/export${qs({ status, q: debounced, assignedTo: owner, classe, fonte, periodo, format: "xlsx" })}`}
+            href={`/api/leads/export${qs({ status, temp: status === "comunidade" ? temp : "", ordem, q: debounced, assignedTo: owner, classe, fonte, periodo, format: "xlsx" })}`}
             download
             title="Baixa os leads desta lista (mesma aba e filtros) com todas as respostas dos formulários"
             className="ml-auto inline-flex h-10 shrink-0 items-center gap-2 rounded-full border border-line bg-white px-4 text-[14px] font-medium text-ink hover:bg-page"
@@ -252,10 +276,20 @@ function LeadList() {
                 key={f.value}
                 role="tab"
                 aria-selected={active}
+                // No celular a aba escolhida pode ficar fora da tela (lista rola para o lado): traz para a vista.
+                ref={
+                  active
+                    ? (el) => {
+                        const bar = el?.parentElement;
+                        if (el && bar && (el.offsetLeft + el.offsetWidth > bar.scrollLeft + bar.clientWidth || el.offsetLeft < bar.scrollLeft)) bar.scrollLeft = el.offsetLeft - 8;
+                      }
+                    : undefined
+                }
                 onClick={() => setStatus(f.value)}
                 className={cx("inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-[14px] font-medium transition-colors", active ? "border-[#c9ebdc] bg-selected text-brand" : "border-line bg-white text-ink hover:bg-page")}
               >
                 {f.value === "top20" && <Trophy className="size-4" aria-hidden />}
+                {f.value === "comunidade" && <Flame className="size-4" aria-hidden />}
                 {f.label}
                 <span className={cx("rounded-full px-2 text-[12px]", active ? "bg-white" : "bg-page")}>{countFor(f.value)}</span>
               </button>
@@ -284,8 +318,14 @@ function LeadList() {
               </option>
             ))}
           </Select>
+          {!top && (
+            <Select aria-label="Ordem" value={ordem === "antigos" ? "antigos" : "recentes"} onChange={(e) => setOrdem(e.target.value === "antigos" ? "antigos" : null)} className="w-full bg-white sm:w-[180px]">
+              <option value="recentes">Mais recentes</option>
+              <option value="antigos">Mais antigos</option>
+            </Select>
+          )}
           {me.permissions.dataAll && (
-            <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className="col-span-2 w-full bg-white sm:w-[200px]">
+            <Select aria-label="Responsável" value={owner} onChange={(e) => setOwner(e.target.value)} className={cx("w-full bg-white sm:w-[200px]", top && "col-span-2")}>
               <option value="">Toda a equipe</option>
               {team
                 .filter((m) => m.status === "active")
@@ -299,6 +339,36 @@ function LeadList() {
         </div>
       </div>
 
+      {community && (
+        <div className="flex flex-col gap-2.5">
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 scroll-thin" role="radiogroup" aria-label="Poder de compra">
+            {TEMPS.map((t) => {
+              const active = temp === t.value || (!t.value && temp !== "quente" && temp !== "frio");
+              const n = t.value === "quente" ? data?.community?.quente : t.value === "frio" ? data?.community?.frio : data?.community?.total;
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.value || "todos"}
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setTemp(t.value || null)}
+                  className={cx(
+                    "inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-[14px] font-medium transition-colors",
+                    active ? (t.value === "quente" ? "border-[#f7c9a4] bg-[#fff1e6] text-[#b54708]" : t.value === "frio" ? "border-[#c7dbf5] bg-info-soft text-info" : "border-[#c9ebdc] bg-selected text-brand") : "border-line bg-white text-ink hover:bg-page",
+                  )}
+                >
+                  <Icon className="size-4" aria-hidden />
+                  {t.label}
+                  <span className={cx("rounded-full px-2 text-[12px]", active ? "bg-white" : "bg-page")}>{n ?? 0}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[13.5px] text-muted">
+            Leads para atender que ainda não estão com ninguém (sem responsável e fora de qualquer Kanban). <b className="font-semibold text-ink">Quente</b>: informou no formulário quanto pode investir ou quanto fatura. <b className="font-semibold text-ink">Frio</b>: não informou. Em &quot;Todos&quot;, os quentes vêm primeiro.
+          </p>
+        </div>
+      )}
       {top && (
         <p className="text-[13.5px] text-muted">
           Os 20 melhores leads para entrar em contato agora: maior pontuação no quiz, faturamento de R$ 10 mil por mês para cima e fora de &quot;Não é nosso ICP&quot;. Agendados e descartados saem da lista e o próximo sobe.
@@ -312,14 +382,14 @@ function LeadList() {
         ) : !data?.rows.length ? (
           <EmptyState
             icon={<Inbox />}
-            title={top ? "Nenhum lead no TOP 20 agora" : status === "open" ? "Nenhum lead esperando atendimento" : status === "kanban" ? "Nenhum lead no Kanban" : "Nenhum lead encontrado"}
+            title={top ? "Nenhum lead no TOP 20 agora" : community ? (temp === "quente" ? "Nenhum lead quente esperando" : temp === "frio" ? "Nenhum lead frio esperando" : "Nenhum lead da comunidade esperando") : status === "open" ? "Nenhum lead esperando atendimento" : status === "kanban" ? "Nenhum lead no Kanban" : "Nenhum lead encontrado"}
             description={status === "kanban" ? "Leads encaminhados para o Kanban de um SDR aparecem aqui, com o dono e a etapa." : top ? "Entram aqui os leads que responderam a aplicação com faturamento de R$ 10 mil por mês ou mais." : me.user.role === "admin" ? "Leads chegam pelas integrações (formulários, quizzes, webhooks). Configure em Integrações." : "Quando um novo lead chegar para você, ele aparece aqui e você recebe uma notificação."}
           />
         ) : (
           <>
             <ul className="divide-y divide-line">
               {data.rows.map((l, i) => (
-                <LeadCard key={l.id} l={l} i={i} rank={top ? (data.page - 1) * data.pageSize + i + 1 : undefined} onOpen={() => setLeadParam(l.id)} onToKanban={isSdr ? () => toKanban(l) : undefined} toKanbanBusy={forwarding === l.id} />
+                <LeadCard key={l.id} l={l} i={i} community={community} rank={top ? (data.page - 1) * data.pageSize + i + 1 : undefined} onOpen={() => setLeadParam(l.id)} onToKanban={isSdr ? () => toKanban(l) : undefined} toKanbanBusy={forwarding === l.id} />
               ))}
             </ul>
             {pages > 1 && (
