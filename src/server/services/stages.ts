@@ -51,6 +51,7 @@ export async function listStages(ctx: Ctx, kind: "relationship" | "sales", opts:
 async function assertCanEditPipeline(ctx: Ctx, pipelineId: string) {
   const [p] = await db.select().from(pipelines).where(and(eq(pipelines.id, pipelineId), eq(pipelines.orgId, ctx.orgId)));
   if (!p) throw notFound("Funil não encontrado.");
+  if (p.kind === "community") throw invalid("As etapas do CRM da Comunidade são fixas.");
   if (p.ownerId && p.ownerId === ctx.userId) return p;
   assertCan(ctx, "pipeline.edit", p.ownerId ? "Somente o closer dono do funil e gestores alteram estas etapas." : undefined);
   return p;

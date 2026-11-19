@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Ban, CalendarCheck, CalendarClock, Check, Copy, ExternalLink, Eye, LayoutDashboard, Link2, Link2Off, Mail, MessageCircle, Phone, PhoneOff, Plus, Send, Share2, SquareUser, X } from "lucide-react";
+import { Ban, CalendarCheck, CalendarClock, Check, Copy, Crown, ExternalLink, Eye, LayoutDashboard, Link2, Link2Off, Mail, MessageCircle, Phone, PhoneOff, Plus, Send, Share2, SquareUser, X } from "lucide-react";
 import { ForwardDialog } from "@/components/commercial/ForwardDialog";
 import { LeadTasks } from "@/components/tasks/TaskParts";
 import { api, fetcher } from "@/lib/api";
@@ -12,6 +13,7 @@ import { useMe, useTeam } from "@/lib/me";
 import { formatDateTime, formatPhone, longDayTime, relativeTime, whatsappLink, whatsappOpener } from "@/lib/format";
 import { Avatar, Button, cx, Dialog, ErrorState, LoadingState, Select, Sheet, SheetClose } from "@/components/ui";
 import { InstagramGlyph } from "@/components/ui/ChannelIcon";
+import { CommunityBadge } from "@/components/community/CommunityBadge";
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { JourneySection, OriginTrail, type Journey } from "@/components/integrations/Journey";
 import { LinkContentCard } from "@/components/forms/ContentPicker";
@@ -83,6 +85,8 @@ type LeadDetail = {
   journey: Journey | null;
   leadScore: LeadScore;
   board: LeadBoard;
+  /** O contato está no CRM da Comunidade (El Club). */
+  fromCommunity?: boolean;
   /** false: closer acompanhando um lead que ainda está com o SDR (só leitura). */
   canEdit: boolean;
   shareUrl: string | null;
@@ -196,6 +200,7 @@ function SdrKanbanCard({ leadId, b, onForwarded }: { leadId: string; b: LeadBoar
         Kanban do SDR
       </h3>
       <p className="mt-1 text-[13px] text-muted">Encaminhe para o Kanban e o lead sai de &quot;Para atender&quot;: ele entra em {stageOpen ? stageName : "Contato"} e você segue por lá.</p>
+      <p className="mt-1 text-[12px] text-muted/90">O lead entra na fase de Ligação da cadência.</p>
       <div className="mt-3 flex flex-col gap-2">
         {picker}
         <Button loading={busy} disabled={stageOpen && !stageId} icon={<LayoutDashboard className="size-4" />} onClick={submit}>
@@ -433,6 +438,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 function Body({ id, onClose }: { id: string; onClose: () => void }) {
   const me = useMe();
+  const router = useRouter();
   const team = useTeam();
   const { mutate: globalMutate } = useSWRConfig();
   const { data: l, error, mutate } = useSWR<LeadDetail>(`/api/leads/${id}`, fetcher);
@@ -484,6 +490,7 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
           <span className="mt-2 flex flex-wrap items-center gap-1.5">
             <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
             <LeadClassBadge cls={l.leadScore.class} score={l.leadScore.application?.score} manual={!!l.leadScore.manual} />
+            {l.fromCommunity && <CommunityBadge />}
           </span>
         </div>
         {!readOnly && (
@@ -567,6 +574,40 @@ function Body({ id, onClose }: { id: string; onClose: () => void }) {
               }
             }}
           />
+        )}
+
+        {me.permissions.dataAll && !l.fromCommunity && (
+          <div className="mt-4 flex flex-col gap-3 rounded-[18px] border border-[#e4d8fc] bg-[#faf7ff] p-4 sm:flex-row sm:items-center">
+            <span className="hidden size-11 shrink-0 items-center justify-center rounded-[14px] bg-[#f1ebff] text-[#5b21b6] sm:flex" aria-hidden>
+              <Crown className="size-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[14.5px] font-semibold">CRM da Comunidade</span>
+              <span className="block text-[12.5px] text-muted">Lead da comunidade El Club? Leve para o seu quadro e o closer recebe com o selo Comunidade.</span>
+            </span>
+            <Button
+              variant="secondary"
+              className="shrink-0 !border-[#d9c9fb] !text-[#5b21b6]"
+              icon={<Crown className="size-4" />}
+              loading={busy === "community"}
+              onClick={async () => {
+                setBusy("community");
+                try {
+                  const r = await api.post<{ added: number; skipped: number }>("/api/community/entries", { leadIds: [l.id] });
+                  await mutate();
+                  await globalMutate((k) => typeof k === "string" && (k.startsWith("/api/leads") || k.startsWith("/api/me") || k.startsWith("/api/community")));
+                  if (r.added) toast.success("1 enviado para o CRM da Comunidade", { action: { label: "Abrir CRM", onClick: () => router.push("/comunidade") } });
+                  else toast.info("Este lead já estava no CRM da Comunidade.");
+                } catch (e) {
+                  toast.error((e as Error).message);
+                } finally {
+                  setBusy(null);
+                }
+              }}
+            >
+              Enviar para o CRM da Comunidade
+            </Button>
+          </div>
         )}
 
         {l.appointment && (

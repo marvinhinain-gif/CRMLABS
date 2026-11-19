@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, type DbOrTx } from "../db";
 import { auditEvents, customFields, leadSources, notifications, pipelines, pipelineStages, organizations, type StageType } from "../db/schema";
 import type { Ctx } from "../context";
@@ -46,6 +46,18 @@ export const DEFAULT_CLOSER_STAGES: { key: string; name: string; color: StageCol
   { key: "perdido", name: "Perdido", color: "gray", stageType: "lost" },
 ];
 
+/** CRM da Comunidade (El Club): Kanban só do administrador. Etapas "custom" para não entrar nas métricas comerciais. */
+export const COMMUNITY_NOVO_KEY = "novo";
+export const COMMUNITY_FORWARDED_KEY = "encaminhado-closer";
+export const DEFAULT_COMMUNITY_STAGES: { key: string; name: string; color: StageColor }[] = [
+  { key: COMMUNITY_NOVO_KEY, name: "Novo", color: "blue" },
+  { key: "em-contato", name: "Em contato", color: "teal" },
+  { key: "interessado", name: "Interessado", color: "yellow" },
+  { key: COMMUNITY_FORWARDED_KEY, name: "Encaminhado ao closer", color: "lilac" },
+  { key: "entrou", name: "Entrou na comunidade", color: "green" },
+  { key: "perdido", name: "Perdido", color: "gray" },
+];
+
 /** Cria organização com funis padrão. */
 export async function createOrganization(input: { name: string; isDemo?: boolean }, tx: DbOrTx = db) {
   const [org] = await tx.insert(organizations).values({ name: input.name, isDemo: input.isDemo ?? false }).returning();
@@ -77,6 +89,32 @@ export async function getPipeline(orgId: string, kind: "relationship" | "sales",
     .limit(1);
   if (!p) throw new Error(`Funil ${kind} ausente para a organização`);
   return p;
+}
+
+/**
+ * Funil do CRM da Comunidade; criado com as etapas padrão na primeira vez.
+ * Sem índice único (o valor novo do enum não pode ser usado na migração que o cria): um lock por organização
+ * serializa a criação, então duas chamadas simultâneas nunca geram dois funis.
+ */
+export async function communityPipeline(orgId: string, tx?: DbOrTx) {
+  const create = async (t: DbOrTx) => {
+    const find = () =>
+      t
+        .select()
+        .from(pipelines)
+        .where(and(eq(pipelines.orgId, orgId), eq(pipelines.kind, "community"), isNull(pipelines.ownerId)))
+        .limit(1)
+        .then((r) => r[0]);
+    const existing = await find();
+    if (existing) return existing;
+    await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`community_pipeline:${orgId}`}))`);
+    const again = await find();
+    if (again) return again;
+    const [created] = await t.insert(pipelines).values({ orgId, kind: "community", name: "CRM da Comunidade" }).returning();
+    await t.insert(pipelineStages).values(DEFAULT_COMMUNITY_STAGES.map((s, i) => ({ ...s, orgId, pipelineId: created.id, position: i, stageType: "custom" as const })));
+    return created;
+  };
+  return tx ? create(tx) : db.transaction(create);
 }
 
 /** Funil comercial pessoal do closer; criado com as etapas padrão na primeira vez. */

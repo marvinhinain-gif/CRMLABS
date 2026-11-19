@@ -48,7 +48,7 @@ export const contactSourceEnum = pgEnum("contact_source", [
   "checkout",
 ]);
 export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "scheduled", "no_answer", "disqualified"]);
-export const pipelineKindEnum = pgEnum("pipeline_kind", ["relationship", "sales"]);
+export const pipelineKindEnum = pgEnum("pipeline_kind", ["relationship", "sales", "community"]);
 export const opportunityStatusEnum = pgEnum("opportunity_status", ["open", "won", "lost"]);
 export const appointmentStatusEnum = pgEnum("appointment_status", ["scheduled", "done", "canceled", "no_show"]);
 export const conversationStatusEnum = pgEnum("conversation_status", ["open", "closed"]);
@@ -419,6 +419,32 @@ export const relationshipEntries = pgTable(
     // Um contato possui no máximo uma entrada ativa por funil.
     uniqueIndex("relationship_entries_active_uq").on(t.pipelineId, t.contactId).where(sql`${t.closedAt} is null`),
     index("relationship_entries_stage_idx").on(t.stageId),
+  ],
+);
+
+/**
+ * CRM da Comunidade (El Club): Kanban separado onde o administrador organiza os leads da comunidade.
+ * Um contato tem no máximo uma entrada ativa; o funil (kind "community") é criado na primeira vez que alguém o abre.
+ */
+export const communityEntries = pgTable(
+  "community_entries",
+  {
+    id: id(),
+    orgId: orgRef(),
+    contactId: uuid("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    /** Lead que foi enviado para o CRM da Comunidade. */
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    stageId: uuid("stage_id").notNull().references(() => pipelineStages.id),
+    position: integer("position").notNull().default(0),
+    version: integer("version").notNull().default(1),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    closedAt: ts("closed_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("community_entries_active_uq").on(t.orgId, t.contactId).where(sql`${t.closedAt} is null`),
+    index("community_entries_stage_idx").on(t.stageId),
   ],
 );
 

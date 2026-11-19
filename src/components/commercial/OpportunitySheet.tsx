@@ -16,6 +16,7 @@ import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/Schedul
 import { JourneySection, type Journey } from "@/components/integrations/Journey";
 import { LeadTasks } from "@/components/tasks/TaskParts";
 import { TransferCloserDialog } from "./TransferCloserDialog";
+import { CommunityBadge } from "@/components/community/CommunityBadge";
 
 export type OppDetail = {
   id: string;
@@ -39,6 +40,8 @@ export type OppDetail = {
   notes: { id: string; body: string; createdAt: string; authorName: string | null }[];
   meetings: { id: string; title: string; startsAt: string; status: string; location: string | null }[];
   journey: Journey;
+  /** Lead da comunidade El Club (está no CRM da Comunidade). */
+  fromCommunity?: boolean;
 };
 
 export const refreshCommercial = (mutate: ReturnType<typeof useSWRConfig>["mutate"]) =>
@@ -203,6 +206,7 @@ function Body({ o, onClose }: { o: OppDetail; onClose: () => void }) {
       <header className="flex items-start gap-3 border-b border-line px-5 pb-4 pt-5 sm:px-6">
         <Avatar name={c?.name} src={c?.avatarUrl} size={52} />
         <div className="min-w-0 flex-1">
+          {o.fromCommunity && <CommunityBadge label="Lead da Comunidade" className="mb-1.5" />}
           <h2 className="truncate text-[20px] font-semibold leading-tight">{c?.name ?? o.title}</h2>
           {(o.product || c?.username) && <p className="truncate text-[13px] text-muted">{o.product ?? `@${c?.username}`}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-2">

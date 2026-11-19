@@ -10,10 +10,11 @@ const TOPIC_KEYS: Record<string, string[]> = {
   comments: ["/api/comments", "/api/instagram", "/api/me"],
   engagement: ["/api/instagram/engajados"],
   tasks: ["/api/tasks", "/api/dashboard", "/api/contacts/", "/api/commercial"],
-  opportunities: ["/api/opportunities", "/api/commercial", "/api/appointments", "/api/agenda", "/api/dashboard", "/api/contacts/", "/api/leads", "/api/tasks"],
+  opportunities: ["/api/opportunities", "/api/community", "/api/commercial", "/api/appointments", "/api/agenda", "/api/dashboard", "/api/contacts/", "/api/leads", "/api/tasks"],
   leads: ["/api/leads", "/api/me", "/api/contacts", "/api/board", "/api/appointments", "/api/agenda", "/api/dashboard"],
   sales: ["/api/dashboard/checkout", "/api/checkout"],
   notifications: ["/api/notifications"],
+  community: ["/api/community", "/api/leads"],
   settings: ["/api/integrations", "/api/settings", "/api/me", "/api/stages", "/api/board"],
 };
 

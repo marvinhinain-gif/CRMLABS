@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import Link from "next/link";
-import { CalendarCheck, ChevronRight, Download, Flame, Inbox, LayoutDashboard, Loader2, Plug, Search, Snowflake, Trophy, Users } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { CalendarCheck, ChevronRight, Crown, Download, Flame, Inbox, LayoutDashboard, Loader2, Plug, Search, Snowflake, Trophy, Users } from "lucide-react";
 import { api, fetcher, qs } from "@/lib/api";
 import type { ForwardToKanbanResult } from "@/lib/types";
 import { useMe, useTeam } from "@/lib/me";
@@ -18,6 +19,7 @@ import { buyingPowerLabel, LEAD_CLASS, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, UNCL
 import { LEAD_PERIOD_LABEL, LEAD_PERIODS, NO_SOURCE, type LeadPeriod } from "@/lib/leadSources";
 import { LeadClassBadge, LeadSheet, LEAD_STATUS } from "./LeadSheet";
 import { LeadSourceChart, useLeadSourceStats } from "./LeadSourceChart";
+import { CommunityBadge } from "@/components/community/CommunityBadge";
 
 export type LeadRow = {
   id: string;
@@ -48,6 +50,9 @@ export type LeadRow = {
   /** Dono do contato e etapa do cartão quando o lead já está no Kanban de um SDR (null = fora do Kanban). */
   boardOwnerName: string | null;
   boardStageName: string | null;
+  /** O contato está no CRM da Comunidade (Kanban do administrador) e em qual etapa. */
+  inCommunity?: boolean;
+  communityStageName?: string | null;
 };
 type ListData = { rows: LeadRow[]; total: number; page: number; pageSize: number; counts: Record<string, number>; topCount: number; classCounts: Record<string, number>; allCount?: number; community?: { total: number; quente: number; frio: number } };
 
@@ -85,6 +90,7 @@ function ToKanbanButton({ busy, onClick, className }: { busy: boolean; onClick: 
     <button
       type="button"
       disabled={busy}
+      title="O lead entra na fase de Ligação da cadência"
       onClick={(e) => {
         e.stopPropagation();
         onClick();
@@ -97,15 +103,65 @@ function ToKanbanButton({ busy, onClick, className }: { busy: boolean; onClick: 
   );
 }
 
-function LeadCard({ l, i, rank, community, onOpen, onToKanban, toKanbanBusy }: { l: LeadRow; i: number; rank?: number; community?: boolean; onOpen: () => void; onToKanban?: () => void; toKanbanBusy?: boolean }) {
+/** Botão "Enviar para o CRM da Comunidade" (≥ 44px de toque). Não abre o lead. */
+function ToCommunityButton({ busy, disabled, onClick, className, label = "Enviar para o CRM da Comunidade" }: { busy: boolean; disabled?: boolean; onClick: () => void; className?: string; label?: string }) {
+  return (
+    <button
+      type="button"
+      disabled={busy || disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cx("inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-[#d9c9fb] bg-[#f1ebff] px-3 text-[13px] font-semibold text-[#5b21b6] transition-colors hover:brightness-[0.98] disabled:opacity-60", className)}
+    >
+      {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Crown className="size-4" aria-hidden />}
+      {label}
+    </button>
+  );
+}
+
+function LeadCard({
+  l,
+  i,
+  rank,
+  community,
+  onOpen,
+  onToKanban,
+  toKanbanBusy,
+  onToCommunity,
+  toCommunityBusy,
+  selected,
+  onSelect,
+}: {
+  l: LeadRow;
+  i: number;
+  rank?: number;
+  community?: boolean;
+  onOpen: () => void;
+  onToKanban?: () => void;
+  toKanbanBusy?: boolean;
+  /** Aba Comunidade El Club (admin/gestor): envia este lead para o CRM da Comunidade. */
+  onToCommunity?: () => void;
+  toCommunityBusy?: boolean;
+  /** Seleção múltipla (aba Comunidade El Club). */
+  selected?: boolean;
+  onSelect?: (v: boolean) => void;
+}) {
   const st = LEAD_STATUS[l.status];
   const inKanban = !!(l.boardStageName || l.boardOwnerName);
   const quick = onToKanban && !inKanban && WORK_STATUSES.includes(l.status);
   const fresh = l.status === "new" && Date.now() - new Date(l.createdAt).getTime() < 30 * 60000;
+  const toCommunity = onToCommunity && !l.inCommunity;
   return (
     <li className="group anim-fade transition-colors hover:bg-page/60 active:bg-page" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
       <div className="flex items-start sm:items-center">
-        <button onClick={onOpen} className="flex min-w-0 flex-1 items-start gap-3 px-4 py-3.5 text-left sm:items-center sm:px-5">
+        {onSelect && (
+          <label className="flex size-11 shrink-0 cursor-pointer items-center justify-center self-start pl-2 pt-6 sm:self-center sm:pl-3 sm:pt-0" title="Selecionar lead">
+            <input type="checkbox" checked={!!selected} onChange={(e) => onSelect(e.target.checked)} aria-label={`Selecionar ${l.name}`} className="size-5 cursor-pointer rounded-[6px] border-line accent-[#008a65]" />
+          </label>
+        )}
+        <button onClick={onOpen} className={cx("flex min-w-0 flex-1 items-start gap-3 py-3.5 text-left sm:items-center", onSelect ? "pl-2 pr-4 sm:pl-2 sm:pr-5" : "px-4 sm:px-5")}>
           {rank && (
             <span className={cx("mt-3 w-7 shrink-0 text-center text-[15px] font-bold tabular-nums sm:mt-0", rank <= 3 ? "text-brand" : "text-muted")} aria-label={`${rank}º lugar`}>
               {rank}º
@@ -123,6 +179,7 @@ function LeadCard({ l, i, rank, community, onOpen, onToKanban, toKanbanBusy }: {
               ) : (
                 <span className={cx("rounded-full px-2.5 py-0.5 text-[12px] font-medium", st.cls)}>{st.label}</span>
               )}
+              {l.inCommunity && <CommunityBadge size="sm" className="!px-2.5 !text-[12px]" label={l.communityStageName ? `Comunidade · ${l.communityStageName}` : "Comunidade"} />}
               <LeadClassBadge cls={l.scoreClass} score={l.score} manual={l.scoreClassManual} />
               {community &&
                 (l.buyingPower ? (
@@ -174,7 +231,7 @@ function LeadCard({ l, i, rank, community, onOpen, onToKanban, toKanbanBusy }: {
         </button>
         {/* Faixa da direita também abre o lead (o botão do WhatsApp não propaga o clique). */}
         <span onClick={onOpen} className="flex shrink-0 cursor-pointer items-center gap-1 self-stretch pr-3 pt-3.5 sm:pr-4 sm:pt-0">
-          {quick && (
+          {quick && !toCommunity && (
             <span className="mr-1 hidden sm:block">
               <ToKanbanButton busy={!!toKanbanBusy} onClick={onToKanban!} />
             </span>
@@ -184,10 +241,18 @@ function LeadCard({ l, i, rank, community, onOpen, onToKanban, toKanbanBusy }: {
         </span>
       </div>
       {/* Celular: o botão vai numa linha própria, alinhado ao texto, para não espremer o nome. */}
-      {quick && (
-        <div className={cx("-mt-1 pb-3 pr-4 sm:hidden", rank ? "pl-[114px]" : "pl-[74px]")}>
-          <ToKanbanButton busy={!!toKanbanBusy} onClick={onToKanban!} />
+      {toCommunity ? (
+        // Aba Comunidade El Club: as ações ficam numa linha própria (em qualquer tela), alinhadas ao texto.
+        <div className={cx("-mt-1 flex flex-wrap gap-2 pb-3 pr-4", onSelect ? "pl-4 sm:pl-[110px]" : "pl-4 sm:pl-[78px]")}>
+          <ToCommunityButton busy={!!toCommunityBusy} onClick={onToCommunity!} />
+          {quick && <ToKanbanButton busy={!!toKanbanBusy} onClick={onToKanban!} />}
         </div>
+      ) : (
+        quick && (
+          <div className={cx("-mt-1 pb-3 pr-4 sm:hidden", rank ? "pl-[114px]" : "pl-[74px]")}>
+            <ToKanbanButton busy={!!toKanbanBusy} onClick={onToKanban!} />
+          </div>
+        )
       )}
     </li>
   );
@@ -212,9 +277,15 @@ function LeadList() {
   const { mutate: globalMutate } = useSWRConfig();
   const isSdr = me.user.role !== "closer";
   const [forwarding, setForwarding] = useState<string | null>(null);
+  const router = useRouter();
+  /** CRM da Comunidade (Kanban do administrador): só admin e gestor enviam. */
+  const canCommunity = me.permissions.dataAll;
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sendingCommunity, setSendingCommunity] = useState<string | "bulk" | null>(null);
   const { data, error, isLoading, mutate } = useSWR<ListData>(`/api/leads${qs({ status, temp: status === "comunidade" ? temp : "", ordem, q: debounced, assignedTo: owner, classe, fonte, periodo, page })}`, fetcher, { keepPreviousData: true });
   const { data: stats } = useLeadSourceStats({ periodo, classe, owner });
   useEffect(() => setPage(1), [status, temp, ordem, debounced, owner, classe, fonte, periodo]);
+  useEffect(() => setSelected(new Set()), [status, temp, ordem, debounced, owner, classe, fonte, periodo, page]);
   // Clicar numa fonte do gráfico mostra todos os leads dela no período (qualquer situação), para bater com o número do gráfico.
   const pickSource = (id: string) => (fonte === id ? setFonte(null) : setParams({ fonte: id, status: "all" }, { status: "open" }));
   const sourceOptions = stats?.sources ?? [];
@@ -228,6 +299,12 @@ function LeadList() {
       const r = await api.post<ForwardToKanbanResult>(`/api/leads/${l.id}/kanban`, {});
       // Nas abas de trabalho o lead sai da lista na hora; a revalidação acerta contagens e as demais abas.
       if (status !== "all" && status !== "kanban") await mutate((d) => (d ? { ...d, rows: d.rows.filter((x) => x.id !== l.id), total: Math.max(0, d.total - 1) } : d), { revalidate: false });
+      setSelected((cur) => {
+        if (!cur.has(l.id)) return cur;
+        const next = new Set(cur);
+        next.delete(l.id);
+        return next;
+      });
       toast.success(`${l.name.split(" ")[0]} foi para o seu Kanban, em ${r.stageName}.`);
       await globalMutate((k) => typeof k === "string" && (k.startsWith("/api/leads") || k.startsWith("/api/me") || k.startsWith("/api/board") || k.startsWith("/api/contacts")));
     } catch (e) {
@@ -236,7 +313,34 @@ function LeadList() {
       setForwarding(null);
     }
   };
+  const sendToCommunity = async (ids: string[], mode: string | "bulk") => {
+    if (!ids.length) return;
+    setSendingCommunity(mode);
+    try {
+      const r = await api.post<{ added: number; skipped: number }>("/api/community/entries", { leadIds: ids });
+      const sent = new Set(ids);
+      // Quem foi enviado sai da aba Comunidade El Club; a revalidação acerta contagens e as demais abas.
+      if (community) await mutate((d) => (d ? { ...d, rows: d.rows.filter((x) => !sent.has(x.id)), total: Math.max(0, d.total - ids.length) } : d), { revalidate: false });
+      setSelected((cur) => new Set([...cur].filter((id) => !sent.has(id))));
+      const msg = r.added === 1 ? "1 enviado para o CRM da Comunidade" : `${r.added} enviados para o CRM da Comunidade`;
+      const opts = {
+        description: r.skipped ? `${r.skipped} já ${r.skipped === 1 ? "estava" : "estavam"} no CRM da Comunidade.` : undefined,
+        action: { label: "Abrir CRM", onClick: () => router.push("/comunidade") },
+      };
+      if (r.added) toast.success(msg, opts);
+      else toast.info("Nenhum lead novo enviado: já estavam no CRM da Comunidade.", { action: opts.action });
+      await globalMutate((k) => typeof k === "string" && (k.startsWith("/api/leads") || k.startsWith("/api/me") || k.startsWith("/api/community")));
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSendingCommunity(null);
+    }
+  };
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+  const selectable = community && canCommunity ? (data?.rows ?? []).filter((r) => !r.inCommunity) : [];
+  // Só conta quem ainda está visível e selecionável: ids de linhas que saíram da lista (realtime, Kanban, outro SDR) ficam de fora.
+  const chosen = selectable.filter((r) => selected.has(r.id)).map((r) => r.id);
+  const allSelected = selectable.length > 0 && chosen.length === selectable.length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -387,9 +491,45 @@ function LeadList() {
           />
         ) : (
           <>
+            {selectable.length > 0 && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-[#faf7ff] px-4 py-2.5 sm:px-5">
+                <label className="inline-flex min-h-11 cursor-pointer select-none items-center gap-2.5 text-[14px] font-medium text-ink">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = !allSelected && chosen.length > 0;
+                    }}
+                    onChange={(e) => setSelected(e.target.checked ? new Set(selectable.map((r) => r.id)) : new Set())}
+                    className="size-5 cursor-pointer rounded-[6px] border-line accent-[#008a65]"
+                  />
+                  {chosen.length ? `${chosen.length} selecionado${chosen.length === 1 ? "" : "s"}` : `Selecionar todos (${selectable.length})`}
+                </label>
+                <ToCommunityButton
+                  className="ml-auto max-sm:w-full"
+                  busy={sendingCommunity === "bulk"}
+                  disabled={!chosen.length || !!sendingCommunity}
+                  label={chosen.length ? `Enviar ${chosen.length} para o CRM da Comunidade` : "Selecione leads para enviar"}
+                  onClick={() => sendToCommunity(chosen, "bulk")}
+                />
+              </div>
+            )}
             <ul className="divide-y divide-line">
               {data.rows.map((l, i) => (
-                <LeadCard key={l.id} l={l} i={i} community={community} rank={top ? (data.page - 1) * data.pageSize + i + 1 : undefined} onOpen={() => setLeadParam(l.id)} onToKanban={isSdr ? () => toKanban(l) : undefined} toKanbanBusy={forwarding === l.id} />
+                <LeadCard
+                  key={l.id}
+                  l={l}
+                  i={i}
+                  community={community}
+                  rank={top ? (data.page - 1) * data.pageSize + i + 1 : undefined}
+                  onOpen={() => setLeadParam(l.id)}
+                  onToKanban={isSdr ? () => toKanban(l) : undefined}
+                  toKanbanBusy={forwarding === l.id}
+                  onToCommunity={community && canCommunity ? () => sendToCommunity([l.id], l.id) : undefined}
+                  toCommunityBusy={sendingCommunity === l.id}
+                  selected={selected.has(l.id)}
+                  onSelect={community && canCommunity && !l.inCommunity ? (v) => setSelected((cur) => { const next = new Set(cur); if (v) next.add(l.id); else next.delete(l.id); return next; }) : undefined}
+                />
               ))}
             </ul>
             {pages > 1 && (

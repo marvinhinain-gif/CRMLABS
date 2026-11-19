@@ -13,6 +13,7 @@ import { Avatar, Button, Card, cx, EmptyState, ErrorState, LoadingState, Select 
 import { ScheduleDialog, type ScheduleValues } from "@/components/agenda/ScheduleDialog";
 import { EditStagesDialog } from "@/components/social/EditStagesDialog";
 import { CloseDealDialog, refreshCommercial } from "./OpportunitySheet";
+import { CommunityBadge } from "@/components/community/CommunityBadge";
 
 export type CommercialCard = {
   id: string;
@@ -36,6 +37,8 @@ export type CommercialCard = {
   enteredStageAt: string | null;
   forwardedAt: string | null;
   createdAt: string;
+  /** Lead da comunidade El Club (veio do CRM da Comunidade): o closer vê o selo "Comunidade". */
+  fromCommunity?: boolean;
 };
 type BoardStage = { id: string; key: string; name: string; color: string; position: number; stageType: string };
 export type CommercialBoardData = { ownerId: string | null; pipelineId: string; canEdit: boolean; people: { id: string; name: string; role: string; isCloser: boolean }[]; stages: BoardStage[]; cards: CommercialCard[] };
@@ -43,7 +46,8 @@ export type CommercialBoardData = { ownerId: string | null; pipelineId: string; 
 function CardBody({ c, dragging }: { c: CommercialCard; dragging?: boolean }) {
   const meetingSoon = c.nextMeetingAt && new Date(c.nextMeetingAt).getTime() > Date.now() - 2 * 3600_000;
   return (
-    <div className={cx("rounded-[18px] border bg-white p-3.5 shadow-[0_1px_2px_rgb(16_60_48/0.05)] transition-shadow", dragging ? "border-brand shadow-[var(--shadow-pop)] rotate-[1.5deg]" : "border-transparent hover:border-brand")}>
+    <div className={cx("rounded-[18px] border bg-white p-3.5 shadow-[0_1px_2px_rgb(16_60_48/0.05)] transition-shadow", dragging ? "border-brand shadow-[var(--shadow-pop)] rotate-[1.5deg]" : c.fromCommunity ? "border-[#d9c9fb] hover:border-brand" : "border-transparent hover:border-brand")}>
+      {c.fromCommunity && <CommunityBadge size="sm" label="Lead da Comunidade" className="mb-2" />}
       <div className="flex items-start gap-2.5">
         <Avatar name={c.contactName} src={c.avatarUrl} size={38} />
         <div className="min-w-0 flex-1">
@@ -80,7 +84,7 @@ function CardBody({ c, dragging }: { c: CommercialCard; dragging?: boolean }) {
 function DraggableCard({ c, onOpen, disabled }: { c: CommercialCard; onOpen: () => void; disabled: boolean }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: c.id, disabled });
   return (
-    <div ref={setNodeRef} {...attributes} {...listeners} role="button" tabIndex={0} aria-roledescription="cartão arrastável" aria-label={`${c.contactName}. Enter abre; espaço arrasta.`} onClick={onOpen} onKeyDown={(e) => e.key === "Enter" && onOpen()} className={cx("touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-brand rounded-[18px]", isDragging && "opacity-30")}>
+    <div ref={setNodeRef} {...attributes} {...listeners} role="button" tabIndex={0} aria-roledescription="cartão arrastável" aria-label={`${c.contactName}${c.fromCommunity ? " (Lead da Comunidade)" : ""}. Enter abre; espaço arrasta.`} onClick={onOpen} onKeyDown={(e) => e.key === "Enter" && onOpen()} className={cx("touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-brand rounded-[18px]", isDragging && "opacity-30")}>
       <CardBody c={c} />
     </div>
   );
