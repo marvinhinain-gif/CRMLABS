@@ -35,6 +35,7 @@ import { appUrl } from "../env";
 import { audit, cleanText, closerPipeline, CONTATO_KEY, FORA_DO_ICP_KEY, getPipeline, normalizeHandle, NOVO_INTERESSADO_KEY, notifyUser } from "./common";
 import { linkContentFor } from "./contentTracking";
 import { activeEntryFor, addToBoard, syncLeadsWithBoard } from "./board";
+import { communityStatusFor, inCommunitySql } from "./community";
 import { UTM_KEYS } from "../integrations/forms/normalize";
 import { LEAD_PERIODS, NO_SOURCE, PERIOD_DAYS, type LeadPeriod } from "@/lib/leadSources";
 import { buyingPowerLabel, classFromProduct, LEAD_CLASS, LEAD_CLASSES, LEAD_CLASS_FILTERS, REVENUE_OPTIONS, TOP_LEADS_LIMIT, TOP_REVENUE_OPTIONS, UNCLASSIFIED, type LeadClass } from "@/lib/leadScore";
@@ -464,6 +465,9 @@ const revenueSql = latestApplication(revenueAnswer);
 /** O contato do lead tem cartão ativo (não automático) no Kanban do Social Seller: o lead "saiu" de Leads e está com um SDR. */
 const inKanbanSql = sql`exists (select 1 from relationship_entries re where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created)`;
 const WORK_STATUSES = ["new", "contacted", "no_answer"] as const;
+/** Fora da fila de trabalho: está no Kanban de um SDR ou no CRM da Comunidade. */
+// SQL escrito aqui (e não inCommunitySql de ./community) porque roda no carregamento do módulo e os dois arquivos se importam.
+const outOfQueueSql = sql`(${inKanbanSql} or exists (select 1 from community_entries ce where ce.contact_id = ${sql.raw('"leads"."contact_id"')} and ce.closed_at is null))`;
 
 /**
  * TOP 20 Leads: para atender, faturamento de R$ 10 mil para cima e fora de "Não é nosso ICP".
@@ -471,7 +475,7 @@ const WORK_STATUSES = ["new", "contacted", "no_answer"] as const;
  */
 const topLeadsConds = () => [
   inArray(leads.status, [...WORK_STATUSES]),
-  sql`not ${inKanbanSql}`,
+  sql`not ${outOfQueueSql}`,
   sql`${revenueSql} in (${sql.join(TOP_REVENUE_OPTIONS.map((o) => sql`${o}`), sql`, `)})`,
   sql`${leadClassSql} is distinct from 'NAO_ICP'`,
 ];
@@ -498,6 +502,8 @@ export const buyingPowerSql = sql<string | null>`coalesce(${customPowerSql("inve
 const communityConds = () => [
   inArray(leads.status, [...WORK_STATUSES]),
   sql`not ${inKanbanSql}`,
+  // Quem já foi enviado ao CRM da Comunidade (Kanban do administrador) sai da aba.
+  sql`not ${inCommunitySql(sql.raw('"leads"."contact_id"'))}`,
   isNull(leads.assignedTo),
   sql`not exists (select 1 from contacts c where c.id = ${sql.raw('"leads"."contact_id"')} and c.owner_id is not null)`,
 ];
@@ -536,7 +542,7 @@ const PAGE = 30;
 /** Filtros da lista de Leads (aba, formulário, responsável, fonte, período e busca), sem o lead score. */
 function leadListConds(ctx: Ctx, f: Omit<z.infer<typeof listLeadsSchema>, "page">) {
   const conds: SQL[] = [leadScope(ctx)];
-  if (f.status === "open") conds.push(inArray(leads.status, [...WORK_STATUSES]), sql`not ${inKanbanSql}`);
+  if (f.status === "open") conds.push(inArray(leads.status, [...WORK_STATUSES]), sql`not ${outOfQueueSql}`);
   else if (f.status === "top20") conds.push(...topLeadsConds());
   else if (f.status === "comunidade") {
     conds.push(...communityConds());
@@ -544,7 +550,7 @@ function leadListConds(ctx: Ctx, f: Omit<z.infer<typeof listLeadsSchema>, "page"
     else if (f.temp === "frio") conds.push(sql`not (${hotCond})`);
   }
   else if (f.status === "kanban") conds.push(inKanbanSql);
-  else if (f.status === "new" || f.status === "contacted" || f.status === "no_answer") conds.push(eq(leads.status, f.status), sql`not ${inKanbanSql}`);
+  else if (f.status === "new" || f.status === "contacted" || f.status === "no_answer") conds.push(eq(leads.status, f.status), sql`not ${outOfQueueSql}`);
   else if (f.status !== "all") conds.push(eq(leads.status, f.status));
   if (f.formId) conds.push(eq(leads.formId, f.formId));
   if (f.assignedTo && can(ctx, "data.all")) conds.push(eq(leads.assignedTo, f.assignedTo));
@@ -605,6 +611,8 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
       buyingPower: buyingPowerSql,
       boardOwnerName: sql<string | null>`case when ${inKanbanSql} then (select u.name from contacts c join users u on u.id = c.owner_id where c.id = ${sql.raw('"leads"."contact_id"')}) end`,
       boardStageName: sql<string | null>`case when ${inKanbanSql} then (select ps.name from relationship_entries re join pipeline_stages ps on ps.id = re.stage_id where re.contact_id = ${sql.raw('"leads"."contact_id"')} and re.closed_at is null and not re.auto_created limit 1) end`,
+      inCommunity: inCommunitySql(sql.raw('"leads"."contact_id"')),
+      communityStageName: sql<string | null>`(select ps.name from community_entries ce join pipeline_stages ps on ps.id = ce.stage_id where ce.contact_id = ${sql.raw('"leads"."contact_id"')} and ce.closed_at is null limit 1)`,
     })
     .from(leads)
     .leftJoin(users, eq(users.id, leads.assignedTo))
@@ -617,19 +625,19 @@ export async function listLeads(ctx: Ctx, f: z.infer<typeof listLeadsSchema>) {
     .limit(top ? TOP_LEADS_LIMIT : PAGE)
     .offset(top ? 0 : (f.page - 1) * PAGE);
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(leads).where(where);
-  // Quem está no Kanban sai das abas de trabalho (novo, contatado, sem resposta); continua em Agendados, Descartados e Todos.
+  // Quem está no Kanban ou no CRM da Comunidade sai das abas de trabalho (novo, contatado, sem resposta); continua em Agendados, Descartados e Todos.
   const statusRows = await db
-    .select({ status: leads.status, kanban: sql<boolean>`${inKanbanSql}`, n: sql<number>`count(*)::int` })
+    .select({ status: leads.status, kanban: sql<boolean>`${inKanbanSql}`, out: sql<boolean>`${outOfQueueSql}`, n: sql<number>`count(*)::int` })
     .from(leads)
     .where(leadScope(ctx))
-    .groupBy(leads.status, sql`2`);
+    .groupBy(leads.status, sql`2`, sql`3`);
   const counts: { status: string; n: number }[] = [];
   let kanbanCount = 0;
   let allCount = 0;
   for (const r of statusRows) {
     allCount += r.n;
     if (r.kanban) kanbanCount += r.n;
-    if (r.kanban && (WORK_STATUSES as readonly string[]).includes(r.status)) continue;
+    if (r.out && (WORK_STATUSES as readonly string[]).includes(r.status)) continue;
     const c = counts.find((x) => x.status === r.status);
     if (c) c.n += r.n;
     else counts.push({ status: r.status, n: r.n });
@@ -946,6 +954,8 @@ export async function getLead(ctx: Ctx, id: string) {
     journey: await contactJourney(ctx, l.contactId),
     leadScore,
     board: await boardStatusOf(ctx, l, leadScore.class),
+    /** O contato está no CRM da Comunidade (o closer vê o selo "Comunidade"). */
+    fromCommunity: !!(await communityStatusFor(ctx.orgId, l.contactId)),
     canEdit: await canEditLead(ctx, l.id),
     /** Link público da ficha (só leitura). null = não compartilhada. */
     shareUrl: l.shareToken ? `${appUrl()}/ficha/${l.shareToken}` : null,
@@ -1180,6 +1190,9 @@ export async function forwardLeadToKanban(ctx: Ctx, id: string, input: z.infer<t
         .set({ ownerId: sdrId })
         .where(and(eq(conversations.contactId, l.contactId), or(isNull(conversations.ownerId), previousOwner ? eq(conversations.ownerId, previousOwner) : undefined)));
     }
+    // Entra direto na fase de ligação da cadência (passo "Ligação" para hoje).
+    const { startCadenceAtCall } = await import("./cadence");
+    await startCadenceAtCall(tx, ctx, l.contactId, entryId);
     const toContacted = l.status === "new" || l.status === "no_answer";
     await tx
       .update(leads)
@@ -1244,6 +1257,6 @@ export async function newLeadCount(ctx: Ctx) {
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(leads)
-    .where(and(leadScope(ctx, "edit"), eq(leads.status, "new"), sql`not ${inKanbanSql}`, can(ctx, "data.all") ? undefined : or(eq(leads.assignedTo, ctx.userId), isNull(leads.assignedTo))));
+    .where(and(leadScope(ctx, "edit"), eq(leads.status, "new"), sql`not ${outOfQueueSql}`, can(ctx, "data.all") ? undefined : or(eq(leads.assignedTo, ctx.userId), isNull(leads.assignedTo))));
   return n;
 }

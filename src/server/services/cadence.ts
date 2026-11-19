@@ -38,6 +38,27 @@ export async function listActiveSteps(orgId: string, tx: DbOrTx = db) {
     .orderBy(asc(cadenceSteps.position), asc(cadenceSteps.createdAt));
 }
 
+/**
+ * Lead encaminhado para o Kanban de um SDR já entra na fase de ligação: a cadência começa no primeiro passo
+ * de ligação (ou no primeiro passo, se não houver ligação), para hoje. Não mexe em cadência já ativa.
+ * Retorna o passo iniciado (null = já estava em cadência ou não há passos).
+ */
+export async function startCadenceAtCall(tx: DbOrTx, ctx: Pick<Ctx, "orgId" | "userId">, contactId: string, entryId: string) {
+  const [entry] = await tx.select().from(relationshipEntries).where(and(eq(relationshipEntries.id, entryId), eq(relationshipEntries.orgId, ctx.orgId)));
+  if (!entry || entry.cadenceStatus === "active") return null;
+  const steps = await listActiveSteps(ctx.orgId, tx);
+  const step = steps.find((s) => s.channel === "call") ?? steps[0];
+  if (!step) return null;
+  const now = new Date();
+  await tx
+    .update(relationshipEntries)
+    .set({ cadenceStatus: "active", cadenceStepId: step.id, cadenceStartedAt: now, cadenceDueAt: now, updatedAt: now })
+    .where(eq(relationshipEntries.id, entry.id));
+  await tx.insert(cadenceActivities).values({ orgId: ctx.orgId, contactId, entryId: entry.id, stepId: step.id, stepName: step.name, outcome: "started", note: null, actorId: ctx.userId });
+  await syncNextAction(tx, contactId, "active", step.name, now);
+  return step;
+}
+
 // ---------- Passos (edição por organização) ----------
 
 export const saveStepsSchema = z.object({

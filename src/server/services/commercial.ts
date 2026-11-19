@@ -11,6 +11,7 @@ import { recordContactMade, recordDecision, recordForward, recordMeetingStatus, 
 import { assertMember } from "./team";
 import { listStages, getStageInOrg } from "./stages";
 import { activeEntryFor } from "./board";
+import { communityStatusFor, inCommunitySql, markCommunityForwarded } from "./community";
 import { alertMeeting, alertOpportunityStage, alertSale } from "./alerts";
 import { logger } from "../logger";
 
@@ -455,6 +456,10 @@ export async function forwardToCloser(ctx: Ctx, contactId: string, input: z.infe
   if (!contact) throw notFound("Contato não encontrado.");
   await assertCloser(ctx, input.closerId);
   const [closer] = await db.select({ name: users.name }).from(users).where(eq(users.id, input.closerId));
+  const fromCommunity = !!(await communityStatusFor(ctx.orgId, contact.id).catch((e) => {
+    logger.warn("Falha ao consultar o CRM da Comunidade", e);
+    return null;
+  }));
   const [open] = await db.select().from(opportunities).where(and(eq(opportunities.contactId, contact.id), eq(opportunities.orgId, ctx.orgId), eq(opportunities.status, "open")));
   const who = `${ROLE_LABEL[ctx.role]} — ${ctx.userName}`;
   const reason = `Lead qualificado por ${who} · encaminhado para Closer — ${closer?.name ?? "?"}`;
@@ -502,6 +507,8 @@ export async function forwardToCloser(ctx: Ctx, contactId: string, input: z.infe
     const { moveEntry } = await import("./board");
     await moveEntry(ctx, entry.id, { toStageId: target.id, expectedVersion: entry.version }).catch((e) => logger.warn("Falha ao mover o cartão do social seller", e));
   }
+  // CRM da Comunidade: o cartão do administrador também vai para "Encaminhado ao closer".
+  if (fromCommunity) await markCommunityForwarded(ctx, contact.id, closer?.name ?? null);
   if (input.nextStep?.trim()) {
     const { createTask } = await import("./tasks");
     await createTask(ctx, { title: input.nextStep.trim(), contactId: contact.id, opportunityId: opp.id, ownerId: input.closerId, dueAt: input.dueAt ?? null });
@@ -511,7 +518,7 @@ export async function forwardToCloser(ctx: Ctx, contactId: string, input: z.infe
       orgId: ctx.orgId,
       userId: input.closerId,
       type: "opportunity.forwarded",
-      title: "🔥 Novo Lead recebido",
+      title: fromCommunity ? "🔥 Novo Lead da Comunidade recebido" : "🔥 Novo Lead recebido",
       body: `${contact.name} foi encaminhad${/a$/i.test(contact.name.split(" ")[0]) ? "a" : "o"} para você por ${ctx.userName.split(" ")[0]}.`,
       link: `/comercial?op=${opp.id}`,
     });
@@ -602,6 +609,7 @@ export async function getCommercialBoard(ctx: Ctx, f: z.infer<typeof boardSchema
           forwardedAt: opportunities.forwardedAt,
           createdAt: opportunities.createdAt,
           updatedAt: opportunities.updatedAt,
+          fromCommunity: inCommunitySql(contacts.id),
           sellerName: sql<string | null>`(select u.name from ${users} u where u.id = ${opportunities.sellerId})`,
           sourceName: sql<string | null>`(select s.name from lead_sources s where s.id = ${contacts.firstSourceId})`,
           sourceColor: sql<string | null>`(select s.color from lead_sources s where s.id = ${contacts.firstSourceId})`,
@@ -686,6 +694,7 @@ export async function getOpportunityDetail(ctx: Ctx, id: string) {
     notes: noteRows,
     meetings,
     journey: await contactJourney(ctx, o.contactId),
+    fromCommunity: !!(await communityStatusFor(ctx.orgId, o.contactId)),
   };
 }
 

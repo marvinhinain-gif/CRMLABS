@@ -31,6 +31,7 @@ import {
   Plug,
   CheckCheck,
   ClipboardList,
+  Crown,
 } from "lucide-react";
 import { AnimatedLogo } from "@/components/brand/AnimatedLogo";
 import { api, fetcher, qs } from "@/lib/api";
@@ -46,6 +47,7 @@ import { InstagramNavIcon } from "@/components/ui/ChannelIcon";
 const NAV: { href: string; label: string; icon: typeof House | typeof InstagramNavIcon; badge?: "instagram" | "leads"; adminOnly?: boolean; permission?: keyof Me["permissions"] }[] = [
   { href: "/dashboard", label: "Visão geral", icon: House },
   { href: "/social-seller", label: "Social Seller", icon: Users },
+  { href: "/comunidade", label: "CRM da Comunidade", icon: Crown, permission: "dataAll" },
   { href: "/leads", label: "Leads", icon: Megaphone, badge: "leads" },
   { href: "/agendamentos", label: "Agendamentos", icon: CalendarDays },
   { href: "/agenda", label: "Agenda da equipe", icon: CalendarClock },
@@ -60,6 +62,7 @@ const NAV: { href: string; label: string; icon: typeof House | typeof InstagramN
 const TITLES: Record<string, string> = {
   "/dashboard": "Visão geral",
   "/social-seller": "Social Seller",
+  "/comunidade": "CRM da Comunidade",
   "/agenda": "Agenda da equipe",
   "/leads": "Leads",
   "/agendamentos": "Agendamentos",
