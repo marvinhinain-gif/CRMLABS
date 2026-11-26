@@ -423,9 +423,10 @@ function LeadList() {
             ))}
           </Select>
           {!top && (
-            <Select aria-label="Ordem" value={ordem === "antigos" ? "antigos" : "recentes"} onChange={(e) => setOrdem(e.target.value === "antigos" ? "antigos" : null)} className="w-full bg-white sm:w-[180px]">
+            <Select aria-label="Ordem" value={ordem === "antigos" || ordem === "pontuacao" ? ordem : "recentes"} onChange={(e) => setOrdem(e.target.value === "antigos" || e.target.value === "pontuacao" ? e.target.value : null)} className="w-full bg-white sm:w-[180px]">
               <option value="recentes">Mais recentes</option>
               <option value="antigos">Mais antigos</option>
+              <option value="pontuacao">Maior pontuação</option>
             </Select>
           )}
           {me.permissions.dataAll && (
