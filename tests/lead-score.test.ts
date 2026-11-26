@@ -128,4 +128,27 @@ describe("Lead score por produto nos Leads", () => {
     expect(res.rows.map((r) => r.name)).toEqual(["Ana", "Carla"]);
     expect(res.topCount).toBe(2);
   });
+
+  it("ordem por pontuação: da maior para a menor em qualquer aba, sem pontuação no fim", async () => {
+    const { ctx } = await setupOrg();
+    const created = await createForm(ctx.admin, { name: "Aplicação AXION", template: "axion-aplicacao" });
+    await publishForm(ctx.admin, created.id);
+    const form = await getForm(ctx.admin, created.id);
+    await submitQuiz(form.slug, body({ ...C, ...person("Carla", "(71) 99999-3333") }), meta);
+    await submitQuiz(form.slug, body({ ...A, ...person("Ana", "(71) 99999-1111") }), meta);
+    await submitQuiz(form.slug, body({ ...D, ...person("Davi", "(71) 99999-4444") }), meta);
+    await submitQuiz(form.slug, body({ ...B, ...person("Bruno", "(71) 99999-2222") }), meta);
+    await createIntegration(ctx.admin, { name: "Landing", headline: "Fale com a gente", questions: [] });
+    const token = (await listForms(ctx.admin)).find((f) => f.name === "Landing")!.webhookUrl!.split("/").pop()!;
+    await ingestWebhookLead(token, { nome: "Zeca", whatsapp: "71 98888-7777" });
+
+    for (const status of ["open", "all"] as const) {
+      const rows = (await listLeads(ctx.admin, { status, page: 1, ordem: "pontuacao" })).rows;
+      expect(rows.at(-1)!.name).toBe("Zeca");
+      const scores = rows.filter((r) => r.score != null).map((r) => r.score!);
+      expect(scores.length).toBe(4);
+      expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+      expect(rows[0].name).toBe("Ana");
+    }
+  });
 });

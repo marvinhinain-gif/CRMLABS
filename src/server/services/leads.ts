@@ -514,8 +514,8 @@ export const listLeadsSchema = z.object({
   status: z.enum(["new", "contacted", "scheduled", "no_answer", "disqualified", "all", "open", "top20", "kanban", "comunidade"]).default("open"),
   /** Comunidade: quente (informou poder de compra) ou frio (não informou). Sem valor = os dois, quentes primeiro. */
   temp: z.enum(["quente", "frio"]).optional(),
-  /** Ordem por data de entrada (não vale para o TOP 20). */
-  ordem: z.enum(["recentes", "antigos"]).optional(),
+  /** Ordem da lista: por data de entrada ou pela pontuação do quiz, da maior para a menor (não vale para o TOP 20). */
+  ordem: z.enum(["recentes", "antigos", "pontuacao"]).optional(),
   /** Lead score por produto (none = a classificar). */
   classe: z.enum(LEAD_CLASS_FILTERS).optional(),
   formId: z.string().uuid().optional(),
@@ -563,10 +563,13 @@ function leadListConds(ctx: Ctx, f: Omit<z.infer<typeof listLeadsSchema>, "page"
   return conds;
 }
 
-/** Ordem da lista: TOP 20 pela pontuação; Comunidade com os quentes primeiro; depois a data (recentes ou antigos). */
+/**
+ * Ordem da lista: TOP 20 pela pontuação; "pontuacao" = maior pontuação do quiz primeiro (sem pontuação no fim);
+ * Comunidade com os quentes primeiro; depois a data (recentes ou antigos).
+ */
 function leadOrder(f: Pick<z.infer<typeof listLeadsSchema>, "status" | "ordem" | "temp">): SQL[] {
   const byDate = f.ordem === "antigos" ? asc(leads.createdAt) : desc(leads.createdAt);
-  if (f.status === "top20") return [sql`${latestApplication(sql`s.score`)} desc nulls last`, desc(leads.createdAt)];
+  if (f.status === "top20" || f.ordem === "pontuacao") return [sql`${latestApplication(sql`s.score`)} desc nulls last`, desc(leads.createdAt)];
   if (f.status === "comunidade" && !f.temp) return [sql`(${hotCond}) desc`, byDate];
   return [byDate];
 }
